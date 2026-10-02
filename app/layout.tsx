@@ -15,19 +15,19 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   metadataBase: new URL(
     process.env.NEXT_PUBLIC_SITE_URL ||
-      'https://tunarr-lineup.tiny-creek-5518.chatgpt.site',
+      'https://tunarr-lineup.acroix.chatgpt.site',
   ),
   title: 'Tunarr Lineup',
-  description: 'A clearer way to browse and adjust the programming already in Tunarr.',
+  description: 'Your Tunarr schedule, the classic Mac way.',
   openGraph: {
     title: 'Tunarr Lineup',
-    description: 'Browse by date. Move what’s already there.',
+    description: 'Your schedule, the classic way.',
     images: [{ url: '/og.png', width: 1200, height: 630 }],
   },
   twitter: {
     card: 'summary_large_image',
     title: 'Tunarr Lineup',
-    description: 'Browse by date. Move what’s already there.',
+    description: 'Your schedule, the classic way.',
     images: ['/og.png'],
   },
 };

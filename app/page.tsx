@@ -340,7 +340,7 @@ export default function Home() {
   return (
     <main className="app-shell">
       <header className="topbar">
-        <div className="brand"><span className="brand-mark">T</span><span>Tunarr</span><b>Lineup</b></div>
+        <div className="brand"><span className="brand-mark"></span><span>Tunarr Lineup</span><nav className="menu-items" aria-label="Application menu"><span>File</span><span>Edit</span><span>View</span><span>Channel</span><span>Help</span></nav></div>
         <div className="top-actions">
           {dirty && <button className="quiet" onClick={() => { setProgramming((current) => ({ ...current, lineup: structuredClone(originalLineup) })); notify('Changes reverted'); }}>Undo changes</button>}
           <button className={`connection ${baseUrl ? 'live' : ''}`} onClick={() => setConnectionOpen(true)}><span className="status-dot" />{baseUrl ? 'Tunarr connected' : 'Demo mode'}</button>
