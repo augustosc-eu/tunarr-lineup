@@ -90,24 +90,41 @@ Edits mark the lineup unsaved:
 - Changed rows get a yellow edge.
 - The Save button becomes "Save lineup".
 - The **Edit list** in the inspector names each step. **Undo** and **Redo** step through it; **Revert all** discards everything.
-- With unsaved changes, switching channels, switching between live and demo, or pressing **Check again** asks for confirmation.
-- In live mode, leaving the page triggers the browser's unsaved-changes prompt.
+- **Unsaved work is kept per channel** in the browser, along with its edit list. Switching channels, reloading or turning the TV off doesn't lose it; channels with unsaved work show "unsaved" in the list. If the channel was changed in Tunarr in the meantime, the stored work no longer applies and is dropped, with a notice.
+- **Leaving demo mode** with unsaved demo edits asks first, because demo edits are not kept.
 
 ### 4. Save
 
 - **If the channel has a generated schedule,** a confirmation dialog explains that saving a manual lineup may detach the channel from its schedule.
-- **Lineup first checks the channel hasn't changed elsewhere,** in Tunarr's own UI or by a regeneration, since it was loaded. If it has, nothing is saved; the user can **Reload from Tunarr** or **Keep my edits**.
+- **The companion first checks that the channel hasn't changed elsewhere** (in another Lineup session, Tunarr's own UI, or a regeneration) since it was loaded. If it has, nothing is saved; the user can **Reload from Tunarr** or **Keep my edits**.
+- **After saving, the edit list continues,** so a save can be undone and saved again.
 - **The save sends the whole lineup** as a manual lineup. Zero-length items are left out, and the toast reports how many.
 - **After a successful save,** the app re-reads programming and the visible day from Tunarr and refreshes the channel list.
 - **On failure,** the error appears in a toast ("Not saved: …") and the unsaved changes are kept.
 
-### 5. Export a program log
+### 5. Edit a slot schedule
+
+For channels Tunarr generates from a slot schedule (most of the owner's channels use random slots):
+
+1. Open **Edit slot schedule…** from the generated-schedule panel or the Channel menu.
+2. Adjust the slots:
+   - **Random slots:** what each slot plays (any source the schedule already uses, or flex), weight (with each slot's share; shown as "equal" for uniform distribution), cooldown, length (number of programs or minutes) and order. Slots can be reordered, duplicated or removed.
+   - **Time slots:** start time (and day, for weekly schedules), source and order, plus "shift every slot" by ±5 or ±15 minutes.
+
+   Problems Tunarr would reject (overlapping start times, negative weights) are flagged per slot.
+3. **Preview lineup** regenerates the lineup in Tunarr without saving and shows it in the timeline, with a pinned preview bar. Browse any day, then **Save schedule**, **Edit slots** or **Discard preview** (also Back).
+4. **Save schedule** uses the preview's random seed and reports whether Tunarr's saved result matches the preview. The lineup's edit list starts fresh, because the lineup was regenerated.
+
+Schedule-wide settings (padding, lateness, distribution, days generated) and new
+sources can't be changed from Lineup.
+
+### 6. Export a program log
 
 **File → Export Program Log…** downloads the visible day as CSV: date,
 start, end, duration, type, title, detail and lineup position. If the lineup
 has unsaved changes, the filename says `-unsaved`.
 
-### 6. Drive it with a remote or keyboard
+### 7. Drive it with a remote or keyboard
 
 | Remote / keyboard | Action |
 | --- | --- |
@@ -121,7 +138,7 @@ has unsaved changes, the filename says `-unsaved`.
 
 The menus can also be operated with the arrows, OK and Back.
 
-### 7. Demo mode
+### 8. Demo mode
 
 - **Entering:** chosen explicitly. The labels change to "Demo mode", "DEMO CHANNELS" and "DEMO · …".
 - **Sample data:** three sample channels, all showing the same sample lineup.
@@ -143,13 +160,14 @@ The menus can also be operated with the arrows, OK and Back.
 - **Tunarr API compatibility:** Lineup depends on Tunarr's `/api/channels`, `/api/channels/:id/programming` (GET/POST), `/api/channels/:id/lineup` and `/api/programs/:id/artwork/:type` endpoints and their payload shapes. The code doesn't detect Tunarr versions.
 - **Generated schedules:** saving manually can detach a channel from its generated schedule. Tunarr may also regenerate over manual edits.
 - **TV readability and remote operation:** text must stay large and anti-aliased, and every action must work without a mouse. The UI scales with viewport width.
-- **Conflict check window:** the check happens just before the write. Tunarr's API has no conditional save, so a change made in the instant between the check and the write would still be overwritten.
+- **Conflict check window:** the companion checks and writes under a per-channel lock, so two Lineup sessions can't overwrite each other. Tunarr's API has no conditional save, so an edit made in Tunarr's own UI in the milliseconds between check and write would still be overwritten.
+- **Drafts are per browser:** unsaved work on the TV isn't visible from a laptop, and vice versa.
 
 ## Out of scope (as built)
 
 The code does not implement:
 - adding or removing programs
-- editing channel settings or slot/time schedules (the warning names the schedule type and slot count, but slots can't be edited)
+- editing channel settings, schedule-wide slot settings, or filler/mid-roll configuration; adding new sources to a slot schedule; creating or converting schedules
 - library browsing
 - user accounts or roles beyond the single optional password
-- persistence of any Lineup-specific data (undo history is lost on reload)
+- syncing drafts between devices (drafts live in each browser)

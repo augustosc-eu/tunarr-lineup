@@ -179,11 +179,16 @@ on the `broadcast-programming` branch.
 
   All of these operate only on existing lineup items (D7).
 
-## D22. Refuse to save over changes made elsewhere
+## D22. Conditional saves, checked in the companion
 
-- **Status:** Explicit (comment in `performSave`: "Refuse to overwrite edits made elsewhere since this lineup was loaded.").
-- **Decision:** Before posting, re-read the channel's programming. If its lineup differs from the baseline loaded into Lineup, don't save; offer **Reload from Tunarr** or **Keep my edits**. There is no "overwrite anyway" option.
-- **Known limitation:** a change made between the check and the POST is not detected, because Tunarr's API offers no conditional write.
+- **Status:** Explicit (comments in the `programming` case of `handleTunarrApi`: "Conditional save: Tunarr has no If-Match of its own…"; `withChannelLock`; `server/lineupVersion.ts` header).
+- **Decision:**
+  - Every save sends `If-Match` with `programmingVersion(lineup, schedule)` of what the client loaded.
+  - The companion re-reads the channel and compares versions while holding a per-channel lock, then writes. It answers `412 lineup_changed` on a mismatch and `428` when the header is missing.
+  - The UI offers **Reload from Tunarr** or **Keep my edits**. There is no "overwrite anyway".
+- **Why server-side:** the check and the write can't interleave with another Lineup session's save (it was previously a client-side pre-read, which left a gap).
+- **Why not a crypto hash:** the fingerprint is non-cryptographic because Web Crypto is unavailable to pages served over plain HTTP, and the browser must compute the same value.
+- **Known limitation:** an edit made in Tunarr's own UI in the milliseconds between the companion's check and its write is not detected. Closing that would need a conditional write in Tunarr itself.
 
 ## D23. Keyboard and TV remote as first-class input
 
@@ -193,10 +198,18 @@ on the `broadcast-programming` branch.
   - The whole slide becomes one undo entry.
 - **Evidence for the reason:** the owner uses the app on a TV (`app/globals.css` comment). Beyond that, the reason isn't recorded.
 
-## D24. Undo history as whole-lineup snapshots
+## D24. Undo history as snapshots, persisted per channel and version
 
-- **Status:** Explicit (`lib/history.ts` header: "Snapshots share item objects, so each entry costs one array.").
-- **Decision:** Each history entry stores the lineup arrays before and after, plus the selection before and after. History is capped at 200 entries (`MAX_HISTORY`), cleared on load, save and demo switch, and not persisted.
+- **Status:** Explicit (`lib/history.ts` header; `lib/draftStore.ts` header: drafts "survive reloads, channel switches and the TV being turned off"; `rebaseHistory` doc comment).
+- **Decision:**
+  - **Snapshots.** Each history entry stores the lineup arrays before and after (permutations of the loaded `base.lineup` objects) plus the selections. History is capped at 200 entries.
+  - **Persistence.** Drafts (current order plus history) are stored per channel in IndexedDB as index arrays, tagged with the programming version they were made against.
+    - Same version on load → restored.
+    - Different version → dropped, with a notice.
+    - IndexedDB unavailable → kept in memory for the session only.
+  - **Across a save,** history is re-attached to Tunarr's returned objects. If they don't line up item for item, it starts fresh with a notice.
+  - **Not persisted:** slot-schedule saves regenerate the lineup, so they start a fresh edit list, and demo edits aren't stored.
+- **Replaces:** the earlier in-memory history, which was cleared on reload, save and channel switch.
 
 ## D25. Blocks are contiguous lineup ranges
 
@@ -213,3 +226,19 @@ on the `broadcast-programming` branch.
 
 - **Status:** Explicit (comment in `toCsv`).
 - **Decision:** CSV cells that start with `=`, `+`, `-`, `@`, tab or CR are prefixed with `'`, and values are quoted per RFC 4180. Exports of unsaved lineups get an `-unsaved` filename suffix.
+
+## D28. Slot-schedule editing limited to the schedule's existing sources
+
+- **Status:** Explicit (`server/slotSchedule.ts` header; `ScheduleEditor` copy; `README.md`). The owner approved editing slot schedules on 2026-10-03, after it had first been excluded.
+- **Decision:** Lineup edits the slots of a channel's existing random- or time-slot schedule:
+  - **Random slots:** source, weight, cooldown, length, order; reorder, duplicate, remove.
+  - **Time slots:** start times, source, order; shift all.
+
+  Enforced in the companion:
+  - Slots may only use sources (`slotSourceKey`) that the current schedule already uses, plus flex.
+  - The schedule type and every schedule-wide setting (padding, lateness, distribution, period, days generated) are taken from Tunarr's current copy.
+  - The program pool is computed server-side from programs already on the channel (a port of Tunarr's `lineupItemAppearsInSchedule`).
+  - Channels without a schedule can't gain one through Lineup.
+- **Preview first:** saving requires a preview of the exact draft. The save reuses the preview's `seed`/`discardCount`, as Tunarr's own editors do, and the UI reports any difference between the saved result and the preview.
+- **What "no new media" means here:** Tunarr fills a slot from its whole source (for example all of a show's episodes in the library). Editing slots therefore never adds a new show or collection, but it can schedule other episodes from shows the channel already uses.
+- **Not recorded / not built:** editing schedule-wide settings, adding sources the schedule doesn't already use, converting between schedule types, and filler or mid-roll configuration. Slot-schedule drafts are not persisted.

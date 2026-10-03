@@ -2,6 +2,7 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { handleNodeApiRequest } from '../server/nodeAdapter';
+import { programmingVersion } from '../server/lineupVersion';
 import { createProxyConfig, handleTunarrApi, type ProxyConfig, type ProxyRequest } from '../server/tunarrProxy';
 
 type Call = { url: string; init: RequestInit };
@@ -204,32 +205,68 @@ describe('saving manual programming', () => {
     { type: 'custom', id: 'p3', customShowId: 'cs-1', index: 4, duration: 1200000, persisted: true },
     { type: 'filler', id: '8f3c1b2a-0000-4000-8000-000000000002', fillerListId: '8f3c1b2a-0000-4000-8000-000000000001', fillerType: 'pre', duration: 30000 },
   ];
+  const loadedVersion = programmingVersion(lineup, undefined);
   const post = (data: unknown, headers: ProxyRequest['headers'] = {}): ProxyRequest => ({
     method: 'POST',
     url: '/api/tunarr/channels/abc/programming',
-    headers: { host: 'lineup.local:3000', origin: 'http://lineup.local:3000', 'content-type': 'application/json', ...headers },
+    headers: { host: 'lineup.local:3000', origin: 'http://lineup.local:3000', 'content-type': 'application/json', 'if-match': `"${loadedVersion}"`, ...headers },
     body: typeof data === 'string' ? data : JSON.stringify(data),
   });
+  /** Tunarr answers GETs with the current lineup and POSTs with `postReply`. */
+  const tunarr = (postReply: () => Response = () => jsonResponse({ lineup, programs: {} }), current: unknown = { lineup, programs: {} }) =>
+    (_url: string, init: RequestInit) => (init.method === 'POST' ? postReply() : jsonResponse(current));
 
   it('forwards the manual payload with every lineup field intact', async () => {
-    const { calls, config } = setup(() => jsonResponse({ lineup, programs: {} }));
+    const { calls, config } = setup(tunarr());
     const response = await handleTunarrApi(post({ type: 'manual', lineup, append: false }), config);
     expect(response.status).toBe(200);
-    expect(calls[0].url).toBe('http://tunarr:8000/api/channels/abc/programming');
-    expect(calls[0].init.method).toBe('POST');
-    expect(JSON.parse(String(calls[0].init.body))).toEqual({ type: 'manual', lineup, append: false });
-    expect(calls[0].init.headers).toEqual({ accept: 'application/json', 'content-type': 'application/json' });
+    expect(calls.map((call) => call.init.method)).toEqual(['GET', 'POST']);
+    expect(calls[1].url).toBe('http://tunarr:8000/api/channels/abc/programming');
+    expect(JSON.parse(String(calls[1].init.body))).toEqual({ type: 'manual', lineup, append: false });
+    expect(calls[1].init.headers).toEqual({ accept: 'application/json', 'content-type': 'application/json' });
+  });
+
+  it('refuses to save when the channel changed since it was loaded', async () => {
+    const changed = [...lineup].reverse();
+    const { calls, config } = setup(tunarr(undefined, { lineup: changed, programs: {} }));
+    const response = await handleTunarrApi(post({ type: 'manual', lineup, append: false }), config);
+    expect(response.status).toBe(412);
+    expect(body(response).error.code).toBe('lineup_changed');
+    expect(calls.map((call) => call.init.method)).toEqual(['GET']);
+  });
+
+  it('requires the version a save is based on', async () => {
+    const { fetchImpl, config } = setup(tunarr());
+    const response = await handleTunarrApi(post({ type: 'manual', lineup, append: false }, { 'if-match': undefined }), config);
+    expect(response.status).toBe(428);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('serializes concurrent saves to one channel so only the first wins', async () => {
+    let current: unknown = { lineup, programs: {} };
+    const { calls, config } = setup((_url, init) => {
+      if (init.method === 'POST') current = { lineup: JSON.parse(String(init.body)).lineup, programs: {} };
+      return jsonResponse(current);
+    });
+    const reordered = [lineup[1], lineup[0], ...lineup.slice(2)];
+    const [first, second] = await Promise.all([
+      handleTunarrApi(post({ type: 'manual', lineup: reordered, append: false }), config),
+      handleTunarrApi(post({ type: 'manual', lineup: [...lineup].reverse(), append: false }), config),
+    ]);
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(412);
+    expect(calls.map((call) => call.init.method)).toEqual(['GET', 'POST', 'GET']);
   });
 
   it('passes Tunarr validation messages back', async () => {
-    const { config } = setup(() => new Response('"body/lineup/0/duration Number must be greater than 0"', { status: 400 }));
+    const { config } = setup(tunarr(() => new Response('"body/lineup/0/duration Number must be greater than 0"', { status: 400 })));
     const response = await handleTunarrApi(post({ type: 'manual', lineup, append: false }), config);
     expect(response.status).toBe(400);
     expect(body(response).error).toMatchObject({ code: 'tunarr_rejected', message: 'body/lineup/0/duration Number must be greater than 0' });
   });
 
   it.each([
-    [{ type: 'time', programs: [], schedule: {} }, 'invalid_programming'],
+    [{ type: 'random', schedule: { slots: [] }, seed: 'x' }, 'invalid_programming'],
     [{ type: 'manual', lineup, append: true }, 'invalid_programming'],
     [{ type: 'manual', lineup: 'nope' }, 'invalid_programming'],
     [{ type: 'manual', lineup: [{ type: 'content', duration: 1000 }] }, 'invalid_programming'],

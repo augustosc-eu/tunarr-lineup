@@ -3,6 +3,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { MenuBar, type Menu } from './components/MenuBar';
 import { MoveDialog } from './components/MoveDialog';
+import { ScheduleEditor } from './components/ScheduleEditor';
 import {
   changedPositions,
   clockTimecode,
@@ -19,7 +20,8 @@ import {
   type Block,
 } from '../lib/broadcast';
 import { demoChannels, demoDate, demoProgramming } from '../lib/demoData';
-import { emptyHistory, record, redo as redoHistory, undo as undoHistory, type History } from '../lib/history';
+import { decodeDraft, draftStore, encodeDraft } from '../lib/draftStore';
+import { emptyHistory, itemIdentity, rebaseHistory, record, redo as redoHistory, undo as undoHistory, type History } from '../lib/history';
 import {
   buildManualSave,
   cycleDuration,
@@ -35,6 +37,8 @@ import {
   type Programming,
 } from '../lib/lineup';
 import { programArtwork, programDetail, programTitle } from '../lib/programInfo';
+import type { SchedulePreview, Slot, SlotSchedule } from '../lib/schedule';
+import { programmingVersion } from '../server/lineupVersion';
 import { checkHealth, tunarrApi, TunarrApiError, type ConnectionState } from '../lib/tunarrClient';
 
 type Mode = 'live' | 'demo';
@@ -51,6 +55,24 @@ type ConfirmDialog = {
 
 /** A block picked up with OK/Enter and slid with the arrow keys. */
 type Grab = { before: LineupItem[]; block: Block };
+
+/** The lineup exactly as Tunarr returned it, which drafts and saves are based on. */
+type Base = { channelId: string; version: string; lineup: LineupItem[] };
+
+type SlotEditor = {
+  channelId: string;
+  open: boolean;
+  busy: boolean;
+  error: string;
+  schedule: SlotSchedule | null;
+  draft: Slot[];
+  preview: SchedulePreview | null;
+  /** JSON of the draft the preview was generated from. */
+  previewOf: string;
+  showingPreview: boolean;
+};
+
+const closedSlotEditor: SlotEditor = { channelId: '', open: false, busy: false, error: '', schedule: null, draft: [], preview: null, previewOf: '', showingPreview: false };
 
 const emptyProgramming: Programming = { lineup: [], programs: {} };
 const NOW_TICK_MS = 15_000;
@@ -124,6 +146,9 @@ export default function Home() {
   const [selectedDate, setSelectedDate] = useState(demoDate);
   const [search, setSearch] = useState('');
   const [history, setHistory] = useState<History>(emptyHistory);
+  const [base, setBase] = useState<Base | null>(null);
+  const [draftMarks, setDraftMarks] = useState<Record<string, boolean>>({});
+  const [slotEditor, setSlotEditor] = useState<SlotEditor>(closedSlotEditor);
   const [grab, setGrab] = useState<Grab | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [connectionOpen, setConnectionOpen] = useState(false);
@@ -151,16 +176,19 @@ export default function Home() {
   const inBlock = (index: number) => index >= block.start && index <= block.end && index >= 0;
   const selectedItem = lineup[selectedIndex];
   const guideIsCurrent = live && !dirty && guide?.channelId === activeChannelId && guide.date === selectedDate;
+  const slotPreview = slotEditor.showingPreview && slotEditor.channelId === activeChannelId ? slotEditor.preview : null;
+  const viewPrograms = useMemo(() => (slotPreview ? { ...programming.programs, ...slotPreview.programs } : programming.programs), [programming.programs, slotPreview]);
   const daySchedule = useMemo(() => {
+    if (slotPreview) return scheduleForDay(null, slotPreview.lineup, slotPreview.startTime, selectedDate);
     if (!activeChannel) return { rows: [] as Instance[], guideWindow: null, guideStale: false };
     return scheduleForDay(guideIsCurrent && guide ? guide.programs : null, lineup, activeChannel.startTime, selectedDate);
-  }, [activeChannel, guide, guideIsCurrent, lineup, selectedDate]);
+  }, [activeChannel, guide, guideIsCurrent, lineup, selectedDate, slotPreview]);
   const instances = daySchedule.rows;
   const visibleInstances = useMemo(() => {
     const query = search.trim().toLowerCase();
     if (!query) return instances;
-    return instances.filter(({ item, title }) => `${title ?? programTitle(item, programming.programs)} ${programDetail(item, programming.programs)}`.toLowerCase().includes(query));
-  }, [instances, programming.programs, search]);
+    return instances.filter(({ item, title }) => `${title ?? programTitle(item, viewPrograms)} ${programDetail(item, viewPrograms)}`.toLowerCase().includes(query));
+  }, [instances, viewPrograms, search]);
   const cursorPosition = useMemo(() => {
     const exact = visibleInstances.findIndex((row) => row.lineupIndex === selectedIndex && row.start === cursorStart);
     return exact >= 0 ? exact : visibleInstances.findIndex((row) => row.lineupIndex === selectedIndex);
@@ -222,7 +250,16 @@ export default function Home() {
     setGrab(null);
   };
 
-  const loadProgramming = async (channelId: string, date: string, keepSelection = false) => {
+  const refreshDraftMarks = () => {
+    draftStore().list().then((drafts) => setDraftMarks(Object.fromEntries(drafts.filter((draft) => draft.dirty).map((draft) => [draft.channelId, true])))).catch(() => {});
+  };
+
+  /**
+   * Loads a channel. Restores a saved draft (unsaved order + undo history) if
+   * one exists for this exact version, or re-attaches history after a save.
+   */
+  const loadProgramming = async (channelId: string, date: string, options: { keepSelection?: boolean; rebase?: { saved: LineupItem[]; history: History } } = {}) => {
+    const { keepSelection = false, rebase } = options;
     const request = ++programmingRequest.current;
     setActiveChannelId(channelId);
     setLoading(true);
@@ -231,6 +268,7 @@ export default function Home() {
     if (!keepSelection) {
       setProgramming(emptyProgramming);
       setOriginalLineup([]);
+      setBase(null);
       setGuide(null);
       select(0, null);
     }
@@ -238,12 +276,38 @@ export default function Home() {
       const data = await tunarrApi.programming(channelId);
       if (request !== programmingRequest.current) return false;
       const loaded = Array.isArray(data?.lineup) ? data.lineup : [];
-      setProgramming({ ...data, lineup: loaded, programs: data?.programs ?? {} });
+      const version = programmingVersion(data?.lineup, data?.schedule);
+      let current = loaded;
+      let restoredHistory = emptyHistory;
+      let note = '';
+      if (rebase) {
+        const carried = rebaseHistory(rebase.history, rebase.saved, loaded);
+        if (carried) restoredHistory = carried;
+        else if (rebase.history.past.length || rebase.history.future.length) note = 'Saved. Tunarr adjusted the lineup, so the edit list starts fresh.';
+      } else {
+        const stored = await draftStore().get(channelId).catch(() => undefined);
+        if (request !== programmingRequest.current) return false;
+        if (stored && stored.version === version) {
+          const decoded = decodeDraft(stored, loaded);
+          if (decoded) {
+            current = decoded.current;
+            restoredHistory = decoded.history;
+            if (stored.dirty) note = `Restored your unsaved changes (${decoded.history.past.length} ${decoded.history.past.length === 1 ? 'edit' : 'edits'}).`;
+          }
+        } else if (stored) {
+          void draftStore().delete(channelId).catch(() => {});
+          if (stored.dirty) note = 'This channel changed in Tunarr since you last edited it here, so those unsaved changes no longer apply and were dropped.';
+        }
+      }
+      setProgramming({ ...data, lineup: current, programs: data?.programs ?? {} });
       setOriginalLineup(structuredClone(loaded));
+      setBase({ channelId, version, lineup: loaded });
+      setHistory(restoredHistory);
+      if (note) notify(note);
       if (keepSelection) {
         const last = Math.max(loaded.length - 1, 0);
-        setAnchorIndex((current) => Math.min(current, last));
-        setSelectedIndex((current) => Math.min(current, last));
+        setAnchorIndex((value) => Math.min(value, last));
+        setSelectedIndex((value) => Math.min(value, last));
       }
       void loadGuide(channelId, date);
       return true;
@@ -291,9 +355,12 @@ export default function Home() {
     setProgramming(emptyProgramming);
     setOriginalLineup([]);
     setGuide(null);
+    setBase(null);
+    setSlotEditor(closedSlotEditor);
     resetEditing();
     setSelectedDate(today);
     setConnectionOpen(false);
+    refreshDraftMarks();
     await loadChannels(today, preferredId);
   };
 
@@ -309,6 +376,7 @@ export default function Home() {
       }
       const today = inputDate(new Date());
       setSelectedDate(today);
+      refreshDraftMarks();
       void loadChannels(today);
     });
     return () => { cancelled = true; };
@@ -320,12 +388,26 @@ export default function Home() {
     return () => window.clearInterval(timer);
   }, []);
 
+  // Unsaved work survives a reload when drafts are stored; warn only when they can't be.
   useEffect(() => {
-    if (!live || !dirty) return;
+    if (!live || !dirty || draftStore().persistent) return;
     const warn = (event: BeforeUnloadEvent) => event.preventDefault();
     window.addEventListener('beforeunload', warn);
     return () => window.removeEventListener('beforeunload', warn);
   }, [live, dirty]);
+
+  // Keep this channel's draft (unsaved order + undo history) in the browser.
+  useEffect(() => {
+    if (!live || !base || base.channelId !== activeChannelId || loading || grab || lineup.length !== base.lineup.length) return;
+    const store = draftStore();
+    const keep = dirty || history.past.length > 0 || history.future.length > 0;
+    const record = keep ? encodeDraft(base.channelId, base.version, base.lineup, lineup, history, dirty) : null;
+    const write = record ? store.put(record) : store.delete(base.channelId);
+    const channelId = base.channelId;
+    write
+      .then(() => setDraftMarks((marks) => (!!marks[channelId] === dirty ? marks : { ...marks, [channelId]: dirty })))
+      .catch(() => {});
+  }, [activeChannelId, base, dirty, grab, history, lineup, live, loading]);
 
   // Follow the keyboard/remote cursor: focus the row and keep it on screen.
   useEffect(() => {
@@ -344,8 +426,9 @@ export default function Home() {
     rowRefs.current.get(onAir)?.scrollIntoView?.({ block: 'center' });
   }, [activeChannelId, loading, onAir, selectedDate]);
 
+  /** Demo edits are not kept, so leaving them asks first. Live drafts are stored per channel. */
   const guardUnsaved = (action: () => void) => {
-    if (!dirty && !grab) {
+    if (live || (!dirty && !grab)) {
       action();
       return;
     }
@@ -359,6 +442,8 @@ export default function Home() {
 
   const switchToDemo = () => guardUnsaved(() => {
     programmingRequest.current += 1;
+    setSlotEditor(closedSlotEditor);
+    setBase(null);
     guideRequest.current += 1;
     const sample = demoProgramming();
     setMode('demo');
@@ -380,6 +465,8 @@ export default function Home() {
   });
 
   const loadChannel = (channel: Channel) => guardUnsaved(() => {
+    if (grab) cancelGrab();
+    if (slotEditor.channelId && slotEditor.channelId !== channel.id) setSlotEditor(closedSlotEditor);
     if (!live) {
       const sample = demoProgramming();
       setActiveChannelId(channel.id);
@@ -515,44 +602,132 @@ export default function Home() {
   };
 
   const revertAll = () => {
-    setProgramming((current) => ({ ...current, lineup: structuredClone(originalLineup) }));
+    if (base && base.channelId === activeChannelId) setProgramming((current) => ({ ...current, lineup: [...base.lineup] }));
+    else setProgramming((current) => ({ ...current, lineup: structuredClone(originalLineup) }));
     resetEditing();
     notify('All changes reverted');
   };
 
+  /** Discards this channel's stored draft and reloads it from Tunarr. */
+  const reloadFromTunarr = async (channelId: string) => {
+    await draftStore().delete(channelId).catch(() => {});
+    setDraftMarks((marks) => ({ ...marks, [channelId]: false }));
+    setSlotEditor(closedSlotEditor);
+    await loadProgramming(channelId, selectedDate);
+  };
+
+  const showConflict = (channelId: string, what: string) => setConfirmDialog({
+    title: 'This channel changed in Tunarr',
+    body: `Since you opened it, the channel was changed somewhere else, so ${what} was not saved and those changes are safe. Reload to start again from Tunarr’s current version, or keep your edits on screen.`,
+    confirmLabel: 'Reload from Tunarr',
+    cancelLabel: 'Keep my edits',
+    onConfirm: () => void reloadFromTunarr(channelId),
+  });
+
   const performSave = async () => {
+    if (!base) return;
     const channelId = activeChannelId;
     const savedLineup = lineup;
+    const savedHistory = history;
     const { request, skipped } = buildManualSave(savedLineup);
     setSaving(true);
     try {
-      // Refuse to overwrite edits made elsewhere since this lineup was loaded.
-      const latest = await tunarrApi.programming(channelId);
-      const latestLineup = Array.isArray(latest?.lineup) ? latest.lineup : [];
-      if (!sameLineup(latestLineup, originalLineup)) {
-        const differences = changedPositions(latestLineup, originalLineup).size + Math.max(0, originalLineup.length - latestLineup.length);
-        setConfirmDialog({
-          title: 'This channel changed in Tunarr',
-          body: `Since you opened it, its lineup was changed somewhere else (${differences} ${differences === 1 ? 'position differs' : 'positions differ'}). Nothing was saved, so those changes are safe. Reload to start again from Tunarr’s current lineup, or keep your edits on screen.`,
-          confirmLabel: 'Reload from Tunarr',
-          cancelLabel: 'Keep my edits',
-          onConfirm: () => void loadProgramming(channelId, selectedDate),
-        });
-        return;
-      }
-      await tunarrApi.saveProgramming(channelId, request);
-      setOriginalLineup(structuredClone(savedLineup));
+      // The companion checks the version and writes under a per-channel lock,
+      // refusing (412) if the channel changed since this lineup was loaded.
+      await tunarrApi.saveProgramming(channelId, request, base.version);
       notify(skipped ? `Lineup saved to Tunarr (${skipped} zero-length ${skipped === 1 ? 'item' : 'items'} left out)` : 'Lineup saved to Tunarr');
-      // Re-read what Tunarr actually stored rather than trusting local state.
-      await loadProgramming(channelId, selectedDate, true);
+      // Re-read what Tunarr actually stored, and carry the edit list over to it.
+      await loadProgramming(channelId, selectedDate, { keepSelection: true, rebase: { saved: request.lineup, history: savedHistory } });
       void tunarrApi.channels().then((list) => setChannels([...list].sort((a, b) => a.number - b.number))).catch(noteFailure);
     } catch (error) {
-      notify(`Not saved: ${errorMessage(error, 'Could not save the lineup.')}`);
+      if (error instanceof TunarrApiError && error.code === 'lineup_changed') showConflict(channelId, 'your lineup');
+      else notify(`Not saved: ${errorMessage(error, 'Could not save the lineup.')}`);
       noteFailure(error);
     } finally {
       setSaving(false);
     }
   };
+
+  const openSlotEditor = () => {
+    if (!live || !activeChannelId || !hasGeneratedSchedule(programming)) return;
+    const channelId = activeChannelId;
+    if (grab) cancelGrab();
+    if (slotEditor.channelId === channelId && slotEditor.schedule) {
+      setSlotEditor((current) => ({ ...current, open: true, showingPreview: false }));
+      return;
+    }
+    setSlotEditor({ ...closedSlotEditor, channelId, open: true, busy: true });
+    tunarrApi.schedule(channelId)
+      .then((data) => {
+        const schedule = data?.schedule;
+        if (!schedule || !Array.isArray(schedule.slots)) throw new Error('Tunarr returned no slot schedule for this channel.');
+        setSlotEditor((current) => (current.channelId === channelId ? { ...current, busy: false, schedule, draft: structuredClone(schedule.slots) } : current));
+      })
+      .catch((error) => {
+        setSlotEditor((current) => (current.channelId === channelId ? { ...current, busy: false, error: errorMessage(error, 'Could not load the slot schedule.') } : current));
+        noteFailure(error);
+      });
+  };
+
+  const previewSlots = () => {
+    const { channelId, draft } = slotEditor;
+    if (!channelId) return;
+    setSlotEditor((current) => ({ ...current, busy: true, error: '' }));
+    tunarrApi.previewSchedule(channelId, draft)
+      .then((preview) => {
+        setSlotEditor((current) => (current.channelId === channelId ? { ...current, busy: false, preview, previewOf: JSON.stringify(draft), open: false, showingPreview: true } : current));
+        notify('Previewing the regenerated lineup. Nothing is saved yet.');
+      })
+      .catch((error) => {
+        setSlotEditor((current) => (current.channelId === channelId ? { ...current, busy: false, error: errorMessage(error, 'Tunarr could not generate a preview.') } : current));
+        noteFailure(error);
+      });
+  };
+
+  const saveSlots = () => {
+    const { channelId, draft, preview, schedule } = slotEditor;
+    if (!channelId || !preview || !schedule || !base || slotEditor.previewOf !== JSON.stringify(draft)) return;
+    const commit = () => {
+      setSlotEditor((current) => ({ ...current, busy: true, error: '' }));
+      setSaving(true);
+      tunarrApi.saveSchedule(channelId, schedule.type, draft, preview, base.version)
+        .then(async (saved) => {
+          await draftStore().delete(channelId).catch(() => {});
+          setDraftMarks((marks) => ({ ...marks, [channelId]: false }));
+          setSlotEditor(closedSlotEditor);
+          // Tunarr regenerates with the preview's random seed; confirm the result matches what was shown.
+          const savedKeys = (Array.isArray(saved?.lineup) ? saved.lineup : []).map(itemIdentity);
+          const previewKeys = preview.lineup.map(itemIdentity);
+          const differing = savedKeys.length === previewKeys.length ? savedKeys.filter((key, index) => key !== previewKeys[index]).length : Math.max(savedKeys.length, previewKeys.length);
+          notify(differing
+            ? `Schedule saved, but Tunarr’s result differs from the preview in ${differing} ${differing === 1 ? 'place' : 'places'}. The timeline shows what was saved.`
+            : 'Schedule saved exactly as previewed. Tunarr regenerated the lineup, so the edit list starts fresh.');
+          await loadProgramming(channelId, selectedDate);
+        })
+        .catch((error) => {
+          if (error instanceof TunarrApiError && error.code === 'lineup_changed') {
+            setSlotEditor((current) => ({ ...current, busy: false }));
+            showConflict(channelId, 'the schedule');
+          } else {
+            setSlotEditor((current) => ({ ...current, busy: false, open: true, showingPreview: false, error: errorMessage(error, 'Could not save the schedule.') }));
+          }
+          noteFailure(error);
+        })
+        .finally(() => setSaving(false));
+    };
+    if (dirty) {
+      setConfirmDialog({
+        title: 'Replace your unsaved lineup edits?',
+        body: 'Saving the schedule regenerates this channel’s lineup from its slots, which replaces the unsaved edits you made to the order.',
+        confirmLabel: 'Save schedule',
+        onConfirm: commit,
+      });
+      return;
+    }
+    commit();
+  };
+
+  const discardSlotPreview = () => setSlotEditor((current) => ({ ...current, preview: null, previewOf: '', showingPreview: false }));
 
   const save = () => {
     if (!dirty || saving || grab) return;
@@ -576,7 +751,18 @@ export default function Home() {
   };
 
   const reloadChannel = () => {
-    if (live && activeChannelId) guardUnsaved(() => void loadProgramming(activeChannelId, selectedDate));
+    if (!live || !activeChannelId) return;
+    const channelId = activeChannelId;
+    if (!dirty) {
+      void reloadFromTunarr(channelId);
+      return;
+    }
+    setConfirmDialog({
+      title: 'Discard unsaved changes?',
+      body: 'Reloading starts again from Tunarr’s current lineup. Your unsaved changes and edit list for this channel will be discarded.',
+      confirmLabel: 'Discard and reload',
+      onConfirm: () => void reloadFromTunarr(channelId),
+    });
   };
 
   const retry = () => {
@@ -628,10 +814,11 @@ export default function Home() {
       const key = event.key;
       const back = key === 'Escape' || key === 'GoBack' || key === 'BrowserBack';
       const mod = event.metaKey || event.ctrlKey;
-      if (confirmDialog || arrangeOpen || connectionOpen || infoDialog) {
+      if (confirmDialog || arrangeOpen || connectionOpen || infoDialog || slotEditor.open) {
         if (!back) return;
         event.preventDefault();
         if (confirmDialog) setConfirmDialog(null);
+        else if (slotEditor.open) setSlotEditor((current) => ({ ...current, open: false }));
         else if (arrangeOpen) setArrangeOpen(false);
         else if (infoDialog) setInfoDialog(null);
         else setConnectionOpen(false);
@@ -647,6 +834,8 @@ export default function Home() {
         return;
       }
       const onRow = (event.target as HTMLElement | null)?.classList?.contains('program') || event.target === document.body;
+      if (slotPreview && !['ArrowLeft', 'ArrowRight', 'n', 't', '?'].includes(key) && !back) return;
+      if (slotPreview && back) { event.preventDefault(); discardSlotPreview(); return; }
       switch (key) {
         case 'ArrowDown':
         case 'ArrowUp':
@@ -718,6 +907,8 @@ export default function Home() {
       { label: 'Previous Channel', shortcut: 'CH−', disabled: channels.length < 2, onSelect: () => stepChannel(-1) },
       { label: 'Next Channel', shortcut: 'CH+', disabled: channels.length < 2, onSelect: () => stepChannel(1) },
       { label: 'Reload Channel', disabled: !live || !activeChannelId, onSelect: reloadChannel },
+      'separator',
+      { label: 'Edit Slot Schedule…', disabled: !live || !hasGeneratedSchedule(programming) || !!grab, onSelect: openSlotEditor },
     ] },
     { title: 'Help', items: [
       { label: 'Keyboard & Remote Shortcuts', shortcut: '?', onSelect: () => setInfoDialog('shortcuts') },
@@ -736,7 +927,8 @@ export default function Home() {
   const sortedTotals = Object.entries(totals.byType).sort((a, b) => b[1] - a[1]);
 
   let sourceNote = '';
-  if (!live) sourceNote = 'Demo data. Changes stay in this browser session and are never sent to Tunarr.';
+  if (slotPreview) sourceNote = '';
+  else if (!live) sourceNote = 'Demo data. Changes stay in this browser session and are never sent to Tunarr.';
   else if (grab) sourceNote = 'Moving: use ↑ ↓ to slide, OK to drop, Back to cancel.';
   else if (dirty) sourceNote = 'Showing unsaved changes. Times are projected from the lineup until you save.';
   else if (guideError) sourceNote = `Tunarr’s guide for this date did not load (${guideError}). Times are projected from the lineup.`;
@@ -790,7 +982,7 @@ export default function Home() {
           {channels.map((channel) => (
             <button className={`channel ${channel.id === activeChannelId ? 'active' : ''}`} key={channel.id} onClick={() => loadChannel(channel)}>
               <span className="channel-number">{channel.number}</span>
-              <span className="channel-copy"><b>{channel.name}</b><small>{channel.programCount ?? '—'} programs</small></span>
+              <span className="channel-copy"><b>{channel.name}</b><small>{channel.programCount ?? '—'} programs{live && draftMarks[channel.id] && <em className="unsaved-mark"> · unsaved</em>}</small></span>
             </button>
           ))}
           <div className="rail-note">
@@ -821,23 +1013,33 @@ export default function Home() {
             {sortedTotals.map(([type, ms]) => <span key={type} className={`total-chip type-${type}`}><b>{typeLabel(type)}</b> {durationTimecode(ms)} <small>{Math.round((ms / totals.total) * 100)}%</small></span>)}
           </div>}
 
+          {slotPreview && <div className="preview-bar" role="region" aria-label="Schedule preview">
+            <span><b>Schedule preview</b> Tunarr regenerated {slotPreview.lineup.length.toLocaleString('en')} lineup items from your edited slots. Nothing is saved yet.</span>
+            <span className="preview-actions">
+              <button onClick={() => setSlotEditor((current) => ({ ...current, open: true, showingPreview: false }))}>Edit slots</button>
+              <button onClick={discardSlotPreview}>Discard preview</button>
+              <button className="primary" disabled={slotEditor.busy || saving} onClick={saveSlots}>{slotEditor.busy ? 'Saving…' : 'Save schedule'}</button>
+            </span>
+          </div>}
           <div className={`timeline ${busy ? 'loading' : ''}`}>
             {!visibleInstances.length && <div className="empty"><span>○</span><h2>{emptyTitle}</h2><p>{emptyText}</p>{emptyRetry && <button onClick={retry}>Try again</button>}</div>}
             {visibleInstances.map((instance, position) => {
               const period = dayPeriod(instance.start);
               const showPeriod = position === 0 || dayPeriod(visibleInstances[position - 1].start) !== period;
               const guideOnly = instance.lineupIndex < 0;
-              const title = instance.title ?? programTitle(instance.item, programming.programs);
-              const detail = guideOnly ? `${instance.item.type} · in Tunarr’s guide only` : programDetail(instance.item, programming.programs);
-              const art = guideOnly ? undefined : programArtwork(instance.item, programming.programs, live, 'thumbnail');
+              const readOnly = guideOnly || !!slotPreview;
+              const title = instance.title ?? programTitle(instance.item, viewPrograms);
+              const detail = guideOnly ? `${instance.item.type} · in Tunarr’s guide only` : programDetail(instance.item, viewPrograms);
+              const art = guideOnly ? undefined : programArtwork(instance.item, viewPrograms, live, 'thumbnail');
               const isOnAir = position === onAir;
               const progress = isOnAir ? Math.min(100, Math.max(0, ((now - instance.start) / (instance.stop - instance.start)) * 100)) : 0;
               const classes = [
                 'program',
-                !guideOnly && inBlock(instance.lineupIndex) ? 'selected' : '',
+                !readOnly && inBlock(instance.lineupIndex) ? 'selected' : '',
+                slotPreview ? 'previewing' : '',
                 position === cursorPosition ? 'cursor' : '',
                 isOnAir ? 'on-air' : '',
-                !guideOnly && changed.has(instance.lineupIndex) ? 'changed' : '',
+                !readOnly && changed.has(instance.lineupIndex) ? 'changed' : '',
                 grab && inBlock(instance.lineupIndex) ? 'grabbed' : '',
               ].filter(Boolean).join(' ');
               return (
@@ -847,13 +1049,14 @@ export default function Home() {
                     ref={(element) => { if (!element) return; rowRefs.current.set(position, element); return () => { if (rowRefs.current.get(position) === element) rowRefs.current.delete(position); }; }}
                     className={classes}
                     disabled={guideOnly}
+                    aria-disabled={slotPreview ? true : undefined}
                     aria-current={isOnAir ? 'time' : undefined}
-                    onClick={(event) => select(instance.lineupIndex, instance.start, event.shiftKey)}
-                    draggable={!guideOnly && !grab}
+                    onClick={(event) => { if (!slotPreview) select(instance.lineupIndex, instance.start, event.shiftKey); }}
+                    draggable={!readOnly && !grab}
                     onDragStart={() => setDraggedIndex(instance.lineupIndex)}
                     onDragOver={(event) => event.preventDefault()}
                     onDrop={() => {
-                      if (draggedIndex != null && !guideOnly) moveBefore(instance.lineupIndex, inBlock(draggedIndex) ? block : { start: draggedIndex, end: draggedIndex });
+                      if (draggedIndex != null && !readOnly) moveBefore(instance.lineupIndex, inBlock(draggedIndex) ? block : { start: draggedIndex, end: draggedIndex });
                       setDraggedIndex(null);
                     }}
                   >
@@ -870,8 +1073,19 @@ export default function Home() {
         </section>
 
         <aside className="inspector">
-          <p className="eyebrow">{blockSize > 1 ? 'SELECTED BLOCK' : 'SELECTED PROGRAM'}</p>
-          {selectedItem ? <>
+          <p className="eyebrow">{slotPreview ? 'SCHEDULE PREVIEW' : blockSize > 1 ? 'SELECTED BLOCK' : 'SELECTED PROGRAM'}</p>
+          {slotPreview ? <>
+            <span className="type-chip">{slotEditor.schedule?.type === 'time' ? 'time slots' : 'random slots'}</span>
+            <h2>Regenerated lineup</h2>
+            <p className="subtle inspector-detail">Not saved yet. Browse any day to check it, then save or go back to the slots.</p>
+            <div className="info-row"><span>Lineup items</span><b>{slotPreview.lineup.length.toLocaleString('en')}</b></div>
+            <div className="info-row"><span>Cycle</span><b>{durationTimecode(cycleDuration(slotPreview.lineup))}</b></div>
+            <div className="info-row"><span>Slots</span><b>{slotEditor.draft.length}</b></div>
+            <button className="wide primary" disabled={slotEditor.busy || saving} onClick={saveSlots}>Save schedule</button>
+            <button className="wide" onClick={() => setSlotEditor((current) => ({ ...current, open: true, showingPreview: false }))}>Edit slots</button>
+            <button className="wide" onClick={discardSlotPreview}>Discard preview</button>
+            <p className="hint">Back closes the preview. The edited slots are kept until you leave this channel.</p>
+          </> : selectedItem ? <>
             <ArtTile className="poster" tone={artTone(selectedIndex)} title={selectedTitle} src={selectedArt} />
             <span className="type-chip">{blockSize > 1 ? 'block' : selectedItem.type}</span>{grab && <span className="type-chip moving-chip">moving</span>}
             <h2>{selectedTitle}</h2>
@@ -884,7 +1098,7 @@ export default function Home() {
             <button className="wide primary" disabled={!!grab} onClick={() => setArrangeOpen(true)}>Move or swap…</button>
             <button className="wide" onClick={() => (grab ? drop() : pickUp())}>{grab ? 'Drop here' : 'Pick up to slide'}</button>
             <p className="hint">{grab ? 'Use ↑ ↓ to slide, OK to drop, Back to cancel.' : 'Tip: drag a row, Shift-click to select a block, or press OK on a row to pick it up.'}</p>
-            {hasGeneratedSchedule(programming) && <div className="warning"><b>Generated schedule</b><span>Tunarr may regenerate these manual changes from {scheduleSummary(programming.schedule)}. Lineup rearranges programs; it does not edit slot schedules.</span></div>}
+            {hasGeneratedSchedule(programming) && <div className="warning"><b>Generated schedule</b><span>Tunarr builds this lineup from {scheduleSummary(programming.schedule)} and may regenerate over manual changes. Edit the slots to change it at the source.</span>{live && <button className="wide" disabled={!!grab} onClick={openSlotEditor}>Edit slot schedule…</button>}</div>}
             {(history.past.length > 0 || history.future.length > 0 || dirty) && <div className="edit-list">
               <p className="eyebrow">EDIT LIST{history.past.length ? ` (${history.past.length})` : ''}</p>
               <ol>
@@ -982,6 +1196,28 @@ export default function Home() {
           <div className="dialog-actions"><button className="primary" onClick={() => setInfoDialog(null)}>OK</button></div>
         </section>
       </div>}
+
+      {slotEditor.open && slotEditor.channelId === activeChannelId && activeChannel && (slotEditor.schedule ? <ScheduleEditor
+        channelLabel={`CH ${activeChannel.number} ${activeChannel.name}`}
+        schedule={slotEditor.schedule}
+        slots={slotEditor.draft}
+        busy={slotEditor.busy || saving}
+        error={slotEditor.error}
+        changed={JSON.stringify(slotEditor.draft) !== JSON.stringify(slotEditor.schedule.slots)}
+        previewReady={!!slotEditor.preview && slotEditor.previewOf === JSON.stringify(slotEditor.draft)}
+        onChange={(draft) => setSlotEditor((current) => ({ ...current, draft, error: '' }))}
+        onPreview={previewSlots}
+        onSave={saveSlots}
+        onRevert={() => setSlotEditor((current) => (current.schedule ? { ...current, draft: structuredClone(current.schedule.slots), preview: null, previewOf: '', error: '' } : current))}
+        onClose={() => setSlotEditor((current) => ({ ...current, open: false }))}
+      /> : <div className="overlay" role="presentation">
+        <section className="modal schedule-modal" role="dialog" aria-modal="true" aria-labelledby="schedule-title">
+          <button className="modal-close" aria-label="Close" onClick={() => setSlotEditor(closedSlotEditor)}>×</button>
+          <h2 id="schedule-title">Slot schedule</h2>
+          {slotEditor.error ? <div className="warning" role="alert"><b>Couldn’t load the schedule</b><span>{slotEditor.error}</span></div> : <p className="subtle">Loading the slot schedule from Tunarr…</p>}
+          <div className="dialog-actions"><button onClick={() => setSlotEditor(closedSlotEditor)}>Close</button></div>
+        </section>
+      </div>)}
 
       {arrangeOpen && selectedItem && activeChannel && <MoveDialog
         placing={describe()}

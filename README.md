@@ -20,8 +20,16 @@ with a mouse and keyboard.
   - **← / →** change the day, and **CH+ / CH−** (or PgUp/PgDn) change the channel.
   - Press `?` for the full list.
 - **Edit list.** Step-by-step undo and redo (⌘Z / ⇧⌘Z, or Ctrl+Z / Ctrl+Y). Changed rows are marked, and **Revert all** discards every edit.
+  - Unsaved work and the edit list are kept per channel in the browser (IndexedDB). They survive switching channels, reloading the page and turning the TV off.
+  - The edit list carries over a save, so a save can be undone and saved again.
+  - Channels with unsaved work are marked "unsaved" in the channel list.
+- **Slot schedules.** For channels Tunarr generates from a random-slot or time-slot schedule, **Channel → Edit Slot Schedule…** opens the slots.
+  - **Random slots:** change the source (one the schedule already uses), weight, cooldown, length and order; reorder, duplicate or remove slots.
+  - **Time slots:** change start times and shift every slot at once.
+  - **Preview lineup** shows the regenerated lineup in the timeline. **Save schedule** saves it with the preview's random seed and reports any difference from the preview.
 - **Safe saving.**
-  - **Conflict check:** before writing, Lineup checks that the channel hasn't been changed elsewhere since you loaded it. If it has, nothing is saved.
+  - **Conflict check:** every save says which version of the channel it was based on (`If-Match`). The companion checks that version and writes while holding a per-channel lock. If the channel changed in the meantime, nothing is saved.
+  - **Remaining gap:** this fully closes the gap between Lineup sessions. Against edits made in Tunarr's own UI, it leaves a window of a few milliseconds (Tunarr has no conditional save of its own).
   - **Generated schedules:** channels driven by a slot or time schedule ask for confirmation first.
 - **Program log.** **File → Export Program Log…** downloads the visible day as CSV.
 - **Artwork** is loaded through the companion, so the browser never contacts Tunarr or your media server.
@@ -65,6 +73,8 @@ accident.
 | `GET /api/tunarr/channels/:id/programming` | `GET {TUNARR_URL}/api/channels/:id/programming` |
 | `POST /api/tunarr/channels/:id/programming` | `POST {TUNARR_URL}/api/channels/:id/programming` |
 | `GET /api/tunarr/channels/:id/lineup?from=…&to=…` | `GET {TUNARR_URL}/api/channels/:id/lineup` |
+| `GET /api/tunarr/channels/:id/schedule` | `GET {TUNARR_URL}/api/channels/:id/schedule` (slot schedule with show and collection names) |
+| `POST /api/tunarr/channels/:id/schedule-preview` | `POST {TUNARR_URL}/api/channels/:id/schedule-slots` or `/schedule-time-slots` (generates a lineup; saves nothing) |
 | `GET /api/tunarr/programs/:id/artwork/:type` | `GET {TUNARR_URL}/api/programs/:id/artwork/:type` (image types only; `:id` must be a UUID; `:type` is `poster`, `thumbnail`, `landscape` or `banner`) |
 
 The proxy is deliberately narrow (`server/tunarrProxy.ts`):
@@ -73,7 +83,12 @@ The proxy is deliberately narrow (`server/tunarrProxy.ts`):
 - Any other path or method is refused (`404 route_not_allowed`, `405 method_not_allowed`).
 - Channel IDs must match `[A-Za-z0-9][A-Za-z0-9_-]{0,63}`. Unexpected query parameters are rejected.
 - `from`/`to` must be ISO 8601 date-times, `to` must be after `from`, and the range is capped at 14 days.
-- Saves must be `application/json` with `{"type":"manual","lineup":[…],"append":false}`, and every item needs a known type and a positive duration. Lineup items are forwarded unchanged, so Tunarr's own fields (flex filler config, redirect targets, custom-show and filler references, offsets…) survive.
+- **Manual saves** must be `application/json` with `{"type":"manual","lineup":[…],"append":false}`, and every item needs a known type and a positive duration. Lineup items are forwarded unchanged, so Tunarr's own fields (flex filler config, redirect targets, custom-show and filler references, offsets…) survive.
+- **Slot-schedule saves** (`{"type":"random"|"time","schedule":{"slots":[…]},"seed":[…]}`) can only use sources the channel's current schedule already uses.
+  - Every other schedule setting comes from Tunarr's current copy.
+  - The companion builds the program list itself from programs already on the channel, as Tunarr's own slot editors do; a `programs` list sent by the browser is ignored.
+  - A channel's schedule type can't be switched.
+- **Every save needs `If-Match: "<version>"`,** the version of the channel it was based on. Without it the response is 428; if the channel changed meanwhile, 412 `lineup_changed`.
 - Writes from another site are blocked: the `Origin` must match the companion's host.
 - Browser cookies, `Authorization` and hop-by-hop headers are never forwarded. Upstream redirects are not followed.
 - Timeouts are 10 s for reads and 30 s for saves. Override them with `TUNARR_TIMEOUT_MS` and `TUNARR_SAVE_TIMEOUT_MS`.

@@ -46,28 +46,42 @@ Chromium with `npx playwright install chromium`. CI runs all of them
    Never put `TUNARR_URL` or any Tunarr address in client code. Only the `LINEUP_PUBLIC_`
    env prefix is exposed to the client (`vite.local.config.ts`). Never add a
    user-entered URL workflow, wildcard CORS, or a generic proxy.
-2. **The proxy stays an allowlist.** `server/tunarrProxy.ts` allows exactly six routes
-   (`matchRoute`). The artwork route passes image bytes only, from UUID program IDs. Adding a route means validating its params and query, adding tests,
+2. **The proxy stays an allowlist.** `server/tunarrProxy.ts` allows exactly eight
+   route/method pairs (`matchRoute`). The artwork route passes image bytes only, from
+   UUID program IDs. Slot-schedule edits are validated in `server/slotSchedule.ts`: only
+   sources the current schedule already uses, schedule-wide settings taken from Tunarr's
+   copy, and a program pool computed server-side. Adding a route means validating its params and query, adding tests,
    and documenting it in `docs/ARCHITECTURE.md`. Keep the SSRF guards: fixed upstream
    origin, channel-ID regex, `redirect: 'manual'`, timeouts, no forwarded cookies or auth,
    the Origin check, and normalized JSON errors without stack traces.
 3. **Only rearrange what exists.** The editor may reorder lineup items but must never
    add media or programming. Lineup item objects are passed through untouched on save
    (`buildManualSave`); never rebuild them from a subset of fields.
-4. **Saves use Tunarr's manual payload** `{ "type": "manual", "lineup": [...], "append": false }`.
-   - Before posting, re-read the channel and refuse to save if it differs from what
-     was loaded (conflict check in `performSave`).
-   - After saving, re-fetch programming and the visible day.
-   - Warn before saving a channel whose programming has a `schedule`.
-5. **No silent demo fallback.** Live failures show errors; demo data appears only after
+4. **Every save is conditional.**
+   - The client sends `If-Match` with `programmingVersion(lineup, schedule)` of what it
+     loaded (`server/lineupVersion.ts`, shared with the browser).
+   - The proxy re-checks it under a per-channel lock (`withChannelLock`) and answers
+     412 `lineup_changed` on mismatch.
+   - Manual saves use `{ "type": "manual", "lineup": [...], "append": false }`; afterwards,
+     re-fetch programming and the visible day.
+   - Warn before saving a manual lineup over a generated `schedule`. Schedule saves must
+     be previewed first and reuse the preview's seed.
+5. **Drafts persist.**
+   - Unsaved order and undo history are stored per channel and per programming version
+     (`lib/draftStore.ts`, IndexedDB with an in-memory fallback), as positions into the
+     loaded lineup.
+   - Keep `base.lineup` objects as the only items in history snapshots. `revertAll` uses
+     `base.lineup`, not a clone.
+   - After a manual save, re-attach history with `rebaseHistory`.
+6. **No silent demo fallback.** Live failures show errors; demo data appears only after
    the user picks "Use demo data". Keep demo mode visibly labeled.
-6. **Server stays dependency-free.** The runtime Docker stage copies only `dist-server/`
+7. **Server stays dependency-free.** The runtime Docker stage copies only `dist-server/`
    and `dist-local/`, with no `node_modules`. Use Node built-ins in `server/`, or update
    the Dockerfile deliberately.
-7. **Keep the desk TV/remote-operable.** Every action must be reachable without a
+8. **Keep the desk TV/remote-operable.** Every action must be reachable without a
    mouse: arrow keys, Enter/OK, Escape/Back, PageUp/PageDown or CH±, the menus and
    the `?` shortcut list. Don't add hover-only or drag-only features.
-8. **Preserve the Mac OS 9 visual treatment**: platinum chrome, striped title bars, 1px
+9. **Preserve the Mac OS 9 visual treatment**: platinum chrome, striped title bars, 1px
    bevels. The interface is used on a TV, so keep text large and smooth. Size things in
    `rem` (the root scales with viewport width in `app/globals.css`); keep 1px hairlines
    in `px`; don't reintroduce `-webkit-font-smoothing:none` or sub-13px base type.
@@ -83,10 +97,13 @@ Chromium with `npx playwright install chromium`. CI runs all of them
   but its utilities are essentially unused.
 - **Put pure logic in `lib/`** (testable without React): `lineup.ts` for schedule math,
   `broadcast.ts` for block moves, timecode, totals and CSV, `history.ts` for
-  undo/redo, and `programInfo.ts` for titles and artwork.
+  undo/redo and rebasing, `draftStore.ts` for persistent drafts, `schedule.ts` for slot
+  editing, and `programInfo.ts` for titles and artwork.
 - **Put HTTP and validation logic in `server/`:** `tunarrProxy.ts` (framework-free),
-  `auth.ts` and `app.ts`. Keep `app/page.tsx` for UI state and rendering, and
-  `app/components/` for larger UI pieces (`MenuBar`, `MoveDialog`).
+  `slotSchedule.ts`, `lineupVersion.ts`, `auth.ts` and `app.ts`. Keep `app/page.tsx` for
+  UI state and rendering, and `app/components/` for larger UI pieces (`MenuBar`,
+  `MoveDialog`, `ScheduleEditor`). `lib/` may import pure modules from `server/`
+  (`lineupVersion`, `slotSchedule`) but never Node APIs.
 - **Add or update tests** for any behavior change.
   - Unit and UI tests go in `tests/`. Proxy tests inject `fetchImpl`; UI tests mock
     `fetch` with a stateful fake companion (`tests/page.test.tsx`).

@@ -1,3 +1,6 @@
+import { programmingVersion } from './lineupVersion.js';
+import { buildEditedSchedule, programPool, validateSeed } from './slotSchedule.js';
+
 // Narrow backend-for-frontend for Tunarr.
 //
 // The browser only ever talks to /api/tunarr/* on this app's own origin. This
@@ -126,6 +129,8 @@ type Route =
   | { name: 'channels'; methods: string[] }
   | { name: 'programming'; methods: string[]; channelId: string }
   | { name: 'lineup'; methods: string[]; channelId: string }
+  | { name: 'schedule'; methods: string[]; channelId: string }
+  | { name: 'schedule-preview'; methods: string[]; channelId: string }
   | { name: 'artwork'; methods: string[]; programId: string; artworkType: string };
 
 function matchRoute(pathname: string): Route | { invalid: string } | null {
@@ -137,15 +142,46 @@ function matchRoute(pathname: string): Route | { invalid: string } | null {
     if (!(ARTWORK_TYPES as readonly string[]).includes(artwork[2])) return { invalid: 'Artwork type is not supported.' };
     return { name: 'artwork', methods: ['GET'], programId: artwork[1].toLowerCase(), artworkType: artwork[2] };
   }
-  const match = /^\/api\/tunarr\/channels\/([^/]+)\/(programming|lineup)$/.exec(pathname);
+  const match = /^\/api\/tunarr\/channels\/([^/]+)\/(programming|lineup|schedule|schedule-preview)$/.exec(pathname);
   if (!match) return null;
   // Validate the raw (still percent-encoded) segment so encoded slashes or
   // dots can never reach the upstream URL.
   if (!CHANNEL_ID.test(match[1])) return { invalid: 'Channel id is not valid.' };
-  return match[2] === 'programming'
-    ? { name: 'programming', methods: ['GET', 'POST'], channelId: match[1] }
-    : { name: 'lineup', methods: ['GET'], channelId: match[1] };
+  switch (match[2]) {
+    case 'programming': return { name: 'programming', methods: ['GET', 'POST'], channelId: match[1] };
+    case 'lineup': return { name: 'lineup', methods: ['GET'], channelId: match[1] };
+    case 'schedule': return { name: 'schedule', methods: ['GET'], channelId: match[1] };
+    default: return { name: 'schedule-preview', methods: ['POST'], channelId: match[1] };
+  }
 }
+
+// Writes to one channel are serialized, so the version check and the write
+// below cannot interleave with another Lineup session's save.
+const channelLocks = new Map<string, Promise<unknown>>();
+
+async function withChannelLock<T>(channelId: string, task: () => Promise<T>): Promise<T> {
+  const previous = channelLocks.get(channelId) ?? Promise.resolve();
+  const run = previous.then(task, task);
+  const settled = run.then(() => undefined, () => undefined);
+  channelLocks.set(channelId, settled);
+  try {
+    return await run;
+  } finally {
+    if (channelLocks.get(channelId) === settled) channelLocks.delete(channelId);
+  }
+}
+
+/** Accepts `If-Match: "<version>"` (quotes optional). */
+function parseIfMatch(value: string | undefined) {
+  const match = /^\s*(?:W\/)?"?([a-z0-9-]{1,64})"?\s*$/i.exec(value ?? '');
+  return match ? match[1] : null;
+}
+
+type CurrentProgramming = { lineup?: unknown; programs?: unknown; schedule?: unknown };
+
+type Write =
+  | { kind: 'manual'; lineup: unknown[] }
+  | { kind: 'schedule'; type: 'time' | 'random'; edit: unknown; seed?: number[]; discardCount?: number };
 
 function header(headers: ProxyRequest['headers'], name: string) {
   const value = headers[name];
@@ -341,7 +377,9 @@ export async function handleTunarrApi(request: ProxyRequest, config: ProxyConfig
       return fail(400, 'invalid_query', 'This route does not accept query parameters.');
     }
 
-    let upstreamBody: string | undefined;
+    let write: Write | undefined;
+    let expectedVersion: string | null = null;
+    let previewEdit: unknown;
     if (method === 'POST') {
       const contentType = header(request.headers, 'content-type') ?? '';
       if (!/^application\/json\b/i.test(contentType)) return fail(415, 'unsupported_media_type', 'Send programming as application/json.');
@@ -351,9 +389,23 @@ export async function handleTunarrApi(request: ProxyRequest, config: ProxyConfig
       } catch {
         return fail(400, 'invalid_json', 'Request body is not valid JSON.');
       }
-      const checked = validateManualProgramming(parsed);
-      if ('error' in checked) return fail(400, 'invalid_programming', checked.error);
-      upstreamBody = JSON.stringify({ type: 'manual', lineup: checked.lineup, append: false });
+      if (route.name === 'schedule-preview') {
+        previewEdit = parsed;
+      } else {
+        const type = (parsed as { type?: unknown } | null)?.type;
+        if (type === 'time' || type === 'random') {
+          const body = parsed as { schedule?: unknown; seed?: unknown; discardCount?: unknown };
+          const seed = validateSeed(body.seed, body.discardCount);
+          if ('error' in seed) return fail(400, 'invalid_programming', seed.error);
+          write = { kind: 'schedule', type, edit: body.schedule, ...seed };
+        } else {
+          const checked = validateManualProgramming(parsed);
+          if ('error' in checked) return fail(400, 'invalid_programming', checked.error);
+          write = { kind: 'manual', lineup: checked.lineup };
+        }
+        expectedVersion = parseIfMatch(header(request.headers, 'if-match'));
+        if (!expectedVersion) return fail(428, 'precondition_required', 'Saves must say which version of the channel they replace (If-Match).');
+      }
     }
 
     const target = config.target;
@@ -380,7 +432,39 @@ export async function handleTunarrApi(request: ProxyRequest, config: ProxyConfig
         }
         case 'programming': {
           const path = `/api/channels/${route.channelId}/programming`;
-          return json(200, await callTunarr(config, target, method === 'POST' ? 'POST' : 'GET', path, upstreamBody));
+          if (!write) return json(200, await callTunarr(config, target, 'GET', path));
+          const pending = write;
+          return await withChannelLock(route.channelId, async () => {
+            // Conditional save: Tunarr has no If-Match of its own, so check the
+            // current version and write while holding this channel's lock.
+            const current = (await callTunarr(config, target, 'GET', path)) as CurrentProgramming;
+            if (programmingVersion(current?.lineup, current?.schedule) !== expectedVersion) {
+              throw new UpstreamError(412, 'lineup_changed', 'This channel changed in Tunarr since it was loaded. Nothing was saved.');
+            }
+            let body: unknown;
+            if (pending.kind === 'manual') {
+              body = { type: 'manual', lineup: pending.lineup, append: false };
+            } else {
+              if ((current?.schedule as { type?: unknown } | undefined)?.type !== pending.type) {
+                throw new UpstreamError(409, 'schedule_type_mismatch', `This channel does not use a ${pending.type === 'time' ? 'time-slot' : 'random-slot'} schedule.`);
+              }
+              const built = buildEditedSchedule(current.schedule, pending.edit);
+              if ('error' in built) throw new UpstreamError(400, 'invalid_schedule', built.error);
+              const programs = programPool(built.schedule.slots as Array<Record<string, unknown>>, current.lineup, current.programs);
+              body = { type: pending.type, schedule: built.schedule, programs, seed: pending.seed, discardCount: pending.discardCount };
+            }
+            return json(200, await callTunarr(config, target, 'POST', path, JSON.stringify(body)));
+          });
+        }
+        case 'schedule':
+          return json(200, await callTunarr(config, target, 'GET', `/api/channels/${route.channelId}/schedule`));
+        case 'schedule-preview': {
+          const current = (await callTunarr(config, target, 'GET', `/api/channels/${route.channelId}/programming`)) as CurrentProgramming;
+          const built = buildEditedSchedule(current?.schedule, previewEdit);
+          if ('error' in built) throw new UpstreamError(400, 'invalid_schedule', built.error);
+          const endpoint = built.schedule.type === 'time' ? 'schedule-time-slots' : 'schedule-slots';
+          // A POST, so generation gets the longer save timeout.
+          return json(200, await callTunarr(config, target, 'POST', `/api/channels/${route.channelId}/${endpoint}`, JSON.stringify({ schedule: built.schedule })));
         }
         case 'lineup': {
           const query = new URLSearchParams({ from: range!.from, to: range!.to });

@@ -2,7 +2,9 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Home from '../app/page';
+import { draftStore } from '../lib/draftStore';
 import { dayRange, type LineupItem } from '../lib/lineup';
+import { programmingVersion } from '../server/lineupVersion';
 import { guideFor, mixedLineup, mixedPrograms } from './fixtures';
 
 type Reply = { status: number; body: unknown } | 'network-error';
@@ -13,9 +15,9 @@ const today = () => {
 };
 
 /** A stateful fake of the companion's /api/tunarr routes. */
-function fakeCompanion(options: { schedule?: unknown; health?: Reply; programming?: Reply; lineupStatus?: number } = {}) {
+function fakeCompanion(options: { schedule?: { type: string; slots: unknown[]; [key: string]: unknown }; health?: Reply; programming?: Reply; lineupStatus?: number } = {}) {
   const startTime = dayRange(today()).from.getTime() - 60 * 60_000;
-  const state = { lineup: mixedLineup() as LineupItem[] };
+  const state = { lineup: mixedLineup() as LineupItem[], previewedSlots: undefined as unknown };
   const channels = [
     { id: 'chan-movies', name: 'Movie Night', number: 7, startTime, duration: 140 * 60_000, programCount: 6 },
     { id: 'chan-news', name: 'Newsroom', number: 3, startTime, duration: 140 * 60_000, programCount: 6 },
@@ -30,9 +32,22 @@ function fakeCompanion(options: { schedule?: unknown; health?: Reply; programmin
     if (!url.pathname.startsWith('/api/tunarr/')) throw new Error(`Unexpected request to ${url}`);
     if (url.pathname === '/api/tunarr/health') return reply(options.health ?? { status: 200, body: { status: 'connected', tunarrHost: 'tunarr:8000', channelCount: 2 } });
     if (url.pathname === '/api/tunarr/channels') return reply({ status: 200, body: channels });
-    const match = /^\/api\/tunarr\/channels\/([^/]+)\/(programming|lineup)$/.exec(url.pathname);
+    const match = /^\/api\/tunarr\/channels\/([^/]+)\/(programming|lineup|schedule|schedule-preview)$/.exec(url.pathname);
+    if (match?.[2] === 'schedule') return reply({ status: 200, body: { schedule: options.schedule } });
+    if (match?.[2] === 'schedule-preview') {
+      const { slots } = JSON.parse(String(init!.body)) as { slots: unknown[] };
+      state.previewedSlots = slots;
+      return reply({ status: 200, body: { startTime, lineup: [...state.lineup].reverse(), programs: mixedPrograms(), seed: [11, 22], discardCount: 3 } });
+    }
     if (match?.[2] === 'programming' && method === 'POST') {
-      state.lineup = (JSON.parse(String(init!.body)) as { lineup: LineupItem[] }).lineup;
+      // Like the companion: refuse saves based on an outdated version.
+      const ifMatch = String((init?.headers as Record<string, string>)['if-match'] ?? '').replaceAll('"', '');
+      if (ifMatch !== programmingVersion(state.lineup, options.schedule)) {
+        return reply({ status: 412, body: { error: { code: 'lineup_changed', message: 'This channel changed in Tunarr since it was loaded. Nothing was saved.' } } });
+      }
+      const saved = JSON.parse(String(init!.body)) as { type: string; lineup?: LineupItem[] };
+      if (saved.type === 'manual') state.lineup = saved.lineup!;
+      else state.lineup = [...state.lineup].reverse();
       return reply({ status: 200, body: { lineup: state.lineup, programs: mixedPrograms() } });
     }
     if (match?.[2] === 'programming') {
@@ -52,8 +67,11 @@ function fakeCompanion(options: { schedule?: unknown; health?: Reply; programmin
 
 const count = (requests: ReturnType<typeof fakeCompanion>['requests'], method: string, path: string) => requests.filter((r) => r.method === method && r.path === path).length;
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.unstubAllGlobals();
+  // Drafts outlive a render on purpose; tests must not see each other's.
+  const store = draftStore();
+  for (const draft of await store.list()) await store.delete(draft.channelId);
 });
 afterEach(() => {
   cleanup();
@@ -112,8 +130,8 @@ describe('live mode', () => {
     expect(post.body).toEqual({ type: 'manual', lineup: JSON.parse(JSON.stringify([original[1], original[0], ...original.slice(2)])), append: false });
     expect(state.lineup[0].type).toBe('flex');
 
-    // Initial load, the pre-save conflict check, and the re-read after saving.
-    await waitFor(() => expect(count(requests, 'GET', '/api/tunarr/channels/chan-news/programming')).toBe(3));
+    // Initial load and the re-read after saving (the version check happens in the companion).
+    await waitFor(() => expect(count(requests, 'GET', '/api/tunarr/channels/chan-news/programming')).toBe(2));
     await waitFor(() => expect(count(requests, 'GET', '/api/tunarr/channels/chan-news/lineup')).toBe(2));
     expect(await screen.findByRole('button', { name: 'Saved' })).toBeTruthy();
     expect(screen.queryByText(/Showing unsaved changes/)).toBeNull();
@@ -169,15 +187,62 @@ describe('live mode', () => {
     expect(screen.getByRole('button', { name: 'Save lineup' })).toBeTruthy();
   });
 
-  it('asks before discarding unsaved changes when switching channels', async () => {
-    const { requests } = fakeCompanion();
+  it('keeps unsaved changes and the edit list per channel when switching channels', async () => {
+    fakeCompanion();
     render(<Home />);
     await screen.findAllByText('Alpha Movie');
     fireEvent.click(screen.getByRole('button', { name: /Later/ }));
     fireEvent.click(screen.getByText('Movie Night'));
-    const dialog = await screen.findByRole('alertdialog');
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
-    expect(requests.some((r) => r.path === '/api/tunarr/channels/chan-movies/programming')).toBe(false);
+    await waitFor(() => expect(document.querySelector('.channel.active')?.textContent).toContain('Movie Night'));
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(await screen.findByText('· unsaved')).toBeTruthy();
+    await screen.findByRole('button', { name: 'Saved' });
+    fireEvent.click(screen.getByText('Newsroom'));
+    expect(await screen.findByRole('button', { name: 'Save lineup' })).toBeTruthy();
+    expect(screen.getByText('Moved “Alpha Movie” later')).toBeTruthy();
+  });
+
+  it('restores unsaved changes and undo history after a reload', async () => {
+    fakeCompanion();
+    const first = render(<Home />);
+    await screen.findAllByText('Alpha Movie');
+    fireEvent.click(screen.getByRole('button', { name: /Later/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Later/ }));
+    await waitFor(async () => expect((await draftStore().get('chan-news'))?.past).toHaveLength(2));
+    first.unmount();
+    render(<Home />);
+    expect(await screen.findByText(/Restored your unsaved changes \(2 edits\)/)).toBeTruthy();
+    expect(screen.getByText('EDIT LIST (2)')).toBeTruthy();
+    fireEvent.click(screen.getAllByRole('button', { name: 'Undo' })[0]);
+    expect(screen.getByText('EDIT LIST (1)')).toBeTruthy();
+  });
+
+  it('keeps the edit list after saving, so a save can be undone', async () => {
+    const { requests } = fakeCompanion();
+    render(<Home />);
+    await screen.findAllByText('Alpha Movie');
+    fireEvent.click(screen.getByRole('button', { name: /Later/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save lineup' }));
+    expect(await screen.findByRole('button', { name: 'Saved' })).toBeTruthy();
+    expect(screen.getByText('Moved “Alpha Movie” later')).toBeTruthy();
+    fireEvent.click(screen.getAllByRole('button', { name: 'Undo' })[0]);
+    fireEvent.click(await screen.findByRole('button', { name: 'Save lineup' }));
+    await waitFor(() => expect(count(requests, 'POST', '/api/tunarr/channels/chan-news/programming')).toBe(2));
+    const posts = requests.filter((r) => r.method === 'POST');
+    expect((posts[1].body as { lineup: LineupItem[] }).lineup.map((item) => item.id ?? item.type)).toEqual(mixedLineup().map((item) => item.id ?? item.type));
+  });
+
+  it('drops a stored draft when Tunarr’s lineup changed since it was made', async () => {
+    const { state } = fakeCompanion();
+    const first = render(<Home />);
+    await screen.findAllByText('Alpha Movie');
+    fireEvent.click(screen.getByRole('button', { name: /Later/ }));
+    await waitFor(async () => expect((await draftStore().get('chan-news'))?.dirty).toBe(true));
+    first.unmount();
+    state.lineup = [...state.lineup].reverse();
+    render(<Home />);
+    expect(await screen.findByText(/changed in Tunarr since you last edited it here/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Saved' })).toBeTruthy();
   });
 });
 
@@ -247,16 +312,19 @@ describe('programming desk tools', () => {
     fireEvent.click(screen.getByRole('button', { name: /Later/ }));
     // Someone edits the channel in Tunarr's own UI meanwhile.
     state.lineup = [...state.lineup].reverse();
+    const elsewhere = state.lineup;
     fireEvent.click(screen.getByRole('button', { name: 'Save lineup' }));
     const dialog = await screen.findByRole('alertdialog');
     expect(within(dialog).getByText('This channel changed in Tunarr')).toBeTruthy();
-    expect(count(requests, 'POST', '/api/tunarr/channels/chan-news/programming')).toBe(0);
+    // The companion refused the write, so the edit made elsewhere survives.
+    expect(state.lineup).toBe(elsewhere);
     fireEvent.click(within(dialog).getByRole('button', { name: 'Keep my edits' }));
     expect(screen.getByRole('button', { name: 'Save lineup' })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Save lineup' }));
     fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Reload from Tunarr' }));
     expect(await screen.findByRole('button', { name: 'Saved' })).toBeTruthy();
-    expect(count(requests, 'POST', '/api/tunarr/channels/chan-news/programming')).toBe(0);
+    expect(state.lineup).toBe(elsewhere);
+    expect(count(requests, 'GET', '/api/tunarr/channels/chan-news/programming')).toBe(2);
   });
 
   it('picks up, slides and drops with the remote (arrow keys + OK)', async () => {
@@ -387,5 +455,68 @@ describe('programming desk tools', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Demo mode' }));
     fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Connect to Tunarr' }));
     expect(within(await screen.findByRole('alertdialog')).getByText('Discard unsaved changes?')).toBeTruthy();
+  });
+});
+
+describe('slot schedule editing', () => {
+  const schedule = {
+    type: 'random',
+    maxDays: 2,
+    randomDistribution: 'weighted',
+    flexPreference: 'end',
+    padMs: 0,
+    slots: [
+      { id: 's1', type: 'show', showId: 'show-1', show: { title: 'Bravo Show' }, order: 'next', direction: 'asc', weight: 3, cooldownMs: 0, durationSpec: { type: 'dynamic', programCount: 1 } },
+      { id: 's2', type: 'movie', order: 'shuffle', direction: 'asc', weight: 1, cooldownMs: 600000 },
+    ],
+  };
+
+  it('edits slots, previews the regenerated lineup, then saves exactly that preview', async () => {
+    const { requests, state } = fakeCompanion({ schedule });
+    render(<Home />);
+    await screen.findAllByText('Alpha Movie');
+    fireEvent.click(screen.getByRole('button', { name: 'Edit slot schedule…' }));
+    const dialog = await screen.findByRole('dialog', { name: /Slot schedule ·/ });
+    expect(within(dialog).getByText(/Random slots \(weighted\) · 2 slots · generates 2 days/)).toBeTruthy();
+    expect(within(dialog).getByText('75.0%')).toBeTruthy();
+    fireEvent.change(within(dialog).getByLabelText('Slot 2 weight'), { target: { value: '3' } });
+    expect(within(dialog).getAllByText('50.0%')).toHaveLength(2);
+    // Saving needs a preview of exactly this draft first.
+    expect((within(dialog).getByRole('button', { name: 'Save schedule' }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Preview lineup' }));
+
+    expect(await screen.findByRole('region', { name: 'Schedule preview' })).toBeTruthy();
+    expect((state.previewedSlots as Array<{ weight: number }>)[1].weight).toBe(3);
+    fireEvent.click(within(screen.getByRole('region', { name: 'Schedule preview' })).getByRole('button', { name: 'Save schedule' }));
+
+    await waitFor(() => expect(count(requests, 'POST', '/api/tunarr/channels/chan-news/programming')).toBe(1));
+    const post = requests.find((r) => r.method === 'POST' && r.path.endsWith('/programming'))!;
+    expect(post.body).toMatchObject({ type: 'random', seed: [11, 22], discardCount: 3 });
+    expect((post.body as { schedule: { slots: Array<{ weight: number }> } }).schedule.slots.map((slot) => slot.weight)).toEqual([3, 3]);
+    // The fake companion saves the reversed lineup, which is also what it previewed.
+    expect(await screen.findByText(/Schedule saved exactly as previewed/)).toBeTruthy();
+    expect(screen.queryByRole('region', { name: 'Schedule preview' })).toBeNull();
+  });
+
+  it('only offers sources the schedule already uses', async () => {
+    fakeCompanion({ schedule });
+    render(<Home />);
+    await screen.findAllByText('Alpha Movie');
+    fireEvent.click(screen.getByRole('button', { name: 'Edit slot schedule…' }));
+    const dialog = await screen.findByRole('dialog', { name: /Slot schedule ·/ });
+    const select = within(dialog).getByLabelText('Slot 1 source') as unknown as HTMLSelectElement;
+    expect([...select.options].map((option) => option.text)).toEqual(['Bravo Show', 'Movies', 'Flex (open airtime)']);
+  });
+
+  it('discards a preview with Back and leaves Tunarr untouched', async () => {
+    const { requests } = fakeCompanion({ schedule });
+    render(<Home />);
+    await screen.findAllByText('Alpha Movie');
+    fireEvent.click(screen.getByRole('button', { name: 'Edit slot schedule…' }));
+    fireEvent.click(within(await screen.findByRole('dialog', { name: /Slot schedule ·/ })).getByRole('button', { name: 'Preview lineup' }));
+    await screen.findByRole('region', { name: 'Schedule preview' });
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    expect(screen.queryByRole('region', { name: 'Schedule preview' })).toBeNull();
+    expect(count(requests, 'POST', '/api/tunarr/channels/chan-news/programming')).toBe(0);
   });
 });

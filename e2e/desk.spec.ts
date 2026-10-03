@@ -91,3 +91,64 @@ test('keeps the connection status reachable at phone width', async ({ page }) =>
   await expect(page.getByRole('dialog')).toContainText('Tunarr connected.');
   expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0);
 });
+
+test('restores unsaved changes and the edit list after a browser reload', async ({ page }) => {
+  await page.locator('.program', { hasText: 'Alpha Hour' }).first().click();
+  await page.getByRole('button', { name: '↓ Later' }).click();
+  await page.getByRole('button', { name: '↓ Later' }).click();
+  await expect(page.locator('.edit-list')).toContainText('EDIT LIST (2)');
+  await expect(page.locator('.channel.active .unsaved-mark')).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole('status')).toContainText('Restored your unsaved changes (2 edits)');
+  await expect(page.getByRole('button', { name: 'Save lineup' })).toBeVisible();
+  await page.locator('.edit-list').getByRole('button', { name: 'Undo' }).click();
+  await expect(page.locator('.edit-list')).toContainText('EDIT LIST (1)');
+  expect((await fakeState(page)).saves).toBe(0);
+});
+
+test('a second session cannot overwrite a save it has not seen', async ({ page, browser }) => {
+  const other = await browser.newPage();
+  await other.goto('/');
+  await expect(other.locator('.program').first()).toBeVisible();
+  // Session 1 saves first.
+  await page.locator('.program', { hasText: 'Alpha Hour' }).first().click();
+  await page.getByRole('button', { name: '↓ Later' }).click();
+  await page.getByRole('button', { name: 'Save lineup' }).click();
+  await expect(page.getByRole('button', { name: 'Saved' })).toBeVisible();
+  // Session 2 still holds the old version and is refused.
+  await other.locator('.program', { hasText: 'Delta Weather' }).first().click();
+  await other.getByRole('button', { name: '↑ Earlier' }).click();
+  await other.getByRole('button', { name: 'Save lineup' }).click();
+  await expect(other.getByRole('alertdialog')).toContainText('This channel changed in Tunarr');
+  expect((await fakeState(page)).saves).toBe(1);
+  expect(await newsOrder(page)).toEqual(['flex', '1', '2', 'redirect', '3', '4']);
+  await other.close();
+});
+
+test('edits a random-slot schedule, previews it, and saves exactly the preview', async ({ page }) => {
+  await page.locator('.channel', { hasText: 'Desk Rotation' }).click();
+  await expect(page.locator('.warning')).toContainText('random-slot schedule (2 slots)');
+  await page.getByRole('menuitem', { name: 'Channel' }).click();
+  await page.getByRole('menuitem', { name: /Edit Slot Schedule/ }).click();
+  const editor = page.getByRole('dialog', { name: /Slot schedule ·/ });
+  await expect(editor.getByLabel('Slot 1 source')).toHaveValue(/^show:/);
+  await editor.getByLabel('Slot 1 weight').fill('5');
+  await expect(editor.getByText('83.3%')).toBeVisible();
+  await editor.getByRole('button', { name: 'Preview lineup' }).click();
+  const preview = page.getByRole('region', { name: 'Schedule preview' });
+  await expect(preview).toContainText('Tunarr regenerated 11 lineup items');
+  await preview.getByRole('button', { name: 'Save schedule' }).click();
+  await expect(page.getByRole('status')).toContainText('Schedule saved');
+
+  const state = (await (await page.request.get(`${FAKE}/__test/state`)).json()) as { schedules: Record<string, { slots: Array<{ weight: number }> }>; lastScheduleSave: { programs: string[]; seed: number[] } };
+  const rotation = '5d0c1e8a-7b6a-4d4c-9e2f-0000000000cc';
+  expect(state.schedules[rotation].slots.map((slot) => slot.weight)).toEqual([5, 1]);
+  expect(state.lastScheduleSave.seed).toEqual([42]);
+  // The pool is built by the companion from programs already on the channel.
+  expect([...new Set(state.lastScheduleSave.programs)].sort()).toEqual(['0b6f5c4e-1a2b-4c3d-8e9f-000000000001', '0b6f5c4e-1a2b-4c3d-8e9f-0000000000e1', '0b6f5c4e-1a2b-4c3d-8e9f-0000000000e2']);
+
+  await page.reload();
+  await page.locator('.channel', { hasText: 'Desk Rotation' }).click();
+  await page.getByRole('button', { name: 'Edit slot schedule…' }).click();
+  await expect(page.getByRole('dialog', { name: /Slot schedule ·/ }).getByLabel('Slot 1 weight')).toHaveValue('5');
+});

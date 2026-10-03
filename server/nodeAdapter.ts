@@ -53,6 +53,7 @@ export async function handleNodeApiRequest(req: IncomingMessage, res: ServerResp
         origin: req.headers.origin,
         'x-forwarded-host': req.headers['x-forwarded-host'],
         'content-type': req.headers['content-type'],
+        'if-match': req.headers['if-match'],
       },
       body,
     },

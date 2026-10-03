@@ -1,6 +1,7 @@
 // Browser client for the companion's same-origin /api/tunarr routes. It never
 // knows or contacts the Tunarr server's own address.
 import type { Channel, ChannelLineup, ManualProgrammingRequest, Programming } from './lineup';
+import type { SchedulePreview, Slot, SlotSchedule } from './schedule';
 
 export class TunarrApiError extends Error {
   constructor(
@@ -76,11 +77,26 @@ export async function checkHealth(): Promise<ConnectionState> {
 export const tunarrApi = {
   channels: () => request<Channel[]>('/api/tunarr/channels'),
   programming: (id: string) => request<Programming>(`${channelPath(id)}/programming`),
-  saveProgramming: (id: string, body: ManualProgrammingRequest) =>
+  /** `version` is the programming version the edit was based on (If-Match). */
+  saveProgramming: (id: string, body: ManualProgrammingRequest, version: string) =>
     request<Programming>(`${channelPath(id)}/programming`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', 'if-match': `"${version}"` },
       body: JSON.stringify(body),
+    }),
+  /** The channel's slot schedule with display details (show titles, names). */
+  schedule: (id: string) => request<{ schedule?: SlotSchedule } | null>(`${channelPath(id)}/schedule`),
+  previewSchedule: (id: string, slots: Slot[]) =>
+    request<SchedulePreview>(`${channelPath(id)}/schedule-preview`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ slots, timeZoneOffset: new Date().getTimezoneOffset() }),
+    }),
+  saveSchedule: (id: string, type: SlotSchedule['type'], slots: Slot[], preview: Pick<SchedulePreview, 'seed' | 'discardCount'>, version: string) =>
+    request<Programming>(`${channelPath(id)}/programming`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'if-match': `"${version}"` },
+      body: JSON.stringify({ type, schedule: { slots, timeZoneOffset: new Date().getTimezoneOffset() }, seed: preview.seed, discardCount: preview.discardCount }),
     }),
   lineup: (id: string, from: Date, to: Date) =>
     request<ChannelLineup>(`${channelPath(id)}/lineup?${new URLSearchParams({ from: from.toISOString(), to: to.toISOString() })}`),
