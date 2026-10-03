@@ -20,7 +20,8 @@ const jsonResponse = (data: unknown, status = 200) => new Response(JSON.stringif
 
 const get = (url: string, headers: ProxyRequest['headers'] = {}): ProxyRequest => ({ method: 'GET', url, headers: { host: 'lineup.local:3000', ...headers } });
 
-const body = (response: { body: string }) => JSON.parse(response.body);
+const text = (response: { body: string | Uint8Array }) => (typeof response.body === 'string' ? response.body : new TextDecoder().decode(response.body));
+const body = (response: { body: string | Uint8Array }) => JSON.parse(text(response));
 
 const channels = [{ id: 'f6a4c3d2-1111-4222-8333-944455556666', name: 'Movies', number: 1, startTime: 0, duration: 1000 }];
 
@@ -42,7 +43,7 @@ describe('Tunarr proxy routes', () => {
     const response = await handleTunarrApi(get('/api/tunarr/health'), config);
     expect(response.status).toBe(200);
     expect(body(response)).toEqual({ status: 'connected', tunarrHost: 'tunarr:8000', channelCount: 1 });
-    expect(response.body).not.toContain('s3cret');
+    expect(text(response)).not.toContain('s3cret');
     // Credentials in TUNARR_URL become an explicit upstream header, never part of the URL.
     expect(calls[0].url).toBe('http://tunarr:8000/api/channels');
     expect((calls[0].init.headers as Record<string, string>).authorization).toBe(`Basic ${Buffer.from('admin:s3cret').toString('base64')}`);
@@ -70,7 +71,7 @@ describe('Tunarr proxy routes', () => {
     const health = await handleTunarrApi(get('/api/tunarr/health'), config);
     expect(health.status).toBe(503);
     expect(body(health).error.code).toBe('invalid_config');
-    expect(health.body).not.toContain('pw@');
+    expect(text(health)).not.toContain('pw@');
   });
 
   it('reports unreachable Tunarr with the hostname but no credentials', async () => {
@@ -79,7 +80,7 @@ describe('Tunarr proxy routes', () => {
     expect(health.status).toBe(502);
     expect(body(health)).toMatchObject({ status: 'unreachable', tunarrHost: '192.168.1.50:8000', error: { code: 'tunarr_unreachable' } });
     expect(body(health).error.message).toBe('Could not reach Tunarr at 192.168.1.50:8000 (ECONNREFUSED).');
-    expect(health.body).not.toMatch(/s3cret|admin/);
+    expect(text(health)).not.toMatch(/s3cret|admin/);
 
     const list = await handleTunarrApi(get('/api/tunarr/channels'), config);
     expect(list.status).toBe(502);
@@ -301,5 +302,55 @@ describe('over real HTTP', () => {
       body: 'x'.repeat(21 * 1024 * 1024),
     });
     expect(response.status).toBe(413);
+  });
+});
+
+describe('program artwork', () => {
+  const programId = '0e2d2a41-5f2f-4a7e-9d3a-2b1f0c9e8d7a';
+  const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]);
+  const image = (type = 'image/png', bytes: Uint8Array = png) => new Response(bytes as unknown as BodyInit, { status: 200, headers: { 'content-type': type } });
+
+  it('passes image bytes through from Tunarr’s artwork route with fallbacks', async () => {
+    const { calls, config } = setup(() => image());
+    const response = await handleTunarrApi(get(`/api/tunarr/programs/${programId}/artwork/thumbnail`), config);
+    expect(response.status).toBe(200);
+    expect(response.headers['content-type']).toBe('image/png');
+    expect(response.headers['cache-control']).toBe('private, max-age=86400');
+    expect(response.body).toEqual(png);
+    expect(calls[0].url).toBe(`http://tunarr:8000/api/programs/${programId}/artwork/thumbnail?fallbackArtworkTypes=poster%2Clandscape%2Cbanner`);
+    expect((calls[0].init.headers as Record<string, string>).accept).toBe('image/*');
+  });
+
+  it.each([
+    ['/api/tunarr/programs/not-a-uuid/artwork/poster', 'invalid_parameter'],
+    [`/api/tunarr/programs/${programId}/artwork/fanart`, 'invalid_parameter'],
+    [`/api/tunarr/programs/${programId}/artwork/poster?url=http://evil.example`, 'invalid_query'],
+  ])('rejects %s', async (url, code) => {
+    const { fetchImpl, config } = setup(() => image());
+    const response = await handleTunarrApi(get(url), config);
+    expect(response.status).toBe(400);
+    expect(body(response).error.code).toBe(code);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('refuses non-image and oversized responses', async () => {
+    const html = setup(() => image('text/html'));
+    expect((await handleTunarrApi(get(`/api/tunarr/programs/${programId}/artwork/poster`), html.config)).status).toBe(502);
+    const huge = setup(() => image('image/jpeg', new Uint8Array(8 * 1024 * 1024 + 1)));
+    const response = await handleTunarrApi(get(`/api/tunarr/programs/${programId}/artwork/poster`), huge.config);
+    expect(response.status).toBe(502);
+    expect(body(response).error.code).toBe('artwork_too_large');
+  });
+
+  it('maps missing artwork to 404 and does not follow redirects', async () => {
+    const missing = setup(() => new Response(null, { status: 404 }));
+    expect((await handleTunarrApi(get(`/api/tunarr/programs/${programId}/artwork/poster`), missing.config)).status).toBe(404);
+    const redirect = setup(() => new Response(null, { status: 302, headers: { location: 'http://127.0.0.1:32400/thumb' } }));
+    expect((await handleTunarrApi(get(`/api/tunarr/programs/${programId}/artwork/poster`), redirect.config)).status).toBe(502);
+  });
+
+  it('only allows GET', async () => {
+    const { config } = setup(() => image());
+    expect((await handleTunarrApi({ ...get(`/api/tunarr/programs/${programId}/artwork/poster`), method: 'POST' }, config)).status).toBe(405);
   });
 });

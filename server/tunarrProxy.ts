@@ -36,7 +36,8 @@ export type ProxyRequest = {
 export type ProxyResponse = {
   status: number;
   headers: Record<string, string>;
-  body: string;
+  /** JSON text, or raw bytes for artwork. */
+  body: string | Uint8Array;
 };
 
 export const API_PREFIX = '/api/tunarr';
@@ -44,11 +45,15 @@ export const DEFAULT_TIMEOUT_MS = 10_000;
 export const DEFAULT_SAVE_TIMEOUT_MS = 30_000;
 export const MAX_LINEUP_RANGE_MS = 14 * 24 * 3_600_000;
 export const MAX_LINEUP_ITEMS = 100_000;
+export const MAX_ARTWORK_BYTES = 8 * 1024 * 1024;
+export const ARTWORK_TYPES = ['poster', 'thumbnail', 'landscape', 'banner'] as const;
 
 const CHANNEL_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const ISO_DATETIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/;
 const LINEUP_ITEM_TYPES = new Set(['content', 'custom', 'filler', 'flex', 'redirect']);
 const ITEM_ID_REQUIRED = new Set(['content', 'custom', 'filler']);
+const PROGRAM_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const IMAGE_TYPE = /^image\/(jpeg|png|webp|gif|avif)$/i;
 
 export function parseTunarrUrl(raw: string | undefined): { target: TunarrTarget } | { error: string } | null {
   const value = raw?.trim();
@@ -120,16 +125,23 @@ type Route =
   | { name: 'health'; methods: string[] }
   | { name: 'channels'; methods: string[] }
   | { name: 'programming'; methods: string[]; channelId: string }
-  | { name: 'lineup'; methods: string[]; channelId: string };
+  | { name: 'lineup'; methods: string[]; channelId: string }
+  | { name: 'artwork'; methods: string[]; programId: string; artworkType: string };
 
-function matchRoute(pathname: string): Route | { invalidChannelId: true } | null {
+function matchRoute(pathname: string): Route | { invalid: string } | null {
   if (pathname === `${API_PREFIX}/health`) return { name: 'health', methods: ['GET'] };
   if (pathname === `${API_PREFIX}/channels`) return { name: 'channels', methods: ['GET'] };
+  const artwork = /^\/api\/tunarr\/programs\/([^/]+)\/artwork\/([^/]+)$/.exec(pathname);
+  if (artwork) {
+    if (!PROGRAM_ID.test(artwork[1])) return { invalid: 'Program id is not valid.' };
+    if (!(ARTWORK_TYPES as readonly string[]).includes(artwork[2])) return { invalid: 'Artwork type is not supported.' };
+    return { name: 'artwork', methods: ['GET'], programId: artwork[1].toLowerCase(), artworkType: artwork[2] };
+  }
   const match = /^\/api\/tunarr\/channels\/([^/]+)\/(programming|lineup)$/.exec(pathname);
   if (!match) return null;
   // Validate the raw (still percent-encoded) segment so encoded slashes or
   // dots can never reach the upstream URL.
-  if (!CHANNEL_ID.test(match[1])) return { invalidChannelId: true };
+  if (!CHANNEL_ID.test(match[1])) return { invalid: 'Channel id is not valid.' };
   return match[2] === 'programming'
     ? { name: 'programming', methods: ['GET', 'POST'], channelId: match[1] }
     : { name: 'lineup', methods: ['GET'], channelId: match[1] };
@@ -218,30 +230,30 @@ function upstreamMessage(text: string) {
   return message.replace(/\s+/g, ' ').trim().slice(0, 300);
 }
 
-async function callTunarr(
+async function fetchUpstream(
   config: ProxyConfig,
   target: TunarrTarget,
   method: 'GET' | 'POST',
   path: string,
-  body?: string,
-): Promise<unknown> {
-  const headers: Record<string, string> = { accept: 'application/json' };
-  if (body !== undefined) headers['content-type'] = 'application/json';
+  options: { accept: string; body?: string; notFound: string },
+): Promise<{ response: Response; bytes: Uint8Array }> {
+  const headers: Record<string, string> = { accept: options.accept };
+  if (options.body !== undefined) headers['content-type'] = 'application/json';
   if (target.authorization) headers.authorization = target.authorization;
   const timeoutMs = method === 'POST' ? config.saveTimeoutMs : config.timeoutMs;
   const doFetch = config.fetchImpl ?? fetch;
 
   let response: Response;
-  let text: string;
+  let bytes: Uint8Array;
   try {
     response = await doFetch(`${target.origin}${target.basePath}${path}`, {
       method,
       headers,
-      body,
+      body: options.body,
       redirect: 'manual',
       signal: AbortSignal.timeout(timeoutMs),
     });
-    text = await response.text();
+    bytes = new Uint8Array(await response.arrayBuffer());
   } catch (error) {
     const name = (error as { name?: string })?.name;
     if (name === 'TimeoutError' || name === 'AbortError') {
@@ -255,8 +267,9 @@ async function callTunarr(
   if (response.status >= 300 && response.status < 400) {
     throw new UpstreamError(502, 'tunarr_redirect', `Tunarr at ${target.host} answered with a redirect. Check TUNARR_URL.`);
   }
-  if (response.status === 404) throw new UpstreamError(404, 'not_found', 'Tunarr could not find that channel.');
+  if (response.status === 404) throw new UpstreamError(404, 'not_found', options.notFound);
   if (response.status === 400) {
+    const text = new TextDecoder().decode(bytes);
     throw new UpstreamError(400, 'tunarr_rejected', upstreamMessage(text) || 'Tunarr rejected the request.');
   }
   if (response.status === 401 || response.status === 403) {
@@ -265,11 +278,45 @@ async function callTunarr(
   if (!response.ok) {
     throw new UpstreamError(502, 'tunarr_error', `Tunarr at ${target.host} returned HTTP ${response.status}.`);
   }
+  return { response, bytes };
+}
+
+async function callTunarr(
+  config: ProxyConfig,
+  target: TunarrTarget,
+  method: 'GET' | 'POST',
+  path: string,
+  body?: string,
+): Promise<unknown> {
+  const { bytes } = await fetchUpstream(config, target, method, path, { accept: 'application/json', body, notFound: 'Tunarr could not find that channel.' });
   try {
-    return JSON.parse(text) as unknown;
+    return JSON.parse(new TextDecoder().decode(bytes)) as unknown;
   } catch {
     throw new UpstreamError(502, 'tunarr_invalid_response', `Tunarr at ${target.host} returned a response that is not JSON. Check TUNARR_URL.`);
   }
+}
+
+/** Fetches program artwork through Tunarr. Only image bytes are passed on. */
+async function fetchArtwork(config: ProxyConfig, target: TunarrTarget, programId: string, artworkType: string): Promise<ProxyResponse> {
+  const fallback = ARTWORK_TYPES.filter((type) => type !== artworkType).join(',');
+  const query = new URLSearchParams({ fallbackArtworkTypes: fallback });
+  const { response, bytes } = await fetchUpstream(config, target, 'GET', `/api/programs/${programId}/artwork/${artworkType}?${query}`, {
+    accept: 'image/*',
+    notFound: 'Tunarr has no artwork for this program.',
+  });
+  const contentType = (response.headers.get('content-type') ?? '').split(';')[0].trim();
+  if (!IMAGE_TYPE.test(contentType)) throw new UpstreamError(502, 'tunarr_invalid_response', 'Tunarr returned artwork that is not an image.');
+  if (bytes.byteLength > MAX_ARTWORK_BYTES) throw new UpstreamError(502, 'artwork_too_large', 'Artwork is too large to show.');
+  return {
+    status: 200,
+    headers: {
+      'content-type': contentType.toLowerCase(),
+      'cache-control': 'private, max-age=86400',
+      'x-content-type-options': 'nosniff',
+      'content-security-policy': "default-src 'none'; sandbox",
+    },
+    body: bytes,
+  };
 }
 
 export async function handleTunarrApi(request: ProxyRequest, config: ProxyConfig): Promise<ProxyResponse> {
@@ -279,7 +326,7 @@ export async function handleTunarrApi(request: ProxyRequest, config: ProxyConfig
     const route = matchRoute(url.pathname);
 
     if (!route) return fail(404, 'route_not_allowed', 'This Tunarr route is not available through Lineup.');
-    if ('invalidChannelId' in route) return fail(400, 'invalid_channel_id', 'Channel id is not valid.');
+    if ('invalid' in route) return fail(400, route.invalid.startsWith('Channel') ? 'invalid_channel_id' : 'invalid_parameter', route.invalid);
     if (!route.methods.includes(method)) {
       return fail(405, 'method_not_allowed', `${method.slice(0, 10)} is not allowed on this route.`, {}, { allow: route.methods.join(', ') });
     }
@@ -339,6 +386,8 @@ export async function handleTunarrApi(request: ProxyRequest, config: ProxyConfig
           const query = new URLSearchParams({ from: range!.from, to: range!.to });
           return json(200, await callTunarr(config, target, 'GET', `/api/channels/${route.channelId}/lineup?${query}`));
         }
+        case 'artwork':
+          return await fetchArtwork(config, target, route.programId, route.artworkType);
       }
     } catch (error) {
       if (!(error instanceof UpstreamError)) throw error;

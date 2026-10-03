@@ -7,10 +7,11 @@ repository. Each entry is labelled with its evidence:
 - **Evidenced**: not stated, but clearly shown by the implementation.
 
 Reasons are given only where the repository states them. Otherwise the entry
-says the reason is not recorded. Git history has two commits, both authored by
-"Codex Sites <sites@openai.com>" ("Build Tunarr Lineup", "Restyle Tunarr Lineup
-for Mac OS 9"). Later work, including the companion server, proxy, tests,
-Docker setup and docs, is not described by commit messages.
+says the reason is not recorded.
+
+The first two commits were authored by "Codex Sites <sites@openai.com>":
+"Build Tunarr Lineup" and "Restyle Tunarr Lineup for Mac OS 9". Later work is
+on the `broadcast-programming` branch.
 
 ---
 
@@ -96,14 +97,17 @@ Docker setup and docs, is not described by commit messages.
 ## D12. Local, component-level state only
 
 - **Status:** Evidenced.
-- **Decision:** All UI state lives in `useState` hooks inside `Home`, with request-counter refs to drop stale responses. There's no state library, router, context or browser storage.
+- **Decision:** All UI state lives in `useState` hooks inside `Home`, including selection, edit history and grab state, with request-counter refs to drop stale responses. Larger UI pieces are split into `app/components/`, but state stays in `Home`. There's no state library, router, context or browser storage.
 - **Reason:** not recorded.
 
-## D13. Remote artwork is not displayed
+## D13. Artwork only through the companion
 
-- **Status:** Explicit (comment above `programArtwork` in `app/page.tsx`; `README.md`).
-- **Decision:** Only `data:image/` artwork is shown. Everything else gets letter tiles.
-- **Stated reason:** remote artwork would make the browser contact Tunarr or a media server directly.
+- **Status:** Explicit (comment on `programArtwork` in `lib/programInfo.ts`; `fetchArtwork` in `server/tunarrProxy.ts`; `README.md`).
+- **Decision:**
+  - Live artwork is loaded from `/api/tunarr/programs/:id/artwork/:type`, which proxies Tunarr's own artwork endpoint. Only UUID program ids, four artwork types and image content types up to 8 MB are accepted, and redirects are not followed.
+  - Raw `artwork[].path` URLs are never used. Embedded `data:image/` icons are shown as-is; demo data has none.
+- **Stated reason:** the browser must not contact Tunarr or a media server directly.
+- **Replaces:** an earlier state of this branch that showed no remote artwork at all.
 
 ## D14. Mac OS 9 visual identity
 
@@ -134,24 +138,78 @@ Docker setup and docs, is not described by commit messages.
 - **Decision:** `@import 'tailwindcss'` stays in `app/globals.css` (which provides Tailwind's base/preflight), but styling uses custom classes. Only `antialiased` appears as a utility.
 - **Not recorded:** whether Tailwind is intended for future use or is scaffold residue.
 
-## D18. Origin check and JSON content type as CSRF mitigation
+## D18. CSRF mitigation, plus optional sign-in
 
-- **Status:** Evidenced (`isCrossOrigin`; 415 for non-JSON POSTs; tests "blocks cross-origin writes", "requires a JSON content type").
-- **Decision:** No authentication. Instead, cross-site writes are refused, and the JSON requirement forces a CORS preflight that the server never approves.
-- **Not recorded:** why there is no authentication. The compose example suggests binding to `127.0.0.1`.
+- **Status:**
+  - The CSRF mitigation is evidenced (`isCrossOrigin`; 415 for non-JSON POSTs; tests).
+  - Optional sign-in is explicit (`server/auth.ts` header comment; `README.md` "Sign-in").
+- **Decision:**
+  - Cross-site writes are always refused, by the Origin check and by the JSON content type, which forces a preflight the server never approves.
+  - Sign-in is optional HTTP Basic, off unless `LINEUP_PASSWORD` is set. `/healthz` stays open for container checks. Credentials are compared through SHA-256 digests with `timingSafeEqual`.
+  - The server logs a warning when it listens on a non-loopback host without a password.
+- **Not recorded:** why sign-in is off by default rather than required.
 
 ## D19. Testing approach
 
-- **Status:** Evidenced (`vitest.config.ts`, `tests/`).
-- **Decision:** Vitest for everything:
-  - Pure-function tests for `lib/`.
-  - Handler-level tests with an injected fetch for the proxy, plus a small real-HTTP test.
-  - jsdom plus Testing Library with a stateful fake companion for the UI.
-
-  There is no E2E suite and no CI config.
+- **Status:** Evidenced (`vitest.config.ts`, `tests/`, `playwright.config.ts`, `e2e/`, `.github/workflows/ci.yml`).
+- **Decision:**
+  - **Vitest:** pure-function tests for `lib/`; handler tests with an injected fetch for the proxy; real-HTTP tests for the server app (`createLineupServer`); jsdom plus Testing Library with a stateful fake companion for the UI.
+  - **Playwright:** drives the built companion against a stateful fake Tunarr (`e2e/fake-tunarr.mjs`) at TV resolution.
+  - **CI** runs all of it, plus a Docker build and healthcheck.
+  - Tests never write to a real Tunarr.
 
 ## D20. Day boundaries in the viewer's local time zone
 
 - **Status:** Evidenced (`dayRange` uses `new Date('YYYY-MM-DDT00:00:00')`; formatters use the default time zone).
 - **Decision:** The "day" shown and requested from Tunarr is the browser's local calendar day, sent to Tunarr as UTC ISO timestamps.
 - **Reason:** not recorded.
+
+## D21. A "programming desk" feature set within the rearrange-only rule
+
+- **Status:** Explicit (`README.md` "Programming desk features").
+- **Decision:** Add broadcast-scheduling tools on top of rearranging:
+  - an on-air line and **Now**
+  - `HH:MM:SS` timecode and cycle length
+  - day airtime totals by type
+  - block selection and block moves
+  - move to position or to a start time
+  - an edit list with step undo and redo
+  - program-log CSV export
+  - functional pull-down menus
+
+  All of these operate only on existing lineup items (D7).
+
+## D22. Refuse to save over changes made elsewhere
+
+- **Status:** Explicit (comment in `performSave`: "Refuse to overwrite edits made elsewhere since this lineup was loaded.").
+- **Decision:** Before posting, re-read the channel's programming. If its lineup differs from the baseline loaded into Lineup, don't save; offer **Reload from Tunarr** or **Keep my edits**. There is no "overwrite anyway" option.
+- **Known limitation:** a change made between the check and the POST is not detected, because Tunarr's API offers no conditional write.
+
+## D23. Keyboard and TV remote as first-class input
+
+- **Status:** Explicit (comment above the `keydown` effect in `app/page.tsx`: arrow keys map to a remote's D-pad, Enter to OK, Escape/Back to Back, PageUp/PageDown to CH+/CH−; `MenuBar` header comment; `AGENTS.md` invariant).
+- **Decision:**
+  - Every command is reachable without a mouse. Moving uses a pick-up / slide / drop model (`grab`), with Back cancelling to the exact prior lineup.
+  - The whole slide becomes one undo entry.
+- **Evidence for the reason:** the owner uses the app on a TV (`app/globals.css` comment). Beyond that, the reason isn't recorded.
+
+## D24. Undo history as whole-lineup snapshots
+
+- **Status:** Explicit (`lib/history.ts` header: "Snapshots share item objects, so each entry costs one array.").
+- **Decision:** Each history entry stores the lineup arrays before and after, plus the selection before and after. History is capped at 200 entries (`MAX_HISTORY`), cleared on load, save and demo switch, and not persisted.
+
+## D25. Blocks are contiguous lineup ranges
+
+- **Status:** Explicit (comment in `moveCursor`: "A block must stay contiguous in the lineup, so stop extending across a cycle wrap.").
+- **Decision:** Multi-selection is an anchor/focus range of lineup indices. Shift-extension across the cycle wrap is refused. Swap is offered only for single items.
+
+## D26. Move-to-time is computed against the real cycle
+
+- **Status:** Explicit (`moveBlockToTime` doc comment).
+- **Decision:** Every insertion point is evaluated against the full cycle length, which is unchanged by a move. The UI previews the exact resulting start and its offset from the requested time before anything changes.
+- **Replaces:** an earlier draft on this branch that measured against the lineup without the block. It was wrong beyond the first cycle, and a regression test now covers it.
+
+## D27. Program log export guards against spreadsheet formulas
+
+- **Status:** Explicit (comment in `toCsv`).
+- **Decision:** CSV cells that start with `=`, `+`, `-`, `@`, tab or CR are prefixed with `'`, and values are quoted per RFC 4180. Exports of unsaved lineups get an `-unsaved` filename suffix.

@@ -34,6 +34,10 @@ services:
     environment:
       # Server-side only. Must be the address Tunarr has on this network.
       - TUNARR_URL=http://tunarr:8000
+      # Optional: require sign-in (HTTP Basic). Strongly recommended if
+      # Lineup is reachable by anyone other than you.
+      # - LINEUP_PASSWORD=change-me
+      # - LINEUP_USERNAME=lineup
       # Optional: upstream timeouts in milliseconds.
       # - TUNARR_TIMEOUT_MS=10000
       # - TUNARR_SAVE_TIMEOUT_MS=30000

@@ -1,0 +1,52 @@
+// How lineup items are titled, described and illustrated in the interface.
+import type { LineupItem, Program, Programming } from './lineup';
+
+export function getProgram(item: LineupItem, programs: Programming['programs']): Program | undefined {
+  if (!item.id) return undefined;
+  const entry = programs[item.id];
+  if (!entry) return undefined;
+  // Tunarr wraps metadata in `program`; older payloads and demo data may not.
+  const wrapped = (entry as { program?: Program }).program;
+  return wrapped && typeof wrapped === 'object' ? wrapped : (entry as Program);
+}
+
+export function programTitle(item: LineupItem, programs: Programming['programs']) {
+  const program = getProgram(item, programs);
+  if (program?.type === 'episode') return program.show?.title || program.season?.show?.title || program.showTitle || program.title || 'Episode';
+  if (program?.type === 'track') return program.artistName || program.title || 'Track';
+  if (program?.title) return program.title;
+  if (item.type === 'flex') return 'Flex time';
+  if (item.type === 'redirect') return String(item.channelName || 'Channel redirect');
+  if (item.type === 'custom') return 'Custom show';
+  if (item.type === 'filler') return 'Filler';
+  return 'Untitled program';
+}
+
+export function programDetail(item: LineupItem, programs: Programming['programs']) {
+  const program = getProgram(item, programs);
+  if (!program) return item.type === 'flex' ? 'Open airtime' : item.type;
+  if (program.type === 'episode') {
+    const season = program.seasonNumber ?? program.season?.index ?? program.season?.number;
+    const episode = program.episodeNumber;
+    const number = season != null && episode != null ? `S${String(season).padStart(2, '0')} E${String(episode).padStart(2, '0')} · ` : '';
+    return `${number}${program.title || 'Episode'}`;
+  }
+  if (program.type === 'track') return [program.albumName, program.title].filter(Boolean).join(' · ');
+  return [program.year, program.type && program.type.replace('_', ' ')].filter(Boolean).join(' · ');
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export const ARTWORK_KINDS = ['poster', 'thumbnail', 'landscape', 'banner'] as const;
+export type ArtworkKind = (typeof ARTWORK_KINDS)[number];
+
+/**
+ * Artwork comes through the companion's own /api/tunarr/programs route, so
+ * the browser never contacts Tunarr or a media server directly. Embedded
+ * data: images are used as-is. Demo data has no artwork.
+ */
+export function programArtwork(item: LineupItem, programs: Programming['programs'], live: boolean, kind: ArtworkKind = 'poster') {
+  if (typeof item.icon === 'string' && item.icon.startsWith('data:image/')) return item.icon;
+  if (!live || !item.id || !UUID.test(item.id) || !['content', 'custom', 'filler'].includes(item.type)) return undefined;
+  if (!getProgram(item, programs)) return undefined;
+  return `/api/tunarr/programs/${item.id}/artwork/${kind}`;
+}

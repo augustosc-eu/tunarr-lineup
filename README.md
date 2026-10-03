@@ -1,9 +1,31 @@
 # Tunarr Lineup
 
-A Mac OS 9–style editor for the programming that is already on your
-[Tunarr](https://tunarr.com) channels. Pick a channel, jump to a date, then
-drag, move, or swap programs and save. Lineup only rearranges items that are
-already in a channel; it never adds media or programming.
+A Mac OS 9–style programming desk for the channels on your
+[Tunarr](https://tunarr.com) server. Pick a channel, jump to a date, then
+rearrange what's already scheduled and save it back to Tunarr. Lineup only
+rearranges items that are already in a channel; it never adds media or
+programming. It is designed to be driven from a TV with a remote as well as
+with a mouse and keyboard.
+
+## Programming desk features
+
+- **On-air view.** A red line marks the program on air now, timed to the second, and **Now** (or the `N` key) jumps to it.
+- **Broadcast timing.** Start times are shown as `HH:MM:SS` and durations as `H:MM:SS`. The header shows the lineup size and cycle length, and the totals row shows airtime per item type for the day.
+- **Moving programs:**
+  - **Single moves:** ↑ Earlier / ↓ Later, drag and drop, or **Move or swap…**.
+  - **Exact placement:** **Move or swap…** can also place the selection at a lineup position, or at the slot nearest a start time, with a preview of the exact resulting start.
+  - **Block moves:** Shift-click or Shift+↑/↓ selects a block, which moves as one unit.
+- **Remote control.**
+  - **Arrows** move between programs. **OK/Enter** picks the selection up; **↑/↓** slide it, OK drops it, and **Back** cancels.
+  - **← / →** change the day, and **CH+ / CH−** (or PgUp/PgDn) change the channel.
+  - Press `?` for the full list.
+- **Edit list.** Step-by-step undo and redo (⌘Z / ⇧⌘Z, or Ctrl+Z / Ctrl+Y). Changed rows are marked, and **Revert all** discards every edit.
+- **Safe saving.**
+  - **Conflict check:** before writing, Lineup checks that the channel hasn't been changed elsewhere since you loaded it. If it has, nothing is saved.
+  - **Generated schedules:** channels driven by a slot or time schedule ask for confirmation first.
+- **Program log.** **File → Export Program Log…** downloads the visible day as CSV.
+- **Artwork** is loaded through the companion, so the browser never contacts Tunarr or your media server.
+- **Pull-down menus** (File, Edit, View, Channel, Help) work with the mouse, the keyboard, or a remote.
 
 ## Architecture
 
@@ -43,6 +65,7 @@ accident.
 | `GET /api/tunarr/channels/:id/programming` | `GET {TUNARR_URL}/api/channels/:id/programming` |
 | `POST /api/tunarr/channels/:id/programming` | `POST {TUNARR_URL}/api/channels/:id/programming` |
 | `GET /api/tunarr/channels/:id/lineup?from=…&to=…` | `GET {TUNARR_URL}/api/channels/:id/lineup` |
+| `GET /api/tunarr/programs/:id/artwork/:type` | `GET {TUNARR_URL}/api/programs/:id/artwork/:type` (image types only; `:id` must be a UUID; `:type` is `poster`, `thumbnail`, `landscape` or `banner`) |
 
 The proxy is deliberately narrow (`server/tunarrProxy.ts`):
 
@@ -55,6 +78,7 @@ The proxy is deliberately narrow (`server/tunarrProxy.ts`):
 - Browser cookies, `Authorization` and hop-by-hop headers are never forwarded. Upstream redirects are not followed.
 - Timeouts are 10 s for reads and 30 s for saves. Override them with `TUNARR_TIMEOUT_MS` and `TUNARR_SAVE_TIMEOUT_MS`.
 - Errors come back as `{"error":{"code","message"}}`. Messages name the Tunarr host but never credentials, and never include stack traces.
+- Artwork responses must be an image type (JPEG, PNG, WebP, GIF or AVIF) of at most 8 MB.
 
 If Tunarr sits behind a reverse proxy with basic auth, you can put credentials
 in `TUNARR_URL` (`http://user:pass@host`). The server sends them as an
@@ -72,7 +96,15 @@ in `TUNARR_URL` (`http://user:pass@host`). The server sends them as an
 - Saving sends the lineup back as a manual lineup, then re-reads the channel's programming and the visible day from Tunarr.
   - If the channel uses a generated slot or time schedule, Lineup asks for confirmation first, because saving a manual lineup can detach the channel from that schedule.
   - Leaving a channel with unsaved changes asks for confirmation. **Undo changes** restores the last loaded lineup.
-- Artwork is shown only when it is embedded in the data. Remote poster URLs would make the browser contact Tunarr or your media server directly, so they appear as letter tiles instead.
+- Artwork is fetched through `/api/tunarr/programs/:id/artwork/:type`; demo data uses letter tiles.
+
+### Sign-in
+
+The companion has no sign-in by default. Anyone who can reach its port can
+edit your channels. Set `LINEUP_PASSWORD` (and optionally `LINEUP_USERNAME`,
+default `lineup`) to require HTTP Basic sign-in for everything except
+`/healthz`. Basic auth sends the password with every request, so use it on a
+trusted network or behind HTTPS.
 
 ## Run with Docker Compose (recommended)
 
@@ -125,6 +157,9 @@ Server environment variables:
 | `HOST` | `0.0.0.0` | Listen address |
 | `TUNARR_TIMEOUT_MS` | `10000` | Upstream timeout for reads |
 | `TUNARR_SAVE_TIMEOUT_MS` | `30000` | Upstream timeout for saves |
+| `LINEUP_PASSWORD` | (none) | Turns on HTTP Basic sign-in |
+| `LINEUP_USERNAME` | `lineup` | Sign-in user name |
+| `STATIC_DIR` | `dist-local` | Directory holding the built interface |
 
 ## Hosted preview (Vinext)
 
@@ -142,16 +177,24 @@ and points users to the local companion; sample data appears after choosing
 ```sh
 npm run lint
 npm run typecheck
-npm test            # vitest: proxy, lineup logic, and interface behaviour
+npm test            # vitest: proxy, server, lineup logic, and interface behaviour
 npm run build       # hosted preview build
 npm run build:local # companion build
+npm run test:e2e    # Playwright: built companion + fake Tunarr (needs build:local first)
 ```
+
+For `test:e2e`, run `npx playwright install chromium` once, or set
+`PLAYWRIGHT_CHANNEL=chrome` to use an installed Chrome. CI
+(`.github/workflows/ci.yml`) runs every check above, plus a Docker build and
+healthcheck.
 
 Contributor and agent documentation: `AGENTS.md`, `docs/PRODUCT.md`,
 `docs/ARCHITECTURE.md`, `docs/DECISIONS.md`.
 
 Tests live in `tests/`:
 
-- `tunarrProxy.test.ts`: routing, SSRF guards, timeouts, unreachable Tunarr, error normalization, and header stripping over real HTTP.
-- `lineup.test.ts`: reorder, save payload preservation for every lineup item type, and guide mapping.
-- `page.test.tsx`: live loading, date navigation, reorder → save → re-fetch, the generated-schedule warning, and no silent demo fallback.
+- `tunarrProxy.test.ts`: routing, SSRF guards, timeouts, unreachable Tunarr, error normalization, the artwork route, and header stripping over real HTTP.
+- `server.test.ts`: static serving, path-traversal guards, CSP, and optional sign-in.
+- `lineup.test.ts`, `broadcast.test.ts`: reorder, block moves, move-to-time, timecode, day totals, CSV, undo history, artwork URLs, and save payload preservation for every lineup item type.
+- `page.test.tsx`: live loading, date navigation, reorder → save → re-fetch, conflict detection, remote-key slide, block moves, menus, log export, and no silent demo fallback.
+- `e2e/desk.spec.ts`: the real browser flow at 1920×1080 and phone width.

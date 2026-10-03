@@ -8,3 +8,5 @@
 - **Point browser checks at the companion** (`npm run dev:local` or `npm run start:local`),
   not `npm run dev`. The Vinext dev server has no `/api/tunarr` proxy and only shows the
   "Live mode unavailable" / demo path.
+- **Run the browser suite with** `npm run build:local && PLAYWRIGHT_CHANNEL=chrome npm run test:e2e`.
+  It uses the fake Tunarr in `e2e/fake-tunarr.mjs`, so it never touches a real server.

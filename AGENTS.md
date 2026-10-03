@@ -27,14 +27,18 @@ npm install
 npm run lint          # eslint (next core-web-vitals + typescript)
 npm run typecheck     # tsc for the app and for server/
 npm test              # vitest run (tests/)
+npm run test:e2e      # Playwright (e2e/) against dist-server + fake Tunarr; run build:local first
 npm run build         # hosted preview build (vinext) -> dist/
 npm run build:local   # companion build -> dist-local/ (UI) + dist-server/ (server)
 TUNARR_URL=http://localhost:8000 npm run dev:local    # companion dev server on :3000
 TUNARR_URL=http://localhost:8000 npm run start:local  # run the built companion
 ```
 
-Before declaring work done, run `lint`, `typecheck`, `test`, `build` and
-`build:local`. Both builds must keep working; they use different Vite configs.
+Before declaring work done, run `lint`, `typecheck`, `test`, `build`,
+`build:local` and `test:e2e`. Both builds must keep working; they use different
+Vite configs. For local e2e runs, set `PLAYWRIGHT_CHANNEL=chrome` or install
+Chromium with `npx playwright install chromium`. CI runs all of them
+(`.github/workflows/ci.yml`).
 
 ## Invariants (do not break without explicit approval)
 
@@ -42,23 +46,28 @@ Before declaring work done, run `lint`, `typecheck`, `test`, `build` and
    Never put `TUNARR_URL` or any Tunarr address in client code. Only the `LINEUP_PUBLIC_`
    env prefix is exposed to the client (`vite.local.config.ts`). Never add a
    user-entered URL workflow, wildcard CORS, or a generic proxy.
-2. **The proxy stays an allowlist.** `server/tunarrProxy.ts` allows exactly five routes
-   (`matchRoute`). Adding a route means validating its params and query, adding tests,
+2. **The proxy stays an allowlist.** `server/tunarrProxy.ts` allows exactly six routes
+   (`matchRoute`). The artwork route passes image bytes only, from UUID program IDs. Adding a route means validating its params and query, adding tests,
    and documenting it in `docs/ARCHITECTURE.md`. Keep the SSRF guards: fixed upstream
    origin, channel-ID regex, `redirect: 'manual'`, timeouts, no forwarded cookies or auth,
    the Origin check, and normalized JSON errors without stack traces.
 3. **Only rearrange what exists.** The editor may reorder lineup items but must never
    add media or programming. Lineup item objects are passed through untouched on save
    (`buildManualSave`); never rebuild them from a subset of fields.
-4. **Saves use Tunarr's manual payload** `{ "type": "manual", "lineup": [...], "append": false }`,
-   then re-fetch programming and the visible day. Warn before saving a channel whose
-   programming has a `schedule` (generated slot/time schedule).
+4. **Saves use Tunarr's manual payload** `{ "type": "manual", "lineup": [...], "append": false }`.
+   - Before posting, re-read the channel and refuse to save if it differs from what
+     was loaded (conflict check in `performSave`).
+   - After saving, re-fetch programming and the visible day.
+   - Warn before saving a channel whose programming has a `schedule`.
 5. **No silent demo fallback.** Live failures show errors; demo data appears only after
    the user picks "Use demo data". Keep demo mode visibly labeled.
 6. **Server stays dependency-free.** The runtime Docker stage copies only `dist-server/`
    and `dist-local/`, with no `node_modules`. Use Node built-ins in `server/`, or update
    the Dockerfile deliberately.
-7. **Preserve the Mac OS 9 visual treatment**: platinum chrome, striped title bars, 1px
+7. **Keep the desk TV/remote-operable.** Every action must be reachable without a
+   mouse: arrow keys, Enter/OK, Escape/Back, PageUp/PageDown or CH±, the menus and
+   the `?` shortcut list. Don't add hover-only or drag-only features.
+8. **Preserve the Mac OS 9 visual treatment**: platinum chrome, striped title bars, 1px
    bevels. The interface is used on a TV, so keep text large and smooth. Size things in
    `rem` (the root scales with viewport width in `app/globals.css`); keep 1px hairlines
    in `px`; don't reintroduce `-webkit-font-smoothing:none` or sub-13px base type.
@@ -72,11 +81,16 @@ Before declaring work done, run `lint`, `typecheck`, `test`, `build` and
   functions at module scope; `server/` and `lib/` use small typed functions with brief
   "why" comments. Use custom CSS classes in `app/globals.css`; Tailwind is imported
   but its utilities are essentially unused.
-- **Put pure logic in `lib/`** (testable without React) and HTTP and validation logic
-  in `server/tunarrProxy.ts` (framework-free and unit-testable). Keep `page.tsx` for UI
-  state and rendering.
-- **Add or update tests in `tests/`** for any behavior change. Proxy tests inject
-  `fetchImpl`; UI tests mock `fetch` with a stateful fake companion (`tests/page.test.tsx`).
+- **Put pure logic in `lib/`** (testable without React): `lineup.ts` for schedule math,
+  `broadcast.ts` for block moves, timecode, totals and CSV, `history.ts` for
+  undo/redo, and `programInfo.ts` for titles and artwork.
+- **Put HTTP and validation logic in `server/`:** `tunarrProxy.ts` (framework-free),
+  `auth.ts` and `app.ts`. Keep `app/page.tsx` for UI state and rendering, and
+  `app/components/` for larger UI pieces (`MenuBar`, `MoveDialog`).
+- **Add or update tests** for any behavior change.
+  - Unit and UI tests go in `tests/`. Proxy tests inject `fetchImpl`; UI tests mock
+    `fetch` with a stateful fake companion (`tests/page.test.tsx`).
+  - Browser flows go in `e2e/`, using the fake Tunarr in `e2e/fake-tunarr.mjs`.
 - **Don't edit generated or vendored output:** `dist*/`, `.next/`, `.vinext/`,
   `.wrangler/`, `next-env.d.ts`.
 - **Don't change `.openai/hosting.json`** or the `sites()` / `cloudflare()` plugin setup

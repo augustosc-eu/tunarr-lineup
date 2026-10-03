@@ -103,7 +103,8 @@ describe('live mode', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Later/ }));
     expect(await screen.findByText(/Showing unsaved changes/)).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Undo changes' })).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: 'Undo' }).length).toBeGreaterThan(0);
+    expect(screen.getByText('Moved “Alpha Movie” later')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Save lineup' }));
 
     await waitFor(() => expect(count(requests, 'POST', '/api/tunarr/channels/chan-news/programming')).toBe(1));
@@ -111,19 +112,27 @@ describe('live mode', () => {
     expect(post.body).toEqual({ type: 'manual', lineup: JSON.parse(JSON.stringify([original[1], original[0], ...original.slice(2)])), append: false });
     expect(state.lineup[0].type).toBe('flex');
 
-    await waitFor(() => expect(count(requests, 'GET', '/api/tunarr/channels/chan-news/programming')).toBe(2));
+    // Initial load, the pre-save conflict check, and the re-read after saving.
+    await waitFor(() => expect(count(requests, 'GET', '/api/tunarr/channels/chan-news/programming')).toBe(3));
     await waitFor(() => expect(count(requests, 'GET', '/api/tunarr/channels/chan-news/lineup')).toBe(2));
     expect(await screen.findByRole('button', { name: 'Saved' })).toBeTruthy();
     expect(screen.queryByText(/Showing unsaved changes/)).toBeNull();
     expect(screen.getByRole('status').textContent).toBe('Lineup saved to Tunarr');
   });
 
-  it('undo restores the loaded lineup', async () => {
+  it('undoes and redoes step by step, and reverts everything', async () => {
     fakeCompanion();
     render(<Home />);
     await screen.findAllByText('Alpha Movie');
     fireEvent.click(screen.getByRole('button', { name: /Later/ }));
-    fireEvent.click(screen.getByRole('button', { name: 'Undo changes' }));
+    fireEvent.click(screen.getByRole('button', { name: /Later/ }));
+    expect(screen.getByText('EDIT LIST (2)')).toBeTruthy();
+    fireEvent.click(screen.getAllByRole('button', { name: 'Undo' })[0]);
+    expect(screen.getByText('EDIT LIST (1)')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Save lineup' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Redo' }));
+    expect(screen.getByText('EDIT LIST (2)')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Revert all' }));
     expect(await screen.findByRole('button', { name: 'Saved' })).toBeTruthy();
   });
 
@@ -224,5 +233,159 @@ describe('no silent fallback to demo mode', () => {
     await screen.findAllByText('Alpha Movie');
     expect(await screen.findByText(/guide for this date did not load \(Guide failed\)/)).toBeTruthy();
     expect(screen.queryByText('Demo mode')).toBeNull();
+  });
+});
+
+const lineupOrder = (requests: ReturnType<typeof fakeCompanion>['requests']) =>
+  (requests.find((r) => r.method === 'POST')!.body as { lineup: LineupItem[] }).lineup.map((item) => item.id ?? item.type);
+
+describe('programming desk tools', () => {
+  it('refuses to overwrite changes made elsewhere since loading', async () => {
+    const { requests, state } = fakeCompanion();
+    render(<Home />);
+    await screen.findAllByText('Alpha Movie');
+    fireEvent.click(screen.getByRole('button', { name: /Later/ }));
+    // Someone edits the channel in Tunarr's own UI meanwhile.
+    state.lineup = [...state.lineup].reverse();
+    fireEvent.click(screen.getByRole('button', { name: 'Save lineup' }));
+    const dialog = await screen.findByRole('alertdialog');
+    expect(within(dialog).getByText('This channel changed in Tunarr')).toBeTruthy();
+    expect(count(requests, 'POST', '/api/tunarr/channels/chan-news/programming')).toBe(0);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Keep my edits' }));
+    expect(screen.getByRole('button', { name: 'Save lineup' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Save lineup' }));
+    fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Reload from Tunarr' }));
+    expect(await screen.findByRole('button', { name: 'Saved' })).toBeTruthy();
+    expect(count(requests, 'POST', '/api/tunarr/channels/chan-news/programming')).toBe(0);
+  });
+
+  it('picks up, slides and drops with the remote (arrow keys + OK)', async () => {
+    const { requests } = fakeCompanion();
+    render(<Home />);
+    await screen.findAllByText('Alpha Movie');
+    // Select the first Alpha Movie row, then OK to pick up.
+    fireEvent.click(screen.getAllByRole('button', { name: /Alpha Movie/ }).find((element) => element.classList.contains('program'))!);
+    const row = document.querySelector<HTMLButtonElement>('.program.cursor')!;
+    fireEvent.keyDown(row, { key: 'Enter' });
+    expect(screen.getByText('moving')).toBeTruthy();
+    fireEvent.keyDown(row, { key: 'ArrowDown' });
+    fireEvent.keyDown(row, { key: 'ArrowDown' });
+    fireEvent.keyDown(document.querySelector('.program.cursor')!, { key: 'Enter' });
+    expect(screen.queryByText('moving')).toBeNull();
+    expect(screen.getByText('Moved “Alpha Movie” 2 places later')).toBeTruthy();
+    fireEvent.keyDown(document.body, { key: 's', metaKey: true });
+    await waitFor(() => expect(count(requests, 'POST', '/api/tunarr/channels/chan-news/programming')).toBe(1));
+    expect(lineupOrder(requests)).toEqual(['flex', 'prog-custom', 'prog-alpha', '8f3c1b2a-0000-4000-8000-000000000002', 'redirect', 'prog-bravo']);
+  });
+
+  it('cancels a slide with Back and leaves the lineup untouched', async () => {
+    fakeCompanion();
+    render(<Home />);
+    await screen.findAllByText('Alpha Movie');
+    fireEvent.click(screen.getAllByRole('button', { name: /Alpha Movie/ }).find((element) => element.classList.contains('program'))!);
+    fireEvent.keyDown(document.querySelector('.program.cursor')!, { key: 'Enter' });
+    fireEvent.keyDown(document.querySelector('.program.cursor')!, { key: 'ArrowDown' });
+    fireEvent.keyDown(document.querySelector('.program.cursor')!, { key: 'Escape' });
+    expect(await screen.findByRole('button', { name: 'Saved' })).toBeTruthy();
+  });
+
+  it('moves a shift-selected block together', async () => {
+    const { requests } = fakeCompanion();
+    render(<Home />);
+    await screen.findAllByText('Alpha Movie');
+    const rows = () => [...document.querySelectorAll<HTMLButtonElement>('.program')];
+    const alpha = rows().find((element) => element.textContent?.includes('Alpha Movie'))!;
+    fireEvent.click(alpha);
+    const next = rows()[rows().indexOf(alpha) + 1];
+    fireEvent.click(next, { shiftKey: true });
+    expect(screen.getByText('2 programs selected')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /Later/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save lineup' }));
+    await waitFor(() => expect(count(requests, 'POST', '/api/tunarr/channels/chan-news/programming')).toBe(1));
+    expect(lineupOrder(requests)).toEqual(['prog-custom', 'prog-alpha', 'flex', '8f3c1b2a-0000-4000-8000-000000000002', 'redirect', 'prog-bravo']);
+  });
+
+  it('moves to a lineup position from the Move dialog', async () => {
+    const { requests } = fakeCompanion();
+    render(<Home />);
+    await screen.findAllByText('Alpha Movie');
+    fireEvent.click(screen.getByRole('button', { name: 'Move or swap…' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText('Lineup position'), { target: { value: '6' } });
+    fireEvent.click(within(within(dialog).getByLabelText('Lineup position').closest('form')!).getByRole('button', { name: 'Move' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save lineup' }));
+    await waitFor(() => expect(count(requests, 'POST', '/api/tunarr/channels/chan-news/programming')).toBe(1));
+    expect(lineupOrder(requests).at(-1)).toBe('prog-alpha');
+  });
+
+  it('previews and applies a move to a start time', async () => {
+    fakeCompanion();
+    render(<Home />);
+    await screen.findAllByText('Alpha Movie');
+    fireEvent.click(screen.getByRole('button', { name: 'Move or swap…' }));
+    const dialog = await screen.findByRole('dialog');
+    // The fake channel starts at 23:00 the previous day; its cycle is 140 minutes.
+    fireEvent.change(within(dialog).getByLabelText('Start near time'), { target: { value: '00:55:00' } });
+    expect(within(dialog).getByText(/^Will start 00:/)).toBeTruthy();
+    fireEvent.click(within(within(dialog).getByLabelText('Start near time').closest('form')!).getByRole('button', { name: 'Move' }));
+    expect(await screen.findByText(/^Moved “Alpha Movie” to start 00:/)).toBeTruthy();
+  });
+
+  it('runs commands from the pull-down menus', async () => {
+    fakeCompanion();
+    render(<Home />);
+    await screen.findAllByText('Alpha Movie');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Edit' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /Move Later/ }));
+    expect(screen.getByText('Moved “Alpha Movie” later')).toBeTruthy();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Help' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /Keyboard & Remote Shortcuts/ }));
+    expect(await screen.findByText('Keyboard & remote shortcuts')).toBeTruthy();
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    expect(screen.queryByText('Keyboard & remote shortcuts')).toBeNull();
+  });
+
+  it('marks what is on air and shows day totals', async () => {
+    fakeCompanion();
+    render(<Home />);
+    await screen.findAllByText('Alpha Movie');
+    expect(screen.getByText('ON AIR')).toBeTruthy();
+    expect(document.querySelector('.program.on-air .now-line')).toBeTruthy();
+    const totals = screen.getByLabelText('Airtime this day');
+    expect(within(totals).getByText('Content')).toBeTruthy();
+    expect(within(totals).getByText('Flex')).toBeTruthy();
+  });
+
+  it('exports the day as a program log', async () => {
+    fakeCompanion();
+    let exported: Blob | undefined;
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: (blob: Blob) => { exported = blob; return 'blob:log'; } });
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: () => {} });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    render(<Home />);
+    await screen.findAllByText('Alpha Movie');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'File' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /Export Program Log/ }));
+    expect(click).toHaveBeenCalledOnce();
+    const csv = await new Promise<string>((resolve) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.readAsText(exported!);
+    });
+    click.mockRestore();
+    expect(csv.split('\r\n')[0]).toBe('Date,Start,End,Duration,Type,Title,Detail,Lineup position');
+    expect(csv).toContain('Alpha Movie');
+    expect(csv).toContain('Channel Two');
+  });
+
+  it('asks before leaving demo edits to connect', async () => {
+    fakeCompanion({ health: { status: 502, body: { status: 'unreachable', tunarrHost: 'tunarr:8000', error: { code: 'tunarr_unreachable', message: 'down' } } } });
+    render(<Home />);
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Use demo data' }));
+    await screen.findByText('Studio Selects');
+    fireEvent.click(screen.getByRole('button', { name: /Later/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Demo mode' }));
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Connect to Tunarr' }));
+    expect(within(await screen.findByRole('alertdialog')).getByText('Discard unsaved changes?')).toBeTruthy();
   });
 });

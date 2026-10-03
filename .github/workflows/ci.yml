@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - name: Build hosted preview
+        run: npm run build
+      - name: Build companion
+        run: npm run build:local
+      - name: Install Chromium for end-to-end tests
+        run: npx playwright install --with-deps chromium
+      - name: End-to-end tests (companion + fake Tunarr)
+        run: npm run test:e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
+
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build companion image
+        run: docker build -t tunarr-lineup:ci .
+      - name: Container answers its healthcheck
+        run: |
+          docker run -d --name lineup -p 3000:3000 tunarr-lineup:ci
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:3000/healthz && exit 0; sleep 1; done
+          docker logs lineup
+          exit 1

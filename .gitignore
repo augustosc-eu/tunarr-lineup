@@ -42,3 +42,5 @@ next-env.d.ts
 
 # local editor settings
 /.vscode/
+/test-results/
+/playwright-report/

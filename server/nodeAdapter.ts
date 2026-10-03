@@ -24,9 +24,10 @@ function readBody(req: IncomingMessage, limit: number): Promise<string | null> {
   });
 }
 
-function send(res: ServerResponse, status: number, headers: Record<string, string>, body: string) {
-  res.writeHead(status, headers);
-  res.end(body);
+function send(res: ServerResponse, status: number, headers: Record<string, string>, body: string | Uint8Array) {
+  const payload = typeof body === 'string' ? Buffer.from(body, 'utf8') : Buffer.from(body.buffer, body.byteOffset, body.byteLength);
+  res.writeHead(status, { ...headers, 'content-length': String(payload.byteLength) });
+  res.end(payload);
 }
 
 /** Adapts Node's http request/response to the framework-free proxy handler. */

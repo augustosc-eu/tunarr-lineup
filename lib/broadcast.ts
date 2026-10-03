@@ -1,0 +1,148 @@
+// Broadcast-scheduling helpers: timecode, block moves, time targeting,
+// day totals and program-log export. Pure functions; no React.
+import { cycleDuration, type Instance, type LineupItem } from './lineup';
+
+const pad = (value: number) => String(value).padStart(2, '0');
+
+/** Wall-clock time of day as HH:MM:SS in the viewer's time zone. */
+export function clockTimecode(ms: number) {
+  const date = new Date(ms);
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+/** Length as H:MM:SS (or Nd HH:MM:SS for cycles longer than a day). */
+export function durationTimecode(ms: number) {
+  const total = Math.max(0, Math.round(ms / 1000));
+  const days = Math.floor(total / 86_400);
+  const hours = Math.floor((total % 86_400) / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = total % 60;
+  const clock = `${days ? pad(hours) : hours}:${pad(minutes)}:${pad(seconds)}`;
+  return days ? `${days}d ${clock}` : clock;
+}
+
+export type Block = { start: number; end: number };
+
+export const normalizeBlock = (anchor: number, focus: number): Block => ({ start: Math.min(anchor, focus), end: Math.max(anchor, focus) });
+
+const validBlock = (lineup: LineupItem[], block: Block) => block.start >= 0 && block.end < lineup.length && block.start <= block.end;
+
+/**
+ * Moves a contiguous block of lineup items so it sits before `target`
+ * (an index in the original lineup, or lineup.length for the end).
+ * Returns the new lineup and the block's new position. Items are never
+ * added, dropped or copied.
+ */
+export function moveBlock(lineup: LineupItem[], block: Block, target: number): { lineup: LineupItem[]; block: Block } | null {
+  if (!validBlock(lineup, block) || target < 0 || target > lineup.length) return null;
+  if (target >= block.start && target <= block.end + 1) return null;
+  const items = lineup.slice(block.start, block.end + 1);
+  const rest = [...lineup.slice(0, block.start), ...lineup.slice(block.end + 1)];
+  const insertAt = target > block.end ? target - items.length : target;
+  const next = [...rest.slice(0, insertAt), ...items, ...rest.slice(insertAt)];
+  return { lineup: next, block: { start: insertAt, end: insertAt + items.length - 1 } };
+}
+
+/** Slides a block one item earlier (-1) or later (+1) past its neighbour. */
+export function shiftBlock(lineup: LineupItem[], block: Block, direction: -1 | 1) {
+  if (!validBlock(lineup, block)) return null;
+  return direction < 0
+    ? block.start > 0 ? moveBlock(lineup, block, block.start - 1) : null
+    : block.end < lineup.length - 1 ? moveBlock(lineup, block, block.end + 2) : null;
+}
+
+/** Moves a block so its first item lands at 1-based `position` in the resulting lineup. */
+export function moveBlockToPosition(lineup: LineupItem[], block: Block, position: number) {
+  if (!validBlock(lineup, block) || !Number.isInteger(position)) return null;
+  const size = block.end - block.start + 1;
+  const insertAt = Math.min(Math.max(position - 1, 0), lineup.length - size);
+  if (insertAt === block.start) return null;
+  const items = lineup.slice(block.start, block.end + 1);
+  const rest = [...lineup.slice(0, block.start), ...lineup.slice(block.end + 1)];
+  return { lineup: [...rest.slice(0, insertAt), ...items, ...rest.slice(insertAt)], block: { start: insertAt, end: insertAt + size - 1 } };
+}
+
+/** Start time of the given lineup position in the cycle occurrence nearest to `near`. */
+export function occurrenceStart(lineup: LineupItem[], startTime: number, index: number, near: number) {
+  const cycle = cycleDuration(lineup);
+  if (cycle <= 0 || index < 0 || index >= lineup.length) return NaN;
+  let offset = 0;
+  for (let i = 0; i < index; i += 1) offset += Math.max(0, lineup[i].duration || 0);
+  const first = startTime + offset;
+  const cycles = Math.round((near - first) / cycle);
+  return first + cycles * cycle;
+}
+
+/**
+ * Places a block so its first item starts as close as possible to `time`.
+ * Every insertion point is tried against the real cycle (which keeps the
+ * same total length), so the reported start is where the block will air.
+ */
+export function moveBlockToTime(lineup: LineupItem[], block: Block, startTime: number, time: number) {
+  if (!validBlock(lineup, block)) return null;
+  const cycle = cycleDuration(lineup);
+  if (cycle <= 0) return null;
+  const blockItems = lineup.slice(block.start, block.end + 1);
+  const rest = [...lineup.slice(0, block.start), ...lineup.slice(block.end + 1)];
+  let best = { insertAt: 0, start: NaN, distance: Infinity };
+  let offset = 0;
+  for (let insertAt = 0; insertAt <= rest.length; insertAt += 1) {
+    const first = startTime + offset;
+    const start = first + Math.round((time - first) / cycle) * cycle;
+    const distance = Math.abs(start - time);
+    if (distance < best.distance) best = { insertAt, start, distance };
+    if (insertAt < rest.length) offset += Math.max(0, rest[insertAt].duration || 0);
+  }
+  if (best.insertAt === block.start) return { lineup, block, start: best.start, unchanged: true };
+  const next = [...rest.slice(0, best.insertAt), ...blockItems, ...rest.slice(best.insertAt)];
+  return { lineup: next, block: { start: best.insertAt, end: best.insertAt + blockItems.length - 1 }, start: best.start, unchanged: false };
+}
+
+/** Lineup positions whose item differs from the saved lineup. */
+export function changedPositions(current: LineupItem[], original: LineupItem[]) {
+  const changed = new Set<number>();
+  const keys = new WeakMap<object, string>();
+  const key = (item: LineupItem) => {
+    let value = keys.get(item);
+    if (value === undefined) {
+      value = JSON.stringify(item);
+      keys.set(item, value);
+    }
+    return value;
+  };
+  current.forEach((item, index) => {
+    const before = original[index];
+    if (!before || key(item) !== key(before)) changed.add(index);
+  });
+  return changed;
+}
+
+export type DayTotals = { programs: number; total: number; byType: Record<string, number> };
+
+/** Airtime per lineup item type within [from, to). */
+export function dayTotals(rows: Instance[], from: number, to: number): DayTotals {
+  const byType: Record<string, number> = {};
+  let total = 0;
+  for (const row of rows) {
+    const length = Math.max(0, Math.min(row.stop, to) - Math.max(row.start, from));
+    byType[row.item.type] = (byType[row.item.type] ?? 0) + length;
+    total += length;
+  }
+  return { programs: rows.length, total, byType };
+}
+
+/** The row on air at `now`, or -1. */
+export function onAirPosition(rows: Instance[], now: number) {
+  return rows.findIndex((row) => row.start <= now && now < row.stop);
+}
+
+const csvCell = (value: string | number) => {
+  const text = String(value);
+  // Guard against spreadsheet formula injection, then quote.
+  const safe = /^[=+\-@\t\r]/.test(text) ? `'${text}` : text;
+  return /[",\n\r]/.test(safe) ? `"${safe.replaceAll('"', '""')}"` : safe;
+};
+
+export function toCsv(header: string[], rows: Array<Array<string | number>>) {
+  return [header, ...rows].map((row) => row.map(csvCell).join(',')).join('\r\n') + '\r\n';
+}

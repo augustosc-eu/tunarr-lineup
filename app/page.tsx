@@ -1,20 +1,40 @@
 'use client';
 
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
+import { MenuBar, type Menu } from './components/MenuBar';
+import { MoveDialog } from './components/MoveDialog';
+import {
+  changedPositions,
+  clockTimecode,
+  dayTotals,
+  durationTimecode,
+  moveBlock,
+  moveBlockToPosition,
+  moveBlockToTime,
+  normalizeBlock,
+  occurrenceStart,
+  onAirPosition,
+  shiftBlock,
+  toCsv,
+  type Block,
+} from '../lib/broadcast';
 import { demoChannels, demoDate, demoProgramming } from '../lib/demoData';
+import { emptyHistory, record, redo as redoHistory, undo as undoHistory, type History } from '../lib/history';
 import {
   buildManualSave,
+  cycleDuration,
   dayRange,
   hasGeneratedSchedule,
-  scheduleForDay,
   reorderLineup,
   sameLineup,
+  scheduleForDay,
   type Channel,
   type GuideProgram,
+  type Instance,
   type LineupItem,
-  type Program,
   type Programming,
 } from '../lib/lineup';
+import { programArtwork, programDetail, programTitle } from '../lib/programInfo';
 import { checkHealth, tunarrApi, TunarrApiError, type ConnectionState } from '../lib/tunarrClient';
 
 type Mode = 'live' | 'demo';
@@ -25,23 +45,19 @@ type ConfirmDialog = {
   title: string;
   body: string;
   confirmLabel: string;
+  cancelLabel?: string;
   onConfirm: () => void;
 };
 
-const MINUTE = 60_000;
+/** A block picked up with OK/Enter and slid with the arrow keys. */
+type Grab = { before: LineupItem[]; block: Block };
+
 const emptyProgramming: Programming = { lineup: [], programs: {} };
+const NOW_TICK_MS = 15_000;
 
 const dateLabel = (value: string) => new Intl.DateTimeFormat('en', { weekday: 'long', month: 'long', day: 'numeric' }).format(new Date(`${value}T12:00:00`));
 const inputDate = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-const timeLabel = (ms: number) => new Intl.DateTimeFormat('en', { hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(ms));
-const fullTimeLabel = (ms: number) => new Intl.DateTimeFormat('en', { weekday: 'long', hour: '2-digit', minute: '2-digit' }).format(new Date(ms));
-const durationLabel = (ms: number) => {
-  const mins = Math.round(ms / MINUTE);
-  if (mins < 60) return `${mins} min`;
-  const hours = Math.floor(mins / 60);
-  const rest = mins % 60;
-  return rest ? `${hours}h ${rest}m` : `${hours}h`;
-};
+const fullTimeLabel = (ms: number) => `${new Intl.DateTimeFormat('en', { weekday: 'short' }).format(new Date(ms))} ${clockTimecode(ms)}`;
 const dayPeriod = (ms: number) => {
   const hour = new Date(ms).getHours();
   if (hour < 12) return 'Morning';
@@ -50,48 +66,7 @@ const dayPeriod = (ms: number) => {
   return 'Late night';
 };
 const errorMessage = (error: unknown, fallback: string) => (error instanceof Error && error.message ? error.message : fallback);
-
-function getProgram(item: LineupItem, programs: Programming['programs']): Program | undefined {
-  if (!item.id) return undefined;
-  const entry = programs[item.id];
-  if (!entry) return undefined;
-  // Tunarr wraps metadata in `program`; older payloads and demo data may not.
-  const wrapped = (entry as { program?: Program }).program;
-  return wrapped && typeof wrapped === 'object' ? wrapped : (entry as Program);
-}
-
-function programTitle(item: LineupItem, programs: Programming['programs']) {
-  const program = getProgram(item, programs);
-  if (program?.type === 'episode') return program.show?.title || program.season?.show?.title || program.showTitle || program.title || 'Episode';
-  if (program?.type === 'track') return program.artistName || program.title || 'Track';
-  if (program?.title) return program.title;
-  if (item.type === 'flex') return 'Flex time';
-  if (item.type === 'redirect') return String(item.channelName || 'Channel redirect');
-  if (item.type === 'custom') return 'Custom show';
-  if (item.type === 'filler') return 'Filler';
-  return 'Untitled program';
-}
-
-function programDetail(item: LineupItem, programs: Programming['programs']) {
-  const program = getProgram(item, programs);
-  if (!program) return item.type === 'flex' ? 'Open airtime' : item.type;
-  if (program.type === 'episode') {
-    const season = program.seasonNumber ?? program.season?.index ?? program.season?.number;
-    const episode = program.episodeNumber;
-    const number = season != null && episode != null ? `S${String(season).padStart(2, '0')} E${String(episode).padStart(2, '0')} · ` : '';
-    return `${number}${program.title || 'Episode'}`;
-  }
-  if (program.type === 'track') return [program.albumName, program.title].filter(Boolean).join(' · ');
-  return [program.year, program.type && program.type.replace('_', ' ')].filter(Boolean).join(' · ');
-}
-
-// Artwork is only shown when it is embedded. Remote artwork would make the
-// browser contact Tunarr or a media server directly, which live mode avoids.
-function programArtwork(item: LineupItem, programs: Programming['programs']) {
-  const program = getProgram(item, programs);
-  const path = item.icon || program?.artwork?.find((art) => ['thumbnail', 'poster', 'landscape'].includes(art.type || ''))?.path;
-  return path && path.startsWith('data:image/') ? path : undefined;
-}
+const typeLabel = (type: string) => type.charAt(0).toUpperCase() + type.slice(1);
 
 function artTone(index: number) {
   return ['mint', 'coral', 'gold', 'blue', 'plum'][Math.max(0, index) % 5];
@@ -108,6 +83,28 @@ function connectionLabel(mode: Mode, connection: ConnectionState) {
   }
 }
 
+function scheduleSummary(schedule: unknown) {
+  if (!schedule || typeof schedule !== 'object') return 'a generated schedule';
+  const { type, slots } = schedule as { type?: unknown; slots?: unknown };
+  const kind = type === 'time' ? 'time-slot schedule' : type === 'random' ? 'random-slot schedule' : 'generated schedule';
+  return Array.isArray(slots) ? `its ${kind} (${slots.length} ${slots.length === 1 ? 'slot' : 'slots'})` : `its ${kind}`;
+}
+
+const isTypingTarget = (target: EventTarget | null) => target instanceof HTMLElement && !!target.closest('input, textarea, select, [contenteditable="true"]');
+
+/** Art tile: Tunarr artwork when available, otherwise the coloured initial. */
+function ArtTile({ className, tone, title, src }: { className: string; tone: string; title: string; src?: string }) {
+  const [failed, setFailed] = useState<string | null>(null);
+  const showImage = src && failed !== src;
+  return (
+    <span className={`${className} ${tone} ${showImage ? 'has-image' : ''}`}>
+      {/* next/image doesn't apply: the companion build has no Next image optimizer. */}
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      {showImage ? <img src={src} alt="" loading="lazy" decoding="async" onError={() => setFailed(src)} /> : title.slice(0, 1)}
+    </span>
+  );
+}
+
 export default function Home() {
   const [mode, setMode] = useState<Mode>('live');
   const [connection, setConnection] = useState<ConnectionState>({ status: 'checking' });
@@ -121,12 +118,17 @@ export default function Home() {
   const [guide, setGuide] = useState<GuideState | null>(null);
   const [guideLoading, setGuideLoading] = useState(false);
   const [guideError, setGuideError] = useState('');
+  const [anchorIndex, setAnchorIndex] = useState(0);
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const [cursorStart, setCursorStart] = useState<number | null>(null);
   const [selectedDate, setSelectedDate] = useState(demoDate);
   const [search, setSearch] = useState('');
+  const [history, setHistory] = useState<History>(emptyHistory);
+  const [grab, setGrab] = useState<Grab | null>(null);
+  const [now, setNow] = useState(() => Date.now());
   const [connectionOpen, setConnectionOpen] = useState(false);
   const [arrangeOpen, setArrangeOpen] = useState(false);
-  const [arrangeSearch, setArrangeSearch] = useState('');
+  const [infoDialog, setInfoDialog] = useState<'shortcuts' | 'about' | null>(null);
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialog | null>(null);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -134,27 +136,58 @@ export default function Home() {
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
   const programmingRequest = useRef(0);
   const guideRequest = useRef(0);
+  const rowRefs = useRef(new Map<number, HTMLButtonElement>());
+  const focusCursor = useRef(false);
+  const scrolledToNow = useRef('');
 
   const live = mode === 'live';
+  const lineup = programming.lineup;
   const activeChannel = channels.find((channel) => channel.id === activeChannelId);
-  const dirty = !sameLineup(programming.lineup, originalLineup);
-  const selectedItem = programming.lineup[selectedIndex];
+  const activeChannelIndex = channels.findIndex((channel) => channel.id === activeChannelId);
+  const dirty = useMemo(() => !sameLineup(lineup, originalLineup), [lineup, originalLineup]);
+  const changed = useMemo(() => (dirty ? changedPositions(lineup, originalLineup) : new Set<number>()), [dirty, lineup, originalLineup]);
+  const block = normalizeBlock(Math.min(anchorIndex, Math.max(lineup.length - 1, 0)), Math.min(selectedIndex, Math.max(lineup.length - 1, 0)));
+  const blockSize = lineup.length ? block.end - block.start + 1 : 0;
+  const inBlock = (index: number) => index >= block.start && index <= block.end && index >= 0;
+  const selectedItem = lineup[selectedIndex];
   const guideIsCurrent = live && !dirty && guide?.channelId === activeChannelId && guide.date === selectedDate;
   const daySchedule = useMemo(() => {
-    if (!activeChannel) return { rows: [], guideWindow: null, guideStale: false };
-    return scheduleForDay(guideIsCurrent && guide ? guide.programs : null, programming.lineup, activeChannel.startTime, selectedDate);
-  }, [activeChannel, guide, guideIsCurrent, programming.lineup, selectedDate]);
+    if (!activeChannel) return { rows: [] as Instance[], guideWindow: null, guideStale: false };
+    return scheduleForDay(guideIsCurrent && guide ? guide.programs : null, lineup, activeChannel.startTime, selectedDate);
+  }, [activeChannel, guide, guideIsCurrent, lineup, selectedDate]);
   const instances = daySchedule.rows;
   const visibleInstances = useMemo(() => {
     const query = search.trim().toLowerCase();
     if (!query) return instances;
     return instances.filter(({ item, title }) => `${title ?? programTitle(item, programming.programs)} ${programDetail(item, programming.programs)}`.toLowerCase().includes(query));
   }, [instances, programming.programs, search]);
-  const selectedInstance = instances.find((instance) => instance.lineupIndex === selectedIndex);
+  const cursorPosition = useMemo(() => {
+    const exact = visibleInstances.findIndex((row) => row.lineupIndex === selectedIndex && row.start === cursorStart);
+    return exact >= 0 ? exact : visibleInstances.findIndex((row) => row.lineupIndex === selectedIndex);
+  }, [cursorStart, selectedIndex, visibleInstances]);
+  const selectedInstance = cursorPosition >= 0 ? visibleInstances[cursorPosition] : undefined;
+  const onAir = onAirPosition(visibleInstances, now);
+  const { from: dayFrom, to: dayTo } = dayRange(selectedDate);
+  const dayStartMs = dayFrom.getTime();
+  const dayEndMs = dayTo.getTime();
+  const totals = dayTotals(instances, dayStartMs, dayEndMs);
+  const canUndo = history.past.length > 0 && !grab;
+  const canRedo = history.future.length > 0 && !grab;
+  const describe = (target: Block = block, items: LineupItem[] = lineup) => {
+    const first = items[target.start];
+    const title = first ? `“${programTitle(first, programming.programs)}”` : 'selection';
+    return target.end > target.start ? `${target.end - target.start + 1} items from ${title}` : title;
+  };
 
   const notify = (text: string) => {
     setMessage(text);
-    window.setTimeout(() => setMessage((current) => (current === text ? '' : current)), 3200);
+    window.setTimeout(() => setMessage((current) => (current === text ? '' : current)), 3600);
+  };
+
+  const select = (index: number, start: number | null, extend = false) => {
+    if (!extend) setAnchorIndex(index);
+    setSelectedIndex(index);
+    setCursorStart(start);
   };
 
   // A Tunarr outage during any live request is reflected in the connection
@@ -184,25 +217,34 @@ export default function Home() {
     }
   };
 
+  const resetEditing = () => {
+    setHistory(emptyHistory);
+    setGrab(null);
+  };
+
   const loadProgramming = async (channelId: string, date: string, keepSelection = false) => {
     const request = ++programmingRequest.current;
     setActiveChannelId(channelId);
     setLoading(true);
     setProgrammingError('');
+    resetEditing();
     if (!keepSelection) {
       setProgramming(emptyProgramming);
       setOriginalLineup([]);
       setGuide(null);
-      setSelectedIndex(0);
+      select(0, null);
     }
     try {
       const data = await tunarrApi.programming(channelId);
       if (request !== programmingRequest.current) return false;
-      const lineup = Array.isArray(data?.lineup) ? data.lineup : [];
-      const next = { ...data, lineup, programs: data?.programs ?? {} };
-      setProgramming(next);
-      setOriginalLineup(structuredClone(lineup));
-      setSelectedIndex((current) => (keepSelection ? Math.min(current, Math.max(lineup.length - 1, 0)) : 0));
+      const loaded = Array.isArray(data?.lineup) ? data.lineup : [];
+      setProgramming({ ...data, lineup: loaded, programs: data?.programs ?? {} });
+      setOriginalLineup(structuredClone(loaded));
+      if (keepSelection) {
+        const last = Math.max(loaded.length - 1, 0);
+        setAnchorIndex((current) => Math.min(current, last));
+        setSelectedIndex((current) => Math.min(current, last));
+      }
       void loadGuide(channelId, date);
       return true;
     } catch (error) {
@@ -249,6 +291,7 @@ export default function Home() {
     setProgramming(emptyProgramming);
     setOriginalLineup([]);
     setGuide(null);
+    resetEditing();
     setSelectedDate(today);
     setConnectionOpen(false);
     await loadChannels(today, preferredId);
@@ -273,14 +316,36 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), NOW_TICK_MS);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
     if (!live || !dirty) return;
     const warn = (event: BeforeUnloadEvent) => event.preventDefault();
     window.addEventListener('beforeunload', warn);
     return () => window.removeEventListener('beforeunload', warn);
   }, [live, dirty]);
 
+  // Follow the keyboard/remote cursor: focus the row and keep it on screen.
+  useEffect(() => {
+    if (!focusCursor.current || cursorPosition < 0) return;
+    focusCursor.current = false;
+    const row = rowRefs.current.get(cursorPosition);
+    row?.focus({ preventScroll: true });
+    row?.scrollIntoView?.({ block: 'center' });
+  }, [cursorPosition]);
+
+  // Open today's schedule at whatever is on air, once per channel and day.
+  useEffect(() => {
+    const key = `${activeChannelId}|${selectedDate}`;
+    if (onAir < 0 || scrolledToNow.current === key || loading) return;
+    scrolledToNow.current = key;
+    rowRefs.current.get(onAir)?.scrollIntoView?.({ block: 'center' });
+  }, [activeChannelId, loading, onAir, selectedDate]);
+
   const guardUnsaved = (action: () => void) => {
-    if (!dirty) {
+    if (!dirty && !grab) {
       action();
       return;
     }
@@ -307,7 +372,8 @@ export default function Home() {
     setGuideError('');
     setLoading(false);
     setGuideLoading(false);
-    setSelectedIndex(5);
+    resetEditing();
+    select(5, null);
     setSelectedDate(demoDate);
     setConnectionOpen(false);
     notify('Demo mode: sample data only, nothing is sent to Tunarr');
@@ -319,11 +385,18 @@ export default function Home() {
       setActiveChannelId(channel.id);
       setProgramming(sample);
       setOriginalLineup(structuredClone(sample.lineup));
-      setSelectedIndex(0);
+      resetEditing();
+      select(0, null);
       return;
     }
     void loadProgramming(channel.id, selectedDate);
   });
+
+  const stepChannel = (direction: 1 | -1) => {
+    if (!channels.length) return;
+    const next = channels[(Math.max(activeChannelIndex, 0) + direction + channels.length) % channels.length];
+    if (next.id !== activeChannelId) loadChannel(next);
+  };
 
   const changeDate = (date: string) => {
     if (!date) return;
@@ -331,25 +404,142 @@ export default function Home() {
     if (live && activeChannelId && !programmingError) void loadGuide(activeChannelId, date);
   };
 
-  const reorder = (from: number, to: number, swap = false) => {
-    const result = reorderLineup(programming.lineup, from, to, swap);
-    if (!result) return;
-    setSelectedIndex(result.selectedIndex);
-    setProgramming((current) => ({ ...current, lineup: result.lineup }));
+  const shiftDay = (amount: number) => {
+    const date = new Date(`${selectedDate}T12:00:00`);
+    date.setDate(date.getDate() + amount);
+    changeDate(inputDate(date));
+  };
+
+  const goToNow = () => {
+    const today = inputDate(new Date());
+    if (selectedDate !== today) changeDate(today);
+    scrolledToNow.current = '';
+    if (!activeChannel) return;
+    const rows = scheduleForDay(null, lineup, activeChannel.startTime, today).rows;
+    const row = rows[onAirPosition(rows, now)];
+    if (row) {
+      focusCursor.current = true;
+      select(row.lineupIndex, row.start);
+    }
+  };
+
+  /** Applies an edit to the lineup, records it for undo, and moves the cursor with it. */
+  const applyEdit = (label: string, next: LineupItem[], nextBlock: Block) => {
+    setHistory((current) => record(current, { label, before: lineup, after: next, blockBefore: block, blockAfter: nextBlock }));
+    setProgramming((current) => ({ ...current, lineup: next }));
+    followBlock(next, nextBlock);
     setArrangeOpen(false);
   };
 
-  const nudge = (amount: number) => {
-    const target = selectedIndex + amount;
-    if (target >= 0 && target < programming.lineup.length) reorder(selectedIndex, target, true);
+  const followBlock = (next: LineupItem[], nextBlock: Block) => {
+    setAnchorIndex(nextBlock.end);
+    setSelectedIndex(nextBlock.start);
+    if (activeChannel) setCursorStart(occurrenceStart(next, activeChannel.startTime, nextBlock.start, selectedInstance?.start ?? dayStartMs));
+    focusCursor.current = true;
+  };
+
+  const moveBefore = (target: number, source: Block = block) => {
+    const result = moveBlock(lineup, source, target);
+    if (result) applyEdit(`Moved ${describe(source)} to #${result.block.start + 1}`, result.lineup, result.block);
+  };
+
+  const swapWith = (target: number) => {
+    const result = reorderLineup(lineup, selectedIndex, target, true);
+    if (result) applyEdit(`Swapped ${describe()} with “${programTitle(lineup[target], programming.programs)}”`, result.lineup, { start: result.selectedIndex, end: result.selectedIndex });
+  };
+
+  const nudge = (direction: -1 | 1) => {
+    const result = shiftBlock(lineup, block, direction);
+    if (result) applyEdit(`Moved ${describe()} ${direction < 0 ? 'earlier' : 'later'}`, result.lineup, result.block);
+  };
+
+  const moveToPosition = (position: number) => {
+    const result = moveBlockToPosition(lineup, block, position);
+    if (result) applyEdit(`Moved ${describe()} to #${result.block.start + 1}`, result.lineup, result.block);
+  };
+
+  const moveToTime = (time: number) => {
+    if (!activeChannel) return;
+    const result = moveBlockToTime(lineup, block, activeChannel.startTime, time);
+    if (!result || result.unchanged) return;
+    applyEdit(`Moved ${describe()} to start ${clockTimecode(result.start)}`, result.lineup, result.block);
+    if (inputDate(new Date(result.start)) !== selectedDate) changeDate(inputDate(new Date(result.start)));
+    setCursorStart(result.start);
+  };
+
+  const pickUp = () => {
+    if (!selectedItem || grab) return;
+    setGrab({ before: lineup, block });
+  };
+
+  const slideGrab = (direction: -1 | 1) => {
+    const result = shiftBlock(lineup, block, direction);
+    if (!result) return;
+    setProgramming((current) => ({ ...current, lineup: result.lineup }));
+    followBlock(result.lineup, result.block);
+  };
+
+  const drop = () => {
+    if (!grab) return;
+    if (!sameLineup(lineup, grab.before)) {
+      const steps = block.start - grab.block.start;
+      const label = `Moved ${describe(grab.block, grab.before)} ${Math.abs(steps)} ${Math.abs(steps) === 1 ? 'place' : 'places'} ${steps < 0 ? 'earlier' : 'later'}`;
+      setHistory((current) => record(current, { label, before: grab.before, after: lineup, blockBefore: grab.block, blockAfter: block }));
+    }
+    setGrab(null);
+  };
+
+  const cancelGrab = () => {
+    if (!grab) return;
+    setProgramming((current) => ({ ...current, lineup: grab.before }));
+    followBlock(grab.before, grab.block);
+    setGrab(null);
+  };
+
+  const undo = () => {
+    const result = undoHistory(history);
+    if (!result) return;
+    setHistory(result.history);
+    setProgramming((current) => ({ ...current, lineup: result.entry.before }));
+    followBlock(result.entry.before, result.entry.blockBefore);
+    notify(`Undid: ${result.entry.label}`);
+  };
+
+  const redo = () => {
+    const result = redoHistory(history);
+    if (!result) return;
+    setHistory(result.history);
+    setProgramming((current) => ({ ...current, lineup: result.entry.after }));
+    followBlock(result.entry.after, result.entry.blockAfter);
+    notify(`Redid: ${result.entry.label}`);
+  };
+
+  const revertAll = () => {
+    setProgramming((current) => ({ ...current, lineup: structuredClone(originalLineup) }));
+    resetEditing();
+    notify('All changes reverted');
   };
 
   const performSave = async () => {
     const channelId = activeChannelId;
-    const savedLineup = programming.lineup;
+    const savedLineup = lineup;
     const { request, skipped } = buildManualSave(savedLineup);
     setSaving(true);
     try {
+      // Refuse to overwrite edits made elsewhere since this lineup was loaded.
+      const latest = await tunarrApi.programming(channelId);
+      const latestLineup = Array.isArray(latest?.lineup) ? latest.lineup : [];
+      if (!sameLineup(latestLineup, originalLineup)) {
+        const differences = changedPositions(latestLineup, originalLineup).size + Math.max(0, originalLineup.length - latestLineup.length);
+        setConfirmDialog({
+          title: 'This channel changed in Tunarr',
+          body: `Since you opened it, its lineup was changed somewhere else (${differences} ${differences === 1 ? 'position differs' : 'positions differ'}). Nothing was saved, so those changes are safe. Reload to start again from Tunarr’s current lineup, or keep your edits on screen.`,
+          confirmLabel: 'Reload from Tunarr',
+          cancelLabel: 'Keep my edits',
+          onConfirm: () => void loadProgramming(channelId, selectedDate),
+        });
+        return;
+      }
       await tunarrApi.saveProgramming(channelId, request);
       setOriginalLineup(structuredClone(savedLineup));
       notify(skipped ? `Lineup saved to Tunarr (${skipped} zero-length ${skipped === 1 ? 'item' : 'items'} left out)` : 'Lineup saved to Tunarr');
@@ -365,8 +555,10 @@ export default function Home() {
   };
 
   const save = () => {
+    if (!dirty || saving || grab) return;
     if (!live) {
-      setOriginalLineup(structuredClone(programming.lineup));
+      setOriginalLineup(structuredClone(lineup));
+      resetEditing();
       notify('Demo changes saved for this session');
       return;
     }
@@ -374,7 +566,7 @@ export default function Home() {
     if (hasGeneratedSchedule(programming)) {
       setConfirmDialog({
         title: 'Save over a generated schedule?',
-        body: 'Tunarr builds this channel’s lineup from a slot or time schedule. Saving here stores it as a manual lineup, which can detach the channel from that schedule, and a later regeneration may overwrite these changes.',
+        body: `Tunarr builds this channel’s lineup from ${scheduleSummary(programming.schedule)}. Saving here stores it as a manual lineup, which can detach the channel from that schedule, and a later regeneration may overwrite these changes.`,
         confirmLabel: 'Save manual lineup',
         onConfirm: () => void performSave(),
       });
@@ -383,15 +575,8 @@ export default function Home() {
     void performSave();
   };
 
-  const undo = () => {
-    setProgramming((current) => ({ ...current, lineup: structuredClone(originalLineup) }));
-    notify('Changes reverted');
-  };
-
-  const shiftDay = (amount: number) => {
-    const date = new Date(`${selectedDate}T12:00:00`);
-    date.setDate(date.getDate() + amount);
-    changeDate(inputDate(date));
+  const reloadChannel = () => {
+    if (live && activeChannelId) guardUnsaved(() => void loadProgramming(activeChannelId, selectedDate));
   };
 
   const retry = () => {
@@ -399,26 +584,168 @@ export default function Home() {
     else if (activeChannelId) void loadProgramming(activeChannelId, selectedDate);
   };
 
-  const selectedTitle = selectedItem ? programTitle(selectedItem, programming.programs) : 'Nothing selected';
-  const selectedDetail = selectedItem ? programDetail(selectedItem, programming.programs) : '';
-  const selectedArt = selectedItem ? programArtwork(selectedItem, programming.programs) : undefined;
-  const arrangeCandidates = programming.lineup
-    .map((item, index) => ({ item, index }))
-    .filter(({ item, index }) => index !== selectedIndex && programTitle(item, programming.programs).toLowerCase().includes(arrangeSearch.toLowerCase()));
+  const exportLog = () => {
+    if (!activeChannel || !instances.length) return;
+    const rows = instances.map((row) => [
+      selectedDate,
+      clockTimecode(row.start),
+      clockTimecode(row.stop),
+      durationTimecode(row.stop - row.start),
+      row.item.type,
+      row.title ?? programTitle(row.item, programming.programs),
+      row.lineupIndex < 0 ? 'In Tunarr’s guide only' : programDetail(row.item, programming.programs),
+      row.lineupIndex < 0 ? '' : row.lineupIndex + 1,
+    ]);
+    const csv = toCsv(['Date', 'Start', 'End', 'Duration', 'Type', 'Title', 'Detail', 'Lineup position'], rows);
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `program-log-ch${activeChannel.number}-${selectedDate}${dirty ? '-unsaved' : ''}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    notify(`Exported ${rows.length} log entries`);
+  };
+
+  const moveCursor = (direction: -1 | 1, extend: boolean) => {
+    if (!visibleInstances.length) return;
+    let position = cursorPosition < 0 ? (onAir >= 0 ? onAir : 0) - direction : cursorPosition;
+    do position += direction;
+    while (position >= 0 && position < visibleInstances.length && visibleInstances[position].lineupIndex < 0);
+    const row = visibleInstances[position];
+    if (!row) return;
+    // A block must stay contiguous in the lineup, so stop extending across a cycle wrap.
+    if (extend && Math.abs(row.lineupIndex - selectedIndex) !== 1) return;
+    focusCursor.current = true;
+    select(row.lineupIndex, row.start, extend);
+  };
+
+  // Keyboard and TV-remote control. Arrow keys map to a remote's D-pad,
+  // Enter to OK, Escape/Back to Back, PageUp/PageDown to CH+/CH−.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      const key = event.key;
+      const back = key === 'Escape' || key === 'GoBack' || key === 'BrowserBack';
+      const mod = event.metaKey || event.ctrlKey;
+      if (confirmDialog || arrangeOpen || connectionOpen || infoDialog) {
+        if (!back) return;
+        event.preventDefault();
+        if (confirmDialog) setConfirmDialog(null);
+        else if (arrangeOpen) setArrangeOpen(false);
+        else if (infoDialog) setInfoDialog(null);
+        else setConnectionOpen(false);
+        return;
+      }
+      if (event.altKey || isTypingTarget(event.target)) return;
+      if ((event.target as HTMLElement | null)?.closest?.('[role="menubar"]')) return;
+      if (mod) {
+        const lower = key.toLowerCase();
+        if (lower === 'z') { event.preventDefault(); if (event.shiftKey) redo(); else undo(); }
+        else if (lower === 'y') { event.preventDefault(); redo(); }
+        else if (lower === 's') { event.preventDefault(); save(); }
+        return;
+      }
+      const onRow = (event.target as HTMLElement | null)?.classList?.contains('program') || event.target === document.body;
+      switch (key) {
+        case 'ArrowDown':
+        case 'ArrowUp':
+          event.preventDefault();
+          if (grab) slideGrab(key === 'ArrowDown' ? 1 : -1);
+          else moveCursor(key === 'ArrowDown' ? 1 : -1, event.shiftKey);
+          break;
+        case 'ArrowLeft':
+        case 'ArrowRight':
+          if (grab || !onRow) return;
+          event.preventDefault();
+          shiftDay(key === 'ArrowRight' ? 1 : -1);
+          break;
+        case 'PageUp':
+        case 'PageDown':
+        case 'ChannelUp':
+        case 'ChannelDown':
+          if (grab) return;
+          event.preventDefault();
+          stepChannel(key === 'PageUp' || key === 'ChannelUp' ? -1 : 1);
+          break;
+        case 'Enter':
+        case ' ':
+          if (!onRow || !selectedItem) return;
+          event.preventDefault();
+          if (grab) drop();
+          else pickUp();
+          break;
+        default:
+          if (back) {
+            if (grab) { event.preventDefault(); cancelGrab(); }
+            else if (blockSize > 1) { event.preventDefault(); select(selectedIndex, cursorStart); }
+          } else if (!grab && key === 'n') goToNow();
+          else if (!grab && key === 't') changeDate(inputDate(new Date()));
+          else if (!grab && key === 'm' && selectedItem) setArrangeOpen(true);
+          else if (key === '?') setInfoDialog('shortcuts');
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
+
+  const menus: Menu[] = [
+    { title: 'File', items: [
+      { label: 'Save Lineup', shortcut: '⌘S', disabled: !dirty || saving || !!grab, onSelect: save },
+      { label: 'Export Program Log…', disabled: !instances.length, onSelect: exportLog },
+      'separator',
+      { label: 'Reload From Tunarr', disabled: !live || !activeChannelId, onSelect: reloadChannel },
+      { label: 'Connection…', onSelect: () => setConnectionOpen(true) },
+      live ? { label: 'Use Demo Data', onSelect: switchToDemo } : { label: 'Connect to Tunarr', onSelect: () => guardUnsaved(() => void goLive()) },
+    ] },
+    { title: 'Edit', items: [
+      { label: canUndo ? `Undo ${history.past.at(-1)!.label}` : 'Undo', shortcut: '⌘Z', disabled: !canUndo, onSelect: undo },
+      { label: canRedo ? `Redo ${history.future[0].label}` : 'Redo', shortcut: '⇧⌘Z', disabled: !canRedo, onSelect: redo },
+      { label: 'Revert All Changes', disabled: !dirty || !!grab, onSelect: revertAll },
+      'separator',
+      { label: 'Move or Swap…', shortcut: 'M', disabled: !selectedItem || !!grab, onSelect: () => setArrangeOpen(true) },
+      { label: grab ? 'Drop Here' : 'Pick Up to Slide', shortcut: 'OK', disabled: !selectedItem, onSelect: () => (grab ? drop() : pickUp()) },
+      { label: 'Move Earlier', shortcut: '↑', disabled: !selectedItem || block.start === 0 || !!grab, onSelect: () => nudge(-1) },
+      { label: 'Move Later', shortcut: '↓', disabled: !selectedItem || block.end >= lineup.length - 1 || !!grab, onSelect: () => nudge(1) },
+    ] },
+    { title: 'View', items: [
+      { label: 'Go to Now', shortcut: 'N', disabled: !activeChannel, onSelect: goToNow },
+      { label: 'Today', shortcut: 'T', onSelect: () => changeDate(inputDate(new Date())) },
+      { label: 'Previous Day', shortcut: '←', onSelect: () => shiftDay(-1) },
+      { label: 'Next Day', shortcut: '→', onSelect: () => shiftDay(1) },
+    ] },
+    { title: 'Channel', items: [
+      { label: 'Previous Channel', shortcut: 'CH−', disabled: channels.length < 2, onSelect: () => stepChannel(-1) },
+      { label: 'Next Channel', shortcut: 'CH+', disabled: channels.length < 2, onSelect: () => stepChannel(1) },
+      { label: 'Reload Channel', disabled: !live || !activeChannelId, onSelect: reloadChannel },
+    ] },
+    { title: 'Help', items: [
+      { label: 'Keyboard & Remote Shortcuts', shortcut: '?', onSelect: () => setInfoDialog('shortcuts') },
+      { label: 'About Tunarr Lineup', onSelect: () => setInfoDialog('about') },
+    ] },
+  ];
+
+  const selectedTitle = blockSize > 1 ? `${blockSize} programs selected` : selectedItem ? programTitle(selectedItem, programming.programs) : 'Nothing selected';
+  const selectedDetail = blockSize > 1
+    ? `${durationTimecode(lineup.slice(block.start, block.end + 1).reduce((sum, item) => sum + Math.max(0, item.duration || 0), 0))} total`
+    : selectedItem ? `${programDetail(selectedItem, programming.programs)} · ${durationTimecode(selectedItem.duration)}` : '';
+  const selectedArt = blockSize === 1 && selectedItem ? programArtwork(selectedItem, programming.programs, live) : undefined;
+  const lastRowOfBlock = blockSize > 1 ? visibleInstances.find((row) => row.lineupIndex === block.end && selectedInstance && row.start >= selectedInstance.start) : selectedInstance;
   const busy = loading || channelsLoading || guideLoading;
   const connectionClass = live && connection.status === 'connected' ? 'live' : live && connection.status !== 'checking' ? 'offline' : '';
+  const sortedTotals = Object.entries(totals.byType).sort((a, b) => b[1] - a[1]);
 
   let sourceNote = '';
   if (!live) sourceNote = 'Demo data. Changes stay in this browser session and are never sent to Tunarr.';
+  else if (grab) sourceNote = 'Moving: use ↑ ↓ to slide, OK to drop, Back to cancel.';
   else if (dirty) sourceNote = 'Showing unsaved changes. Times are projected from the lineup until you save.';
   else if (guideError) sourceNote = `Tunarr’s guide for this date did not load (${guideError}). Times are projected from the lineup.`;
-  else if (guideIsCurrent && programming.lineup.length) {
+  else if (guideIsCurrent && lineup.length) {
     const guideWindow = daySchedule.guideWindow;
-    const { from, to } = dayRange(selectedDate);
     if (daySchedule.guideStale) sourceNote = 'Tunarr’s guide does not match this lineup yet (it may still be rebuilding). Times are projected from the lineup.';
     else if (!guideWindow) sourceNote = 'Tunarr’s guide does not reach this date yet. Times are projected from the lineup.';
-    else if (guideWindow.start > from.getTime() || guideWindow.stop < to.getTime()) {
-      sourceNote = `Times from ${timeLabel(Math.max(guideWindow.start, from.getTime()))} to ${timeLabel(Math.min(guideWindow.stop, to.getTime()))} come from Tunarr’s guide; the rest of the day is projected from the lineup.`;
+    else if (guideWindow.start > dayStartMs || guideWindow.stop < dayEndMs) {
+      sourceNote = `Times from ${clockTimecode(Math.max(guideWindow.start, dayStartMs)).slice(0, 5)} to ${clockTimecode(Math.min(guideWindow.stop, dayEndMs)).slice(0, 5)} come from Tunarr’s guide; the rest of the day is projected from the lineup.`;
     }
   }
 
@@ -440,20 +767,20 @@ export default function Home() {
       emptyTitle = 'No channels yet';
       emptyText = 'Create a channel in Tunarr, then check again.';
       emptyRetry = true;
-    } else if (!programming.lineup.length) {
+    } else if (!lineup.length) {
       emptyTitle = 'No programming yet';
       emptyText = 'This channel has nothing scheduled in Tunarr.';
     }
   }
 
   return (
-    <main className="app-shell">
+    <main className={`app-shell ${grab ? 'grabbing' : ''}`}>
       <header className="topbar">
-        <div className="brand"><span className="brand-mark"></span><span>Tunarr Lineup</span><nav className="menu-items" aria-label="Application menu"><span>File</span><span>Edit</span><span>View</span><span>Channel</span><span>Help</span></nav></div>
+        <div className="brand"><span className="brand-mark"></span><span>Tunarr Lineup</span><MenuBar menus={menus} /></div>
         <div className="top-actions">
-          {dirty && <button className="quiet" onClick={undo}>Undo changes</button>}
-          <button className={`connection ${connectionClass}`} onClick={() => setConnectionOpen(true)}><span className="status-dot" />{connectionLabel(mode, connection)}</button>
-          <button className="primary save" disabled={!dirty || saving || loading} onClick={save}>{saving ? 'Saving…' : dirty ? 'Save lineup' : 'Saved'}</button>
+          {canUndo && <button className="quiet" onClick={undo}>Undo</button>}
+          <button className={`connection ${connectionClass}`} onClick={() => setConnectionOpen(true)} aria-label={connectionLabel(mode, connection)}><span className="status-dot" /><span className="connection-label">{connectionLabel(mode, connection)}</span></button>
+          <button className="primary save" disabled={!dirty || saving || loading || !!grab} onClick={save}>{saving ? 'Saving…' : dirty ? 'Save lineup' : 'Saved'}</button>
         </div>
       </header>
 
@@ -463,7 +790,7 @@ export default function Home() {
           {channels.map((channel) => (
             <button className={`channel ${channel.id === activeChannelId ? 'active' : ''}`} key={channel.id} onClick={() => loadChannel(channel)}>
               <span className="channel-number">{channel.number}</span>
-              <span className="channel-copy"><b>{channel.name}</b><small>{channel.programCount ?? '—'} lineup items</small></span>
+              <span className="channel-copy"><b>{channel.name}</b><small>{channel.programCount ?? '—'} programs</small></span>
             </button>
           ))}
           <div className="rail-note">
@@ -474,13 +801,14 @@ export default function Home() {
         <section className="schedule" aria-busy={busy}>
           <div className="schedule-head">
             <div>
-              <p className="eyebrow">{activeChannel ? `${live ? '' : 'DEMO · '}${activeChannel.name.toUpperCase()} · CH ${activeChannel.number}` : live ? 'TUNARR' : 'DEMO'}</p>
+              <p className="eyebrow">{activeChannel ? `${live ? '' : 'DEMO · '}${activeChannel.name.toUpperCase()} · CH ${activeChannel.number}${lineup.length ? ` · ${lineup.length.toLocaleString('en')} ITEMS · CYCLE ${durationTimecode(cycleDuration(lineup))}` : ''}` : live ? 'TUNARR' : 'DEMO'}</p>
               <h1>{dateLabel(selectedDate)}</h1>
-              <p className="subtle">Seek by date, then drag, move, or swap anything already in this lineup.</p>
+              <p className="subtle">Seek by date, then drag, move, or swap anything already in this lineup. Press ? for remote shortcuts.</p>
               {sourceNote && <p className="subtle source-note">{sourceNote}</p>}
             </div>
             <div className="date-controls">
               <div className="stepper"><button aria-label="Previous day" onClick={() => shiftDay(-1)}>←</button><button onClick={() => changeDate(inputDate(new Date()))}>Today</button><button aria-label="Next day" onClick={() => shiftDay(1)}>→</button></div>
+              <button className="now-button" onClick={goToNow} disabled={!activeChannel}><span className="on-air-dot" />Now</button>
               <label className="date-picker"><span>Jump to date</span><input type="date" value={selectedDate} onChange={(event) => changeDate(event.target.value)} /></label>
             </div>
           </div>
@@ -489,6 +817,9 @@ export default function Home() {
             <label className="search"><span>⌕</span><input aria-label="Search this day" placeholder="Search this day" value={search} onChange={(event) => setSearch(event.target.value)} />{search && <button aria-label="Clear search" onClick={() => setSearch('')}>×</button>}</label>
             <span className="day-count">{visibleInstances.length} {visibleInstances.length === 1 ? 'program' : 'programs'}</span>
           </div>
+          {totals.total > 0 && <div className="day-totals" aria-label="Airtime this day">
+            {sortedTotals.map(([type, ms]) => <span key={type} className={`total-chip type-${type}`}><b>{typeLabel(type)}</b> {durationTimecode(ms)} <small>{Math.round((ms / totals.total) * 100)}%</small></span>)}
+          </div>}
 
           <div className={`timeline ${busy ? 'loading' : ''}`}>
             {!visibleInstances.length && <div className="empty"><span>○</span><h2>{emptyTitle}</h2><p>{emptyText}</p>{emptyRetry && <button onClick={retry}>Try again</button>}</div>}
@@ -498,23 +829,39 @@ export default function Home() {
               const guideOnly = instance.lineupIndex < 0;
               const title = instance.title ?? programTitle(instance.item, programming.programs);
               const detail = guideOnly ? `${instance.item.type} · in Tunarr’s guide only` : programDetail(instance.item, programming.programs);
-              const art = guideOnly ? undefined : programArtwork(instance.item, programming.programs);
+              const art = guideOnly ? undefined : programArtwork(instance.item, programming.programs, live, 'thumbnail');
+              const isOnAir = position === onAir;
+              const progress = isOnAir ? Math.min(100, Math.max(0, ((now - instance.start) / (instance.stop - instance.start)) * 100)) : 0;
+              const classes = [
+                'program',
+                !guideOnly && inBlock(instance.lineupIndex) ? 'selected' : '',
+                position === cursorPosition ? 'cursor' : '',
+                isOnAir ? 'on-air' : '',
+                !guideOnly && changed.has(instance.lineupIndex) ? 'changed' : '',
+                grab && inBlock(instance.lineupIndex) ? 'grabbed' : '',
+              ].filter(Boolean).join(' ');
               return (
                 <Fragment key={`${instance.start}-${instance.lineupIndex}`}>
                   {showPeriod && <div className="timeline-label"><span>{period}</span><i /></div>}
                   <button
-                    className={`program ${!guideOnly && instance.lineupIndex === selectedIndex ? 'selected' : ''}`}
+                    ref={(element) => { if (!element) return; rowRefs.current.set(position, element); return () => { if (rowRefs.current.get(position) === element) rowRefs.current.delete(position); }; }}
+                    className={classes}
                     disabled={guideOnly}
-                    onClick={() => setSelectedIndex(instance.lineupIndex)}
-                    draggable={!guideOnly}
+                    aria-current={isOnAir ? 'time' : undefined}
+                    onClick={(event) => select(instance.lineupIndex, instance.start, event.shiftKey)}
+                    draggable={!guideOnly && !grab}
                     onDragStart={() => setDraggedIndex(instance.lineupIndex)}
                     onDragOver={(event) => event.preventDefault()}
-                    onDrop={() => { if (draggedIndex != null && !guideOnly) reorder(draggedIndex, instance.lineupIndex); setDraggedIndex(null); }}
+                    onDrop={() => {
+                      if (draggedIndex != null && !guideOnly) moveBefore(instance.lineupIndex, inBlock(draggedIndex) ? block : { start: draggedIndex, end: draggedIndex });
+                      setDraggedIndex(null);
+                    }}
                   >
-                    <time>{timeLabel(instance.start)}</time>
-                    <span className={`art ${artTone(instance.lineupIndex)} ${art ? 'has-image' : ''}`} style={art ? { backgroundImage: `url("${art.replaceAll('"', '%22')}")` } : undefined}>{art ? '' : title.slice(0, 1)}</span>
+                    <time>{clockTimecode(instance.start)}{isOnAir && <em className="on-air-tag">ON AIR</em>}</time>
+                    <ArtTile className="art" tone={artTone(instance.lineupIndex)} title={title} src={art} />
                     <span className="program-copy"><b>{title}</b><small>{detail}</small></span>
-                    <span className="duration">{durationLabel(instance.stop - instance.start)}</span><span className="grip" aria-hidden="true">⠿</span>
+                    <span className="duration">{durationTimecode(instance.stop - instance.start)}</span><span className="grip" aria-hidden="true">{grab && inBlock(instance.lineupIndex) ? '⇕' : '⠿'}</span>
+                    {isOnAir && <i className="now-line" style={{ top: `${progress}%` }} aria-hidden="true" />}
                   </button>
                 </Fragment>
               );
@@ -523,18 +870,33 @@ export default function Home() {
         </section>
 
         <aside className="inspector">
-          <p className="eyebrow">SELECTED PROGRAM</p>
+          <p className="eyebrow">{blockSize > 1 ? 'SELECTED BLOCK' : 'SELECTED PROGRAM'}</p>
           {selectedItem ? <>
-            <div className={`poster ${artTone(selectedIndex)} ${selectedArt ? 'has-image' : ''}`} style={selectedArt ? { backgroundImage: `url("${selectedArt.replaceAll('"', '%22')}")` } : undefined}>{selectedArt ? '' : selectedTitle.slice(0, 1)}</div>
-            <span className="type-chip">{selectedItem.type}</span>
+            <ArtTile className="poster" tone={artTone(selectedIndex)} title={selectedTitle} src={selectedArt} />
+            <span className="type-chip">{blockSize > 1 ? 'block' : selectedItem.type}</span>{grab && <span className="type-chip moving-chip">moving</span>}
             <h2>{selectedTitle}</h2>
-            <p className="subtle inspector-detail">{selectedDetail} · {durationLabel(selectedItem.duration)}</p>
+            <p className="subtle inspector-detail">{selectedDetail}</p>
             <div className="info-row"><span>Starts</span><b>{selectedInstance ? fullTimeLabel(selectedInstance.start) : 'Repeating lineup'}</b></div>
-            <div className="info-row"><span>Ends</span><b>{selectedInstance ? timeLabel(selectedInstance.stop) : '—'}</b></div>
-            <div className="nudge-row"><button disabled={selectedIndex === 0} onClick={() => nudge(-1)}>↑ Earlier</button><button disabled={selectedIndex === programming.lineup.length - 1} onClick={() => nudge(1)}>↓ Later</button></div>
-            <button className="wide primary" onClick={() => setArrangeOpen(true)}>Move or swap…</button>
-            <p className="hint">Tip: you can also drag a row directly in the schedule.</p>
-            {hasGeneratedSchedule(programming) && <div className="warning"><b>Generated schedule</b><span>Tunarr may regenerate these manual changes from its slot schedule.</span></div>}
+            <div className="info-row"><span>Ends</span><b>{lastRowOfBlock ? clockTimecode(lastRowOfBlock.stop) : '—'}</b></div>
+            <div className="info-row"><span>Position</span><b>#{block.start + 1}{blockSize > 1 ? `–${block.end + 1}` : ''} of {lineup.length}</b></div>
+            {selectedInstance && cursorPosition === onAir && <div className="info-row on-air-row"><span>On air</span><b>{durationTimecode(selectedInstance.stop - now)} left</b></div>}
+            <div className="nudge-row"><button disabled={block.start === 0 || !!grab} onClick={() => nudge(-1)}>↑ Earlier</button><button disabled={block.end >= lineup.length - 1 || !!grab} onClick={() => nudge(1)}>↓ Later</button></div>
+            <button className="wide primary" disabled={!!grab} onClick={() => setArrangeOpen(true)}>Move or swap…</button>
+            <button className="wide" onClick={() => (grab ? drop() : pickUp())}>{grab ? 'Drop here' : 'Pick up to slide'}</button>
+            <p className="hint">{grab ? 'Use ↑ ↓ to slide, OK to drop, Back to cancel.' : 'Tip: drag a row, Shift-click to select a block, or press OK on a row to pick it up.'}</p>
+            {hasGeneratedSchedule(programming) && <div className="warning"><b>Generated schedule</b><span>Tunarr may regenerate these manual changes from {scheduleSummary(programming.schedule)}. Lineup rearranges programs; it does not edit slot schedules.</span></div>}
+            {(history.past.length > 0 || history.future.length > 0 || dirty) && <div className="edit-list">
+              <p className="eyebrow">EDIT LIST{history.past.length ? ` (${history.past.length})` : ''}</p>
+              <ol>
+                {history.past.slice(-8).reverse().map((entry, index) => <li key={`${history.past.length - index}`}>{entry.label}</li>)}
+                {!history.past.length && dirty && <li>Unsaved changes</li>}
+              </ol>
+              <div className="edit-actions">
+                <button disabled={!canUndo} onClick={undo}>Undo</button>
+                <button disabled={!canRedo} onClick={redo}>Redo</button>
+                <button disabled={!dirty || !!grab} onClick={revertAll}>Revert all</button>
+              </div>
+            </div>}
           </> : <p className="subtle">Choose a program to adjust it.</p>}
         </aside>
       </div>
@@ -546,7 +908,7 @@ export default function Home() {
           {!live ? <>
             <h2 id="connect-title">Demo mode</h2>
             <p className="subtle">You are looking at sample channels. Nothing here is read from or written to Tunarr.</p>
-            <button className="wide primary connect-button" disabled={connection.status === 'checking'} onClick={() => void goLive()}>{connection.status === 'checking' ? 'Checking…' : 'Connect to Tunarr'}</button>
+            <button className="wide primary connect-button" disabled={connection.status === 'checking'} onClick={() => guardUnsaved(() => void goLive())}>{connection.status === 'checking' ? 'Checking…' : 'Connect to Tunarr'}</button>
             {connection.status !== 'checking' && connection.status !== 'connected' && <div className="warning"><b>Live mode is not available</b><span>{connection.message}</span></div>}
           </> : connection.status === 'connected' ? <>
             <h2 id="connect-title">Tunarr connected.</h2>
@@ -583,23 +945,60 @@ export default function Home() {
           <h2 id="confirm-title">{confirmDialog.title}</h2>
           <p className="subtle" id="confirm-body">{confirmDialog.body}</p>
           <div className="dialog-actions">
-            <button autoFocus onClick={() => setConfirmDialog(null)}>Cancel</button>
+            <button autoFocus onClick={() => setConfirmDialog(null)}>{confirmDialog.cancelLabel ?? 'Cancel'}</button>
             <button className="primary" onClick={() => { const action = confirmDialog.onConfirm; setConfirmDialog(null); action(); }}>{confirmDialog.confirmLabel}</button>
           </div>
         </section>
       </div>}
 
-      {arrangeOpen && selectedItem && <div className="overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setArrangeOpen(false); }}>
-        <section className="modal arrange-modal" role="dialog" aria-modal="true" aria-labelledby="arrange-title">
-          <button className="modal-close" aria-label="Close" onClick={() => setArrangeOpen(false)}>×</button>
-          <p className="eyebrow">MOVE OR SWAP</p><h2 id="arrange-title">Place “{selectedTitle}”</h2>
-          <p className="subtle">Choose another program already in this channel. Move places the selected item before it; swap trades their positions.</p>
-          <label className="search arrange-search"><span>⌕</span><input autoFocus aria-label="Find a program" placeholder="Find a program in this lineup" value={arrangeSearch} onChange={(event) => setArrangeSearch(event.target.value)} /></label>
-          <div className="candidate-list">
-            {arrangeCandidates.map(({ item, index }) => <div className="candidate" key={`${item.id || item.type}-${index}`}><span className={`mini-art ${artTone(index)}`}>{programTitle(item, programming.programs).slice(0, 1)}</span><span><b>{programTitle(item, programming.programs)}</b><small>{programDetail(item, programming.programs)}</small></span><span className="candidate-actions"><button onClick={() => reorder(selectedIndex, index)}>Move before</button><button onClick={() => reorder(selectedIndex, index, true)}>Swap</button></span></div>)}
-          </div>
+      {infoDialog && <div className="overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setInfoDialog(null); }}>
+        <section className={`modal ${infoDialog === 'shortcuts' ? 'shortcuts-modal' : 'about-modal'}`} role="dialog" aria-modal="true" aria-labelledby="info-title">
+          <button className="modal-close" aria-label="Close" onClick={() => setInfoDialog(null)}>×</button>
+          {infoDialog === 'shortcuts' ? <>
+            <h2 id="info-title">Keyboard & remote shortcuts</h2>
+            <table className="shortcut-table"><tbody>
+              {[
+                ['↑ ↓', 'Previous / next program'],
+                ['Shift + ↑ ↓, Shift-click', 'Select a block of programs'],
+                ['OK / Enter', 'Pick up the selection, then drop it'],
+                ['↑ ↓ while moving', 'Slide the selection earlier or later'],
+                ['Back / Esc', 'Cancel a move, close a dialog'],
+                ['← →', 'Previous / next day'],
+                ['CH+ / CH−, PgUp / PgDn', 'Previous / next channel'],
+                ['N', 'Go to what is on air now'],
+                ['T', 'Today'],
+                ['M', 'Move or swap…'],
+                ['⌘Z / Ctrl+Z', 'Undo'],
+                ['⇧⌘Z / Ctrl+Y', 'Redo'],
+                ['⌘S / Ctrl+S', 'Save lineup'],
+                ['?', 'This list'],
+              ].map(([keys, action]) => <tr key={keys}><th><kbd>{keys}</kbd></th><td>{action}</td></tr>)}
+            </tbody></table>
+          </> : <>
+            <h2 id="info-title">Tunarr Lineup</h2>
+            <p className="subtle">A programming desk for your Tunarr channels. It rearranges programs already on a channel and saves them back to Tunarr. It never adds media or programming.</p>
+            <p className="subtle">{live ? `Connected through this Lineup server${connection.status === 'connected' ? ` to ${connection.host}` : ''}.` : 'Showing demo data.'}</p>
+          </>}
+          <div className="dialog-actions"><button className="primary" onClick={() => setInfoDialog(null)}>OK</button></div>
         </section>
       </div>}
+
+      {arrangeOpen && selectedItem && activeChannel && <MoveDialog
+        placing={describe()}
+        lineup={lineup}
+        programs={programming.programs}
+        block={block}
+        date={selectedDate}
+        previewTime={(time) => {
+          const result = moveBlockToTime(lineup, block, activeChannel.startTime, time);
+          return result ? { start: result.start, unchanged: result.unchanged } : null;
+        }}
+        onMoveToTime={moveToTime}
+        onMoveToPosition={moveToPosition}
+        onMoveBefore={(index) => moveBefore(index)}
+        onSwap={swapWith}
+        onClose={() => setArrangeOpen(false)}
+      />}
 
       {message && <div className="toast" role="status">{message}</div>}
     </main>
