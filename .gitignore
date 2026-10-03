@@ -36,3 +36,9 @@ next-env.d.ts
 /.wrangler/
 /outputs/
 /work/
+/dist-local/
+/dist-server/
+*.tsbuildinfo
+
+# local editor settings
+/.vscode/

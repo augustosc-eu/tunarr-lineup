@@ -1,0 +1,48 @@
+# Example: run Tunarr and the Lineup companion on one Docker network.
+#
+#   cp docker-compose.example.yml docker-compose.yml
+#   docker compose up -d --build
+#
+# Then open Lineup at http://localhost:3000 (Tunarr itself stays at :8000).
+# The browser only talks to Lineup; Lineup reaches Tunarr as http://tunarr:8000
+# over the private "tunarr" network.
+
+services:
+  tunarr:
+    image: chrisbenincasa/tunarr:latest
+    # The published image is amd64-only; uncomment on Apple silicon / arm64.
+    # platform: linux/amd64
+    container_name: tunarr
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - TZ=America/New_York
+    volumes:
+      # Keep your existing Tunarr data directory here.
+      - ./tunarr-data:/config/tunarr
+    networks:
+      - tunarr
+
+  lineup:
+    build: .
+    # image: tunarr-lineup:latest
+    container_name: tunarr-lineup
+    restart: unless-stopped
+    depends_on:
+      - tunarr
+    environment:
+      # Server-side only. Must be the address Tunarr has on this network.
+      - TUNARR_URL=http://tunarr:8000
+      # Optional: upstream timeouts in milliseconds.
+      # - TUNARR_TIMEOUT_MS=10000
+      # - TUNARR_SAVE_TIMEOUT_MS=30000
+    ports:
+      # Lineup can rewrite channel programming. Use "127.0.0.1:3000:3000"
+      # to keep it reachable from this machine only.
+      - "3000:3000"
+    networks:
+      - tunarr
+
+networks:
+  tunarr:

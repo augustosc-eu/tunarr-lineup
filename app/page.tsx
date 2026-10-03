@@ -1,92 +1,35 @@
 'use client';
 
-import { Fragment, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
+import { demoChannels, demoDate, demoProgramming } from '../lib/demoData';
+import {
+  buildManualSave,
+  dayRange,
+  hasGeneratedSchedule,
+  scheduleForDay,
+  reorderLineup,
+  sameLineup,
+  type Channel,
+  type GuideProgram,
+  type LineupItem,
+  type Program,
+  type Programming,
+} from '../lib/lineup';
+import { checkHealth, tunarrApi, TunarrApiError, type ConnectionState } from '../lib/tunarrClient';
 
-type LineupItem = {
-  type: string;
-  duration: number;
-  id?: string;
-  icon?: string;
-  [key: string]: unknown;
+type Mode = 'live' | 'demo';
+
+type GuideState = { channelId: string; date: string; programs: GuideProgram[] };
+
+type ConfirmDialog = {
+  title: string;
+  body: string;
+  confirmLabel: string;
+  onConfirm: () => void;
 };
 
-type Program = {
-  title?: string;
-  year?: number | null;
-  type?: string;
-  episodeNumber?: number;
-  seasonNumber?: number;
-  season?: { index?: number; number?: number; title?: string };
-  show?: { title?: string };
-  showTitle?: string;
-  artistName?: string;
-  albumName?: string;
-  artwork?: Array<{ type?: string; path?: string | null }>;
-  [key: string]: unknown;
-};
-
-type Programming = {
-  lineup: LineupItem[];
-  programs: Record<string, { program?: Program } | Program>;
-  schedule?: unknown;
-  totalPrograms?: number;
-};
-
-type Channel = {
-  id: string;
-  name: string;
-  number: number;
-  startTime: number;
-  duration: number;
-  programCount?: number;
-  icon?: { path?: string };
-};
-
-type Instance = {
-  item: LineupItem;
-  lineupIndex: number;
-  start: number;
-  stop: number;
-};
-
-const HOUR = 3_600_000;
 const MINUTE = 60_000;
-const demoStart = new Date('2026-10-02T06:00:00').getTime();
-
-const demoPrograms: Record<string, { program: Program }> = {
-  earth: { program: { title: 'Fresh Water', show: { title: 'Planet Earth' }, type: 'episode', seasonNumber: 1, episodeNumber: 3, year: 2006 } },
-  budapest: { program: { title: 'The Grand Budapest Hotel', type: 'movie', year: 2014 } },
-  bobs: { program: { title: 'Work Hard or Die Trying, Girl', show: { title: 'Bob’s Burgers' }, type: 'episode', seasonNumber: 5, episodeNumber: 1 } },
-  severance: { program: { title: 'Good News About Hell', show: { title: 'Severance' }, type: 'episode', seasonNumber: 1, episodeNumber: 1 } },
-  arrival: { program: { title: 'Arrival', type: 'movie', year: 2016 } },
-  office: { program: { title: 'Dinner Party', show: { title: 'The Office' }, type: 'episode', seasonNumber: 4, episodeNumber: 13 } },
-  spirited: { program: { title: 'Spirited Away', type: 'movie', year: 2001 } },
-  atlanta: { program: { title: 'Teddy Perkins', show: { title: 'Atlanta' }, type: 'episode', seasonNumber: 2, episodeNumber: 6 } },
-  moonrise: { program: { title: 'Moonrise Kingdom', type: 'movie', year: 2012 } },
-  twin: { program: { title: 'Zen, or the Skill to Catch a Killer', show: { title: 'Twin Peaks' }, type: 'episode', seasonNumber: 1, episodeNumber: 3 } },
-};
-
-const demoLineup: LineupItem[] = [
-  { type: 'content', id: 'severance', duration: 57 * MINUTE },
-  { type: 'content', id: 'arrival', duration: 116 * MINUTE },
-  { type: 'content', id: 'office', duration: 22 * MINUTE },
-  { type: 'content', id: 'spirited', duration: 125 * MINUTE },
-  { type: 'content', id: 'earth', duration: 49 * MINUTE },
-  { type: 'content', id: 'budapest', duration: 100 * MINUTE },
-  { type: 'content', id: 'bobs', duration: 22 * MINUTE },
-  { type: 'content', id: 'atlanta', duration: 41 * MINUTE },
-  { type: 'content', id: 'moonrise', duration: 94 * MINUTE },
-  { type: 'content', id: 'twin', duration: 47 * MINUTE },
-  { type: 'flex', duration: 13 * MINUTE },
-];
-
-const demoChannels: Channel[] = [
-  { id: 'studio', name: 'Studio Selects', number: 12, startTime: demoStart, duration: 0, programCount: demoLineup.length },
-  { id: 'after', name: 'After Hours', number: 24, startTime: demoStart + 2 * HOUR, duration: 0, programCount: demoLineup.length },
-  { id: 'kids', name: 'Kids Room', number: 88, startTime: demoStart - HOUR, duration: 0, programCount: demoLineup.length },
-];
-
-const demoProgramming: Programming = { lineup: demoLineup, programs: demoPrograms };
+const emptyProgramming: Programming = { lineup: [], programs: {} };
 
 const dateLabel = (value: string) => new Intl.DateTimeFormat('en', { weekday: 'long', month: 'long', day: 'numeric' }).format(new Date(`${value}T12:00:00`));
 const inputDate = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
@@ -106,19 +49,20 @@ const dayPeriod = (ms: number) => {
   if (hour < 22) return 'Evening';
   return 'Late night';
 };
-const cleanBaseUrl = (url: string) => url.trim().replace(/\/+$/, '');
-const apiUrl = (base: string, path: string) => `${cleanBaseUrl(base)}${path}`;
+const errorMessage = (error: unknown, fallback: string) => (error instanceof Error && error.message ? error.message : fallback);
 
-function getProgram(item: LineupItem, programs: Programming['programs']) {
+function getProgram(item: LineupItem, programs: Programming['programs']): Program | undefined {
   if (!item.id) return undefined;
   const entry = programs[item.id];
   if (!entry) return undefined;
-  return 'program' in entry ? entry.program : entry;
+  // Tunarr wraps metadata in `program`; older payloads and demo data may not.
+  const wrapped = (entry as { program?: Program }).program;
+  return wrapped && typeof wrapped === 'object' ? wrapped : (entry as Program);
 }
 
 function programTitle(item: LineupItem, programs: Programming['programs']) {
   const program = getProgram(item, programs);
-  if (program?.type === 'episode') return program.show?.title || program.showTitle || program.title || 'Episode';
+  if (program?.type === 'episode') return program.show?.title || program.season?.show?.title || program.showTitle || program.title || 'Episode';
   if (program?.type === 'track') return program.artistName || program.title || 'Track';
   if (program?.title) return program.title;
   if (item.type === 'flex') return 'Flex time';
@@ -141,151 +85,257 @@ function programDetail(item: LineupItem, programs: Programming['programs']) {
   return [program.year, program.type && program.type.replace('_', ' ')].filter(Boolean).join(' · ');
 }
 
-function programArtwork(item: LineupItem, programs: Programming['programs'], baseUrl: string) {
+// Artwork is only shown when it is embedded. Remote artwork would make the
+// browser contact Tunarr or a media server directly, which live mode avoids.
+function programArtwork(item: LineupItem, programs: Programming['programs']) {
   const program = getProgram(item, programs);
   const path = item.icon || program?.artwork?.find((art) => ['thumbnail', 'poster', 'landscape'].includes(art.type || ''))?.path;
-  if (!path) return undefined;
-  if (/^https?:\/\//.test(path)) return path;
-  return baseUrl ? apiUrl(baseUrl, path.startsWith('/') ? path : `/${path}`) : path;
-}
-
-function instancesForDay(lineup: LineupItem[], startTime: number, date: string): Instance[] {
-  const dayStart = new Date(`${date}T00:00:00`).getTime();
-  const dayEnd = new Date(`${date}T00:00:00`).setDate(new Date(`${date}T00:00:00`).getDate() + 1);
-  const cycleDuration = lineup.reduce((total, item) => total + Math.max(0, item.duration || 0), 0);
-  if (!lineup.length || cycleDuration <= 0) return [];
-  let cursor = startTime + Math.floor((dayStart - startTime) / cycleDuration) * cycleDuration;
-  while (cursor > dayStart) cursor -= cycleDuration;
-  const result: Instance[] = [];
-  let guard = 0;
-  while (cursor < dayEnd && guard < 20_000) {
-    lineup.forEach((item, lineupIndex) => {
-      const start = cursor;
-      const stop = start + Math.max(0, item.duration || 0);
-      if (stop > dayStart && start < dayEnd) result.push({ item, lineupIndex, start, stop });
-      cursor = stop;
-    });
-    guard += lineup.length;
-  }
-  return result;
+  return path && path.startsWith('data:image/') ? path : undefined;
 }
 
 function artTone(index: number) {
-  return ['mint', 'coral', 'gold', 'blue', 'plum'][index % 5];
+  return ['mint', 'coral', 'gold', 'blue', 'plum'][Math.max(0, index) % 5];
+}
+
+function connectionLabel(mode: Mode, connection: ConnectionState) {
+  if (mode === 'demo') return 'Demo mode';
+  switch (connection.status) {
+    case 'checking': return 'Checking Tunarr…';
+    case 'connected': return 'Tunarr connected';
+    case 'not_configured': return 'Tunarr not configured';
+    case 'unreachable': return 'Tunarr unreachable';
+    case 'unavailable': return 'Live mode unavailable';
+  }
 }
 
 export default function Home() {
-  const [channels, setChannels] = useState<Channel[]>(demoChannels);
-  const [activeChannelId, setActiveChannelId] = useState('studio');
-  const [programming, setProgramming] = useState<Programming>(demoProgramming);
-  const [originalLineup, setOriginalLineup] = useState<LineupItem[]>(demoLineup);
-  const [selectedIndex, setSelectedIndex] = useState(5);
-  const [selectedDate, setSelectedDate] = useState('2026-10-02');
+  const [mode, setMode] = useState<Mode>('live');
+  const [connection, setConnection] = useState<ConnectionState>({ status: 'checking' });
+  const [channels, setChannels] = useState<Channel[]>([]);
+  const [channelsLoading, setChannelsLoading] = useState(false);
+  const [channelsError, setChannelsError] = useState('');
+  const [activeChannelId, setActiveChannelId] = useState('');
+  const [programming, setProgramming] = useState<Programming>(emptyProgramming);
+  const [originalLineup, setOriginalLineup] = useState<LineupItem[]>([]);
+  const [programmingError, setProgrammingError] = useState('');
+  const [guide, setGuide] = useState<GuideState | null>(null);
+  const [guideLoading, setGuideLoading] = useState(false);
+  const [guideError, setGuideError] = useState('');
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  const [selectedDate, setSelectedDate] = useState(demoDate);
   const [search, setSearch] = useState('');
-  const [baseUrl, setBaseUrl] = useState('');
-  const [urlDraft, setUrlDraft] = useState(() =>
-    typeof window === 'undefined'
-      ? 'http://localhost:8000'
-      : window.localStorage.getItem('tunarr-lineup-url') || 'http://localhost:8000',
-  );
   const [connectionOpen, setConnectionOpen] = useState(false);
   const [arrangeOpen, setArrangeOpen] = useState(false);
   const [arrangeSearch, setArrangeSearch] = useState('');
+  const [confirmDialog, setConfirmDialog] = useState<ConfirmDialog | null>(null);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
+  const programmingRequest = useRef(0);
+  const guideRequest = useRef(0);
 
-  const activeChannel = channels.find((channel) => channel.id === activeChannelId) || channels[0];
-  const dirty = JSON.stringify(programming.lineup) !== JSON.stringify(originalLineup);
+  const live = mode === 'live';
+  const activeChannel = channels.find((channel) => channel.id === activeChannelId);
+  const dirty = !sameLineup(programming.lineup, originalLineup);
   const selectedItem = programming.lineup[selectedIndex];
-  const instances = useMemo(
-    () => activeChannel ? instancesForDay(programming.lineup, activeChannel.startTime, selectedDate) : [],
-    [activeChannel, programming.lineup, selectedDate],
-  );
+  const guideIsCurrent = live && !dirty && guide?.channelId === activeChannelId && guide.date === selectedDate;
+  const daySchedule = useMemo(() => {
+    if (!activeChannel) return { rows: [], guideWindow: null, guideStale: false };
+    return scheduleForDay(guideIsCurrent && guide ? guide.programs : null, programming.lineup, activeChannel.startTime, selectedDate);
+  }, [activeChannel, guide, guideIsCurrent, programming.lineup, selectedDate]);
+  const instances = daySchedule.rows;
   const visibleInstances = useMemo(() => {
     const query = search.trim().toLowerCase();
     if (!query) return instances;
-    return instances.filter(({ item }) => `${programTitle(item, programming.programs)} ${programDetail(item, programming.programs)}`.toLowerCase().includes(query));
+    return instances.filter(({ item, title }) => `${title ?? programTitle(item, programming.programs)} ${programDetail(item, programming.programs)}`.toLowerCase().includes(query));
   }, [instances, programming.programs, search]);
   const selectedInstance = instances.find((instance) => instance.lineupIndex === selectedIndex);
 
   const notify = (text: string) => {
     setMessage(text);
-    window.setTimeout(() => setMessage(''), 3200);
+    window.setTimeout(() => setMessage((current) => (current === text ? '' : current)), 3200);
   };
 
-  const loadChannel = async (channel: Channel, root = baseUrl) => {
-    if (!root) {
-      setActiveChannelId(channel.id);
-      setProgramming({ ...demoProgramming, lineup: [...demoLineup] });
-      setOriginalLineup([...demoLineup]);
-      setSelectedIndex(0);
-      return;
+  // A Tunarr outage during any live request is reflected in the connection
+  // status, but live mode stays live: it never switches to demo data on its own.
+  const noteFailure = (error: unknown) => {
+    if (error instanceof TunarrApiError && ['tunarr_unreachable', 'tunarr_timeout', 'companion_unreachable'].includes(error.code)) {
+      setConnection({ status: 'unreachable', host: error.tunarrHost, message: error.message });
     }
-    setLoading(true);
+  };
+
+  const loadGuide = async (channelId: string, date: string) => {
+    const request = ++guideRequest.current;
+    setGuideLoading(true);
+    setGuideError('');
+    const { from, to } = dayRange(date);
     try {
-      const response = await fetch(apiUrl(root, `/api/channels/${encodeURIComponent(channel.id)}/programming`));
-      if (!response.ok) throw new Error(`Tunarr returned ${response.status}`);
-      const data = await response.json() as Programming;
-      setActiveChannelId(channel.id);
-      setProgramming(data);
-      setOriginalLineup(structuredClone(data.lineup));
-      setSelectedIndex(0);
+      const data = await tunarrApi.lineup(channelId, from, to);
+      if (request !== guideRequest.current) return;
+      setGuide({ channelId, date, programs: Array.isArray(data?.programs) ? data.programs : [] });
     } catch (error) {
-      notify(error instanceof Error ? error.message : 'Could not load this channel.');
+      if (request !== guideRequest.current) return;
+      setGuide(null);
+      setGuideError(errorMessage(error, 'Could not load the guide for this date.'));
+      noteFailure(error);
     } finally {
-      setLoading(false);
+      if (request === guideRequest.current) setGuideLoading(false);
     }
   };
 
-  const connect = async () => {
-    const root = cleanBaseUrl(urlDraft);
-    if (!/^https?:\/\//.test(root)) {
-      notify('Enter a full Tunarr URL, including http:// or https://');
+  const loadProgramming = async (channelId: string, date: string, keepSelection = false) => {
+    const request = ++programmingRequest.current;
+    setActiveChannelId(channelId);
+    setLoading(true);
+    setProgrammingError('');
+    if (!keepSelection) {
+      setProgramming(emptyProgramming);
+      setOriginalLineup([]);
+      setGuide(null);
+      setSelectedIndex(0);
+    }
+    try {
+      const data = await tunarrApi.programming(channelId);
+      if (request !== programmingRequest.current) return false;
+      const lineup = Array.isArray(data?.lineup) ? data.lineup : [];
+      const next = { ...data, lineup, programs: data?.programs ?? {} };
+      setProgramming(next);
+      setOriginalLineup(structuredClone(lineup));
+      setSelectedIndex((current) => (keepSelection ? Math.min(current, Math.max(lineup.length - 1, 0)) : 0));
+      void loadGuide(channelId, date);
+      return true;
+    } catch (error) {
+      if (request !== programmingRequest.current) return false;
+      setProgrammingError(errorMessage(error, 'Could not load this channel.'));
+      noteFailure(error);
+      return false;
+    } finally {
+      if (request === programmingRequest.current) setLoading(false);
+    }
+  };
+
+  const loadChannels = async (date: string, preferredId?: string) => {
+    setChannelsLoading(true);
+    setChannelsError('');
+    try {
+      const list = await tunarrApi.channels();
+      const sorted = [...list].sort((a, b) => a.number - b.number);
+      setChannels(sorted);
+      const next = sorted.find((channel) => channel.id === preferredId) ?? sorted[0];
+      if (next) await loadProgramming(next.id, date);
+      else setActiveChannelId('');
+    } catch (error) {
+      setChannelsError(errorMessage(error, 'Could not load channels.'));
+      noteFailure(error);
+    } finally {
+      setChannelsLoading(false);
+    }
+  };
+
+  const goLive = async () => {
+    setConnection({ status: 'checking' });
+    const state = await checkHealth();
+    setConnection(state);
+    if (state.status !== 'connected') {
+      setConnectionOpen(true);
       return;
     }
-    setLoading(true);
-    try {
-      const response = await fetch(apiUrl(root, '/api/channels'));
-      if (!response.ok) throw new Error(`Tunarr returned ${response.status}`);
-      const loaded = await response.json() as Channel[];
-      if (!loaded.length) throw new Error('This Tunarr server has no channels yet.');
-      setChannels(loaded);
-      setBaseUrl(root);
-      window.localStorage.setItem('tunarr-lineup-url', root);
-      setConnectionOpen(false);
-      await loadChannel(loaded[0], root);
-      notify(`Connected to ${root}`);
-    } catch (error) {
-      notify(error instanceof Error ? error.message : 'Could not connect to Tunarr.');
-      setLoading(false);
-    }
+    const today = inputDate(new Date());
+    const preferredId = live ? activeChannelId : undefined;
+    setMode('live');
+    setChannels([]);
+    setActiveChannelId('');
+    setProgramming(emptyProgramming);
+    setOriginalLineup([]);
+    setGuide(null);
+    setSelectedDate(today);
+    setConnectionOpen(false);
+    await loadChannels(today, preferredId);
   };
 
-  const disconnect = () => {
-    setBaseUrl('');
+  useEffect(() => {
+    // Initial check only; later checks are explicit user actions.
+    let cancelled = false;
+    checkHealth().then((state) => {
+      if (cancelled) return;
+      setConnection(state);
+      if (state.status !== 'connected') {
+        setConnectionOpen(true);
+        return;
+      }
+      const today = inputDate(new Date());
+      setSelectedDate(today);
+      void loadChannels(today);
+    });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!live || !dirty) return;
+    const warn = (event: BeforeUnloadEvent) => event.preventDefault();
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [live, dirty]);
+
+  const guardUnsaved = (action: () => void) => {
+    if (!dirty) {
+      action();
+      return;
+    }
+    setConfirmDialog({
+      title: 'Discard unsaved changes?',
+      body: live ? 'This lineup has changes that have not been saved to Tunarr. They will be lost.' : 'Your demo changes will be lost.',
+      confirmLabel: 'Discard changes',
+      onConfirm: action,
+    });
+  };
+
+  const switchToDemo = () => guardUnsaved(() => {
+    programmingRequest.current += 1;
+    guideRequest.current += 1;
+    const sample = demoProgramming();
+    setMode('demo');
     setChannels(demoChannels);
+    setChannelsError('');
     setActiveChannelId('studio');
-    setProgramming({ ...demoProgramming, lineup: [...demoLineup] });
-    setOriginalLineup([...demoLineup]);
+    setProgramming(sample);
+    setOriginalLineup(structuredClone(sample.lineup));
+    setProgrammingError('');
+    setGuide(null);
+    setGuideError('');
+    setLoading(false);
+    setGuideLoading(false);
     setSelectedIndex(5);
-    notify('Back in demo mode');
+    setSelectedDate(demoDate);
+    setConnectionOpen(false);
+    notify('Demo mode: sample data only, nothing is sent to Tunarr');
+  });
+
+  const loadChannel = (channel: Channel) => guardUnsaved(() => {
+    if (!live) {
+      const sample = demoProgramming();
+      setActiveChannelId(channel.id);
+      setProgramming(sample);
+      setOriginalLineup(structuredClone(sample.lineup));
+      setSelectedIndex(0);
+      return;
+    }
+    void loadProgramming(channel.id, selectedDate);
+  });
+
+  const changeDate = (date: string) => {
+    if (!date) return;
+    setSelectedDate(date);
+    if (live && activeChannelId && !programmingError) void loadGuide(activeChannelId, date);
   };
 
   const reorder = (from: number, to: number, swap = false) => {
-    if (from === to || from < 0 || to < 0) return;
-    const next = [...programming.lineup];
-    if (swap) {
-      [next[from], next[to]] = [next[to], next[from]];
-      setSelectedIndex(to);
-    } else {
-      const [item] = next.splice(from, 1);
-      const target = from < to ? to - 1 : to;
-      next.splice(target, 0, item);
-      setSelectedIndex(target);
-    }
-    setProgramming((current) => ({ ...current, lineup: next }));
+    const result = reorderLineup(programming.lineup, from, to, swap);
+    if (!result) return;
+    setSelectedIndex(result.selectedIndex);
+    setProgramming((current) => ({ ...current, lineup: result.lineup }));
     setArrangeOpen(false);
   };
 
@@ -294,79 +344,144 @@ export default function Home() {
     if (target >= 0 && target < programming.lineup.length) reorder(selectedIndex, target, true);
   };
 
-  const save = async () => {
-    if (!baseUrl) {
-      setOriginalLineup(structuredClone(programming.lineup));
-      notify('Demo changes saved for this session');
-      return;
-    }
-    if (programming.schedule && !window.confirm('This channel uses a generated schedule. Saving manual changes may detach it from that schedule. Continue?')) return;
+  const performSave = async () => {
+    const channelId = activeChannelId;
+    const savedLineup = programming.lineup;
+    const { request, skipped } = buildManualSave(savedLineup);
     setSaving(true);
     try {
-      const response = await fetch(apiUrl(baseUrl, `/api/channels/${encodeURIComponent(activeChannel.id)}/programming`), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type: 'manual', lineup: programming.lineup.filter((item) => item.duration > 0), append: false }),
-      });
-      if (!response.ok) {
-        const text = await response.text();
-        throw new Error(text || `Tunarr returned ${response.status}`);
-      }
-      const result = await response.json() as Programming;
-      const nextLineup = result.lineup || programming.lineup;
-      setProgramming((current) => ({ ...current, ...result, lineup: nextLineup }));
-      setOriginalLineup(structuredClone(nextLineup));
-      notify('Lineup saved to Tunarr');
+      await tunarrApi.saveProgramming(channelId, request);
+      setOriginalLineup(structuredClone(savedLineup));
+      notify(skipped ? `Lineup saved to Tunarr (${skipped} zero-length ${skipped === 1 ? 'item' : 'items'} left out)` : 'Lineup saved to Tunarr');
+      // Re-read what Tunarr actually stored rather than trusting local state.
+      await loadProgramming(channelId, selectedDate, true);
+      void tunarrApi.channels().then((list) => setChannels([...list].sort((a, b) => a.number - b.number))).catch(noteFailure);
     } catch (error) {
-      notify(error instanceof Error ? error.message : 'Could not save the lineup.');
+      notify(`Not saved: ${errorMessage(error, 'Could not save the lineup.')}`);
+      noteFailure(error);
     } finally {
       setSaving(false);
     }
   };
 
+  const save = () => {
+    if (!live) {
+      setOriginalLineup(structuredClone(programming.lineup));
+      notify('Demo changes saved for this session');
+      return;
+    }
+    if (!activeChannelId || loading) return;
+    if (hasGeneratedSchedule(programming)) {
+      setConfirmDialog({
+        title: 'Save over a generated schedule?',
+        body: 'Tunarr builds this channel’s lineup from a slot or time schedule. Saving here stores it as a manual lineup, which can detach the channel from that schedule, and a later regeneration may overwrite these changes.',
+        confirmLabel: 'Save manual lineup',
+        onConfirm: () => void performSave(),
+      });
+      return;
+    }
+    void performSave();
+  };
+
+  const undo = () => {
+    setProgramming((current) => ({ ...current, lineup: structuredClone(originalLineup) }));
+    notify('Changes reverted');
+  };
+
   const shiftDay = (amount: number) => {
     const date = new Date(`${selectedDate}T12:00:00`);
     date.setDate(date.getDate() + amount);
-    setSelectedDate(inputDate(date));
+    changeDate(inputDate(date));
+  };
+
+  const retry = () => {
+    if (channelsError || !channels.length) void loadChannels(selectedDate, activeChannelId);
+    else if (activeChannelId) void loadProgramming(activeChannelId, selectedDate);
   };
 
   const selectedTitle = selectedItem ? programTitle(selectedItem, programming.programs) : 'Nothing selected';
   const selectedDetail = selectedItem ? programDetail(selectedItem, programming.programs) : '';
-  const selectedArt = selectedItem ? programArtwork(selectedItem, programming.programs, baseUrl) : undefined;
+  const selectedArt = selectedItem ? programArtwork(selectedItem, programming.programs) : undefined;
   const arrangeCandidates = programming.lineup
     .map((item, index) => ({ item, index }))
     .filter(({ item, index }) => index !== selectedIndex && programTitle(item, programming.programs).toLowerCase().includes(arrangeSearch.toLowerCase()));
+  const busy = loading || channelsLoading || guideLoading;
+  const connectionClass = live && connection.status === 'connected' ? 'live' : live && connection.status !== 'checking' ? 'offline' : '';
+
+  let sourceNote = '';
+  if (!live) sourceNote = 'Demo data. Changes stay in this browser session and are never sent to Tunarr.';
+  else if (dirty) sourceNote = 'Showing unsaved changes. Times are projected from the lineup until you save.';
+  else if (guideError) sourceNote = `Tunarr’s guide for this date did not load (${guideError}). Times are projected from the lineup.`;
+  else if (guideIsCurrent && programming.lineup.length) {
+    const guideWindow = daySchedule.guideWindow;
+    const { from, to } = dayRange(selectedDate);
+    if (daySchedule.guideStale) sourceNote = 'Tunarr’s guide does not match this lineup yet (it may still be rebuilding). Times are projected from the lineup.';
+    else if (!guideWindow) sourceNote = 'Tunarr’s guide does not reach this date yet. Times are projected from the lineup.';
+    else if (guideWindow.start > from.getTime() || guideWindow.stop < to.getTime()) {
+      sourceNote = `Times from ${timeLabel(Math.max(guideWindow.start, from.getTime()))} to ${timeLabel(Math.min(guideWindow.stop, to.getTime()))} come from Tunarr’s guide; the rest of the day is projected from the lineup.`;
+    }
+  }
+
+  let emptyTitle = 'No programs here';
+  let emptyText = search ? 'Try a different search.' : 'This date falls outside the current lineup.';
+  let emptyRetry = false;
+  if (!search && live) {
+    if (connection.status === 'checking' || ((channelsLoading || loading) && !programmingError)) {
+      emptyTitle = 'Loading from Tunarr…';
+      emptyText = 'Reading this channel’s existing programming.';
+    } else if (channelsError || programmingError) {
+      emptyTitle = channelsError ? 'Couldn’t load channels' : 'Couldn’t load this channel';
+      emptyText = channelsError || programmingError;
+      emptyRetry = connection.status === 'connected' || connection.status === 'unreachable';
+    } else if (connection.status !== 'connected' && !channels.length) {
+      emptyTitle = 'Not connected to Tunarr';
+      emptyText = connection.message;
+    } else if (!channels.length) {
+      emptyTitle = 'No channels yet';
+      emptyText = 'Create a channel in Tunarr, then check again.';
+      emptyRetry = true;
+    } else if (!programming.lineup.length) {
+      emptyTitle = 'No programming yet';
+      emptyText = 'This channel has nothing scheduled in Tunarr.';
+    }
+  }
 
   return (
     <main className="app-shell">
       <header className="topbar">
-        <div className="brand"><span className="brand-mark"></span><span>Tunarr Lineup</span><nav className="menu-items" aria-label="Application menu"><span>File</span><span>Edit</span><span>View</span><span>Channel</span><span>Help</span></nav></div>
+        <div className="brand"><span className="brand-mark"></span><span>Tunarr Lineup</span><nav className="menu-items" aria-label="Application menu"><span>File</span><span>Edit</span><span>View</span><span>Channel</span><span>Help</span></nav></div>
         <div className="top-actions">
-          {dirty && <button className="quiet" onClick={() => { setProgramming((current) => ({ ...current, lineup: structuredClone(originalLineup) })); notify('Changes reverted'); }}>Undo changes</button>}
-          <button className={`connection ${baseUrl ? 'live' : ''}`} onClick={() => setConnectionOpen(true)}><span className="status-dot" />{baseUrl ? 'Tunarr connected' : 'Demo mode'}</button>
-          {baseUrl && <button className="icon-button" aria-label="Disconnect Tunarr" title="Disconnect" onClick={disconnect}>×</button>}
-          <button className="primary save" disabled={!dirty || saving} onClick={save}>{saving ? 'Saving…' : dirty ? 'Save lineup' : 'Saved'}</button>
+          {dirty && <button className="quiet" onClick={undo}>Undo changes</button>}
+          <button className={`connection ${connectionClass}`} onClick={() => setConnectionOpen(true)}><span className="status-dot" />{connectionLabel(mode, connection)}</button>
+          <button className="primary save" disabled={!dirty || saving || loading} onClick={save}>{saving ? 'Saving…' : dirty ? 'Save lineup' : 'Saved'}</button>
         </div>
       </header>
 
       <div className="workspace">
         <aside className="channel-rail">
-          <div className="rail-heading"><p className="eyebrow">CHANNELS</p><span>{channels.length}</span></div>
+          <div className="rail-heading"><p className="eyebrow">{live ? 'CHANNELS' : 'DEMO CHANNELS'}</p><span>{channels.length}</span></div>
           {channels.map((channel) => (
             <button className={`channel ${channel.id === activeChannelId ? 'active' : ''}`} key={channel.id} onClick={() => loadChannel(channel)}>
               <span className="channel-number">{channel.number}</span>
               <span className="channel-copy"><b>{channel.name}</b><small>{channel.programCount ?? '—'} lineup items</small></span>
             </button>
           ))}
-          <div className="rail-note"><b>No library clutter.</b><span>This view only changes programs already assigned to a channel.</span></div>
+          <div className="rail-note">
+            {live ? <><b>No library clutter.</b><span>This view only changes programs already assigned to a channel.</span></> : <><b>Sample data.</b><span>Demo mode never reads from or writes to Tunarr.</span></>}
+          </div>
         </aside>
 
-        <section className="schedule" aria-busy={loading}>
+        <section className="schedule" aria-busy={busy}>
           <div className="schedule-head">
-            <div><p className="eyebrow">{activeChannel?.name?.toUpperCase()} · CH {activeChannel?.number}</p><h1>{dateLabel(selectedDate)}</h1><p className="subtle">Seek by date, then drag, move, or swap anything already in this lineup.</p></div>
+            <div>
+              <p className="eyebrow">{activeChannel ? `${live ? '' : 'DEMO · '}${activeChannel.name.toUpperCase()} · CH ${activeChannel.number}` : live ? 'TUNARR' : 'DEMO'}</p>
+              <h1>{dateLabel(selectedDate)}</h1>
+              <p className="subtle">Seek by date, then drag, move, or swap anything already in this lineup.</p>
+              {sourceNote && <p className="subtle source-note">{sourceNote}</p>}
+            </div>
             <div className="date-controls">
-              <div className="stepper"><button aria-label="Previous day" onClick={() => shiftDay(-1)}>←</button><button onClick={() => setSelectedDate(inputDate(new Date()))}>Today</button><button aria-label="Next day" onClick={() => shiftDay(1)}>→</button></div>
-              <label className="date-picker"><span>Jump to date</span><input type="date" value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} /></label>
+              <div className="stepper"><button aria-label="Previous day" onClick={() => shiftDay(-1)}>←</button><button onClick={() => changeDate(inputDate(new Date()))}>Today</button><button aria-label="Next day" onClick={() => shiftDay(1)}>→</button></div>
+              <label className="date-picker"><span>Jump to date</span><input type="date" value={selectedDate} onChange={(event) => changeDate(event.target.value)} /></label>
             </div>
           </div>
 
@@ -375,29 +490,31 @@ export default function Home() {
             <span className="day-count">{visibleInstances.length} {visibleInstances.length === 1 ? 'program' : 'programs'}</span>
           </div>
 
-          <div className={`timeline ${loading ? 'loading' : ''}`}>
-            {!visibleInstances.length && <div className="empty"><span>○</span><h2>No programs here</h2><p>{search ? 'Try a different search.' : 'This date falls outside the current lineup.'}</p></div>}
+          <div className={`timeline ${busy ? 'loading' : ''}`}>
+            {!visibleInstances.length && <div className="empty"><span>○</span><h2>{emptyTitle}</h2><p>{emptyText}</p>{emptyRetry && <button onClick={retry}>Try again</button>}</div>}
             {visibleInstances.map((instance, position) => {
               const period = dayPeriod(instance.start);
               const showPeriod = position === 0 || dayPeriod(visibleInstances[position - 1].start) !== period;
-              const title = programTitle(instance.item, programming.programs);
-              const detail = programDetail(instance.item, programming.programs);
-              const art = programArtwork(instance.item, programming.programs, baseUrl);
+              const guideOnly = instance.lineupIndex < 0;
+              const title = instance.title ?? programTitle(instance.item, programming.programs);
+              const detail = guideOnly ? `${instance.item.type} · in Tunarr’s guide only` : programDetail(instance.item, programming.programs);
+              const art = guideOnly ? undefined : programArtwork(instance.item, programming.programs);
               return (
                 <Fragment key={`${instance.start}-${instance.lineupIndex}`}>
                   {showPeriod && <div className="timeline-label"><span>{period}</span><i /></div>}
                   <button
-                    className={`program ${instance.lineupIndex === selectedIndex ? 'selected' : ''}`}
+                    className={`program ${!guideOnly && instance.lineupIndex === selectedIndex ? 'selected' : ''}`}
+                    disabled={guideOnly}
                     onClick={() => setSelectedIndex(instance.lineupIndex)}
-                    draggable
+                    draggable={!guideOnly}
                     onDragStart={() => setDraggedIndex(instance.lineupIndex)}
                     onDragOver={(event) => event.preventDefault()}
-                    onDrop={() => { if (draggedIndex != null) reorder(draggedIndex, instance.lineupIndex); setDraggedIndex(null); }}
+                    onDrop={() => { if (draggedIndex != null && !guideOnly) reorder(draggedIndex, instance.lineupIndex); setDraggedIndex(null); }}
                   >
                     <time>{timeLabel(instance.start)}</time>
                     <span className={`art ${artTone(instance.lineupIndex)} ${art ? 'has-image' : ''}`} style={art ? { backgroundImage: `url("${art.replaceAll('"', '%22')}")` } : undefined}>{art ? '' : title.slice(0, 1)}</span>
                     <span className="program-copy"><b>{title}</b><small>{detail}</small></span>
-                    <span className="duration">{durationLabel(instance.item.duration)}</span><span className="grip" aria-hidden="true">⠿</span>
+                    <span className="duration">{durationLabel(instance.stop - instance.start)}</span><span className="grip" aria-hidden="true">⠿</span>
                   </button>
                 </Fragment>
               );
@@ -417,7 +534,7 @@ export default function Home() {
             <div className="nudge-row"><button disabled={selectedIndex === 0} onClick={() => nudge(-1)}>↑ Earlier</button><button disabled={selectedIndex === programming.lineup.length - 1} onClick={() => nudge(1)}>↓ Later</button></div>
             <button className="wide primary" onClick={() => setArrangeOpen(true)}>Move or swap…</button>
             <p className="hint">Tip: you can also drag a row directly in the schedule.</p>
-            {programming.schedule && <div className="warning"><b>Generated schedule</b><span>Tunarr may regenerate these manual changes from its slot schedule.</span></div>}
+            {hasGeneratedSchedule(programming) && <div className="warning"><b>Generated schedule</b><span>Tunarr may regenerate these manual changes from its slot schedule.</span></div>}
           </> : <p className="subtle">Choose a program to adjust it.</p>}
         </aside>
       </div>
@@ -425,11 +542,50 @@ export default function Home() {
       {connectionOpen && <div className="overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setConnectionOpen(false); }}>
         <section className="modal" role="dialog" aria-modal="true" aria-labelledby="connect-title">
           <button className="modal-close" aria-label="Close" onClick={() => setConnectionOpen(false)}>×</button>
-          <p className="eyebrow">YOUR EXISTING SERVER</p><h2 id="connect-title">Connect Tunarr</h2>
-          <p className="subtle">Lineup reads and writes through Tunarr’s existing channel API. Nothing is imported or duplicated here.</p>
-          <label className="field"><span>Tunarr URL</span><input value={urlDraft} onChange={(event) => setUrlDraft(event.target.value)} placeholder="http://192.168.1.50:8000" onKeyDown={(event) => { if (event.key === 'Enter') connect(); }} /></label>
-          <button className="wide primary connect-button" disabled={loading} onClick={connect}>{loading ? 'Connecting…' : 'Connect to Tunarr'}</button>
-          <p className="fine-print">Use the address you normally open Tunarr with. It stays in this browser.</p>
+          <p className="eyebrow">YOUR EXISTING SERVER</p>
+          {!live ? <>
+            <h2 id="connect-title">Demo mode</h2>
+            <p className="subtle">You are looking at sample channels. Nothing here is read from or written to Tunarr.</p>
+            <button className="wide primary connect-button" disabled={connection.status === 'checking'} onClick={() => void goLive()}>{connection.status === 'checking' ? 'Checking…' : 'Connect to Tunarr'}</button>
+            {connection.status !== 'checking' && connection.status !== 'connected' && <div className="warning"><b>Live mode is not available</b><span>{connection.message}</span></div>}
+          </> : connection.status === 'connected' ? <>
+            <h2 id="connect-title">Tunarr connected.</h2>
+            <p className="subtle">Lineup reads and writes through Tunarr’s existing channel API. Nothing is imported or duplicated here.</p>
+            <div className="info-row"><span>Server</span><b>{connection.host}</b></div>
+            <div className="info-row"><span>Channels</span><b>{connection.channelCount}</b></div>
+          </> : connection.status === 'checking' ? <>
+            <h2 id="connect-title">Checking Tunarr…</h2>
+            <p className="subtle">Asking the Lineup server whether Tunarr is reachable.</p>
+          </> : connection.status === 'not_configured' ? <>
+            <h2 id="connect-title">Tunarr isn’t configured</h2>
+            <p className="subtle">{connection.message}</p>
+            <p className="subtle">Set it to your Tunarr address and restart Lineup: <code>TUNARR_URL=http://tunarr:8000</code> in Docker Compose, or <code>TUNARR_URL=http://localhost:8000</code> when running locally. The address stays on the server; the browser never contacts Tunarr directly.</p>
+          </> : connection.status === 'unreachable' ? <>
+            <h2 id="connect-title">Can’t reach Tunarr</h2>
+            <p className="subtle">{connection.message}</p>
+            {connection.host && <div className="info-row single"><span>Tried</span><b>{connection.host}</b></div>}
+            <p className="subtle">Check that Tunarr is running and that <code>TUNARR_URL</code> on the Lineup server points to it.</p>
+          </> : <>
+            <h2 id="connect-title">Live mode unavailable</h2>
+            <p className="subtle">{connection.message} To edit a real Tunarr server, run the Lineup companion beside Tunarr (see the README), then open it from that server.</p>
+          </>}
+          {live && <div className="dialog-actions">
+            <button disabled={connection.status === 'checking'} onClick={() => guardUnsaved(() => void goLive())}>Check again</button>
+            <button onClick={switchToDemo}>Use demo data</button>
+          </div>}
+          <p className="fine-print">{live ? 'Demo data is sample content only and is never mixed with your channels.' : 'Connecting replaces the sample channels with your Tunarr channels.'}</p>
+        </section>
+      </div>}
+
+      {confirmDialog && <div className="overlay" role="presentation">
+        <section className="modal confirm-modal" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-body">
+          <p className="eyebrow">PLEASE CONFIRM</p>
+          <h2 id="confirm-title">{confirmDialog.title}</h2>
+          <p className="subtle" id="confirm-body">{confirmDialog.body}</p>
+          <div className="dialog-actions">
+            <button autoFocus onClick={() => setConfirmDialog(null)}>Cancel</button>
+            <button className="primary" onClick={() => { const action = confirmDialog.onConfirm; setConfirmDialog(null); action(); }}>{confirmDialog.confirmLabel}</button>
+          </div>
         </section>
       </div>}
 
