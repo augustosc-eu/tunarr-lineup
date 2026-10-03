@@ -60,10 +60,9 @@ on the `broadcast-programming` branch.
   - Zero-length items are omitted because Tunarr won't accept them (comment).
   - The UI reports how many items were left out.
 
-## D7. Rearrange-only editing
+## D7. ~~Rearrange-only editing~~ (superseded by D29)
 
-- **Status:** Explicit in UI copy ("This view only changes programs already assigned to a channel", `app/page.tsx`) and `README.md`. Evidenced by `reorderLineup`, which only moves or swaps.
-- **Decision:** No adding, removing or creating programming.
+- **Status:** Superseded. The original build explicitly limited editing to reordering ("This view only changes programs already assigned to a channel"). On 2026-10-03 the owner asked to "fully edit, add commercials, add fillers, everything". See D29.
 
 ## D8. Re-fetch after save instead of trusting local state
 
@@ -164,7 +163,7 @@ on the `broadcast-programming` branch.
 - **Decision:** The "day" shown and requested from Tunarr is the browser's local calendar day, sent to Tunarr as UTC ISO timestamps.
 - **Reason:** not recorded.
 
-## D21. A "programming desk" feature set within the rearrange-only rule
+## D21. A "programming desk" feature set
 
 - **Status:** Explicit (`README.md` "Programming desk features").
 - **Decision:** Add broadcast-scheduling tools on top of rearranging:
@@ -177,7 +176,7 @@ on the `broadcast-programming` branch.
   - program-log CSV export
   - functional pull-down menus
 
-  All of these operate only on existing lineup items (D7).
+  Introduced while D7 was in force; the same tools now also work on inserted items (D29).
 
 ## D22. Conditional saves, checked in the companion
 
@@ -227,18 +226,57 @@ on the `broadcast-programming` branch.
 - **Status:** Explicit (comment in `toCsv`).
 - **Decision:** CSV cells that start with `=`, `+`, `-`, `@`, tab or CR are prefixed with `'`, and values are quoted per RFC 4180. Exports of unsaved lineups get an `-unsaved` filename suffix.
 
-## D28. Slot-schedule editing limited to the schedule's existing sources
+## D28. Slot schedules: full editing, validated in the companion
 
-- **Status:** Explicit (`server/slotSchedule.ts` header; `ScheduleEditor` copy; `README.md`). The owner approved editing slot schedules on 2026-10-03, after it had first been excluded.
-- **Decision:** Lineup edits the slots of a channel's existing random- or time-slot schedule:
-  - **Random slots:** source, weight, cooldown, length, order; reorder, duplicate, remove.
-  - **Time slots:** start times, source, order; shift all.
+- **Status:**
+  - Explicit (`server/slotSchedule.ts` header: "Lineup can create, convert and fully edit a channel's schedule"; `README.md`).
+  - History:
+    1. Slot editing was first excluded.
+    2. The owner approved it on 2026-10-03, limited to existing sources.
+    3. The owner widened it to "everything" the same day.
+- **Decision:**
+  - **What can be edited:** any source (library shows, movies, custom shows, filler lists, smart collections, redirects, flex); schedule-wide settings from a per-type allowlist; per-slot commercials (`filler` entries and `midRoll` breaks); conversion between random and time slots; creating a schedule for a manual channel; and **Detach to manual lineup**.
+  - **What the companion enforces** (`buildSchedule`):
+    - It starts from Tunarr's current schedule when the type is unchanged, so fields Lineup doesn't edit are kept. Otherwise it starts from Tunarr's editor defaults.
+    - It validates source ids, orders, timing, weights, filler and mid-roll shapes.
+    - It computes the program pool server-side (`programPool`) and accepts extra program ids only as validated UUIDs.
 
-  Enforced in the companion:
-  - Slots may only use sources (`slotSourceKey`) that the current schedule already uses, plus flex.
-  - The schedule type and every schedule-wide setting (padding, lateness, distribution, period, days generated) are taken from Tunarr's current copy.
-  - The program pool is computed server-side from programs already on the channel (a port of Tunarr's `lineupItemAppearsInSchedule`).
-  - Channels without a schedule can't gain one through Lineup.
-- **Preview first:** saving requires a preview of the exact draft. The save reuses the preview's `seed`/`discardCount`, as Tunarr's own editors do, and the UI reports any difference between the saved result and the preview.
-- **What "no new media" means here:** Tunarr fills a slot from its whole source (for example all of a show's episodes in the library). Editing slots therefore never adds a new show or collection, but it can schedule other episodes from shows the channel already uses.
-- **Not recorded / not built:** editing schedule-wide settings, adding sources the schedule doesn't already use, converting between schedule types, and filler or mid-roll configuration. Slot-schedule drafts are not persisted.
+  Tunarr's strict validation still runs.
+- **Preview first:** saving requires a preview of the exact draft, reuses its seed, and reports any difference. Movies added to the pool are not part of Tunarr's preview (its preview API has no program list), and the UI says so.
+- **Not built:** per-season filters on show slots, editing iteration groups (existing ones are kept), per-slot time overrides, and smart-collection authoring. Slot-schedule drafts are not persisted.
+## D29. Full lineup editing through Tunarr's APIs
+
+- **Status:**
+  - Explicit: the owner's request on 2026-10-03, `AGENTS.md` invariant 3, and `README.md` "Full lineup editing".
+  - Evidenced: `insertItems`, `removeBlock`, `setItemDuration` and `makeCommercialBreak` in `lib/broadcast.ts`.
+- **Decision:**
+  - The manual lineup can gain programs from Tunarr's indexed libraries, commercial breaks, flex and redirects; items can be removed and flex, break and redirect lengths changed.
+  - Every change goes through the same edit list, drafts and conditional save.
+  - Inserted programs are minimal content entries (`{ type: 'content', id, duration }`); Tunarr validates that they exist.
+  - Lineup still doesn't add media sources, scan libraries, create channels, or change transcoding or streaming.
+
+## D30. "Commercials" are Tunarr filler
+
+- **Status:** Evidenced (`makeCommercialBreak`, `SlotCommercials`, `ChannelSettingsDialog`, `ListsManager`).
+- **Decision:** Lineup has no commercial system of its own. It maps "commercials" onto Tunarr's existing filler features:
+  - filler lists, managed in Lineup
+  - **commercial breaks** in manual lineups: flex items with `fillerConfig.fillerListIds`
+  - **slot commercials**: `filler` entries (pre, post, head, tail, mid, fallback) and `midRoll` breaks
+  - **channel flex filler**: `fillerCollections` with weights and cooldowns
+- **Reason:** not recorded beyond reusing Tunarr's mechanisms, so playout behaves exactly as Tunarr's own UI would configure it.
+
+## D31. Content routes are explicit and sanitized
+
+- **Status:** Explicit (`server/content.ts` header; tests in `tests/content.test.ts` and `e2e/desk.spec.ts`).
+- **Decision:**
+  - Library browsing, lists and channel settings get their own allowlisted routes.
+  - **Search:** filters are built server-side from a small query (no raw Tunarr filters).
+  - **Media sources:** returned without server addresses or accounts.
+  - **Channel settings:** an allowlist merged onto Tunarr's current channel under the channel lock, so transcoding, streaming and other fields are never sent from the browser.
+  - **Custom shows:** updates re-send their Plex sync settings, because Tunarr's update otherwise clears them.
+
+## D32. Search paging normalized by the companion
+
+- **Status:** Explicit (comment in `buildLibrarySearch`, citing Tunarr's `SearchProgramsCommand`).
+- **Decision:** Tunarr pages free-text searches from 1 and plain listings from 0. Lineup always uses 0-based pages, and the companion adds 1 for free-text queries.
+- **Why it's recorded:** the first build sent 0 for text searches and got empty pages (with a non-zero `totalHits`) on the owner's server.

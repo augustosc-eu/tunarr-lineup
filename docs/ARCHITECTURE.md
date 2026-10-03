@@ -37,6 +37,10 @@ server implements those paths.
 | `app/page.tsx` | Main UI: state, data loading, editing commands, keyboard/remote handling, rendering, dialogs. `'use client'` component `Home` plus the local `ArtTile`. |
 | `app/components/MenuBar.tsx` | Pull-down menu bar (`MenuBar`, types `Menu`, `MenuItem`) with mouse and keyboard handling. |
 | `app/components/ScheduleEditor.tsx` | Slot-schedule editor for random- and time-slot channels (source, weight, cooldown, length, order, start time; duplicate/remove/reorder/shift). Displays and edits a draft; the page owns the state. |
+| `app/components/LibraryBrowser.tsx` | Library browser (`LibraryBrowser`, `LibraryPick`): source/library pickers, search, show → season → episode navigation, **Add** / **Add all** into a basket. Modes: `programs`, `show`, `movies`. |
+| `app/components/InsertDialog.tsx` | Insert programs (via the browser), commercial break, flex or redirect, before or after the selection. |
+| `app/components/ListsManager.tsx` | Filler-list and custom-show manager (create, rename, delete, edit contents through `LibraryBrowser`). |
+| `app/components/ChannelSettingsDialog.tsx` | Channel settings: name, number, group, guide flex title, guide minimum, start time, filler collections, filler cooldown, filler overlay. |
 | `app/components/MoveDialog.tsx` | The "Move or swap" dialog: move to time (with preview), move to position, and a searchable candidate list capped at `MAX_CANDIDATES` (200). |
 | `app/layout.tsx` | Hosted-only root layout: Geist fonts (`next/font/google`), metadata, OpenGraph. Not used by the companion build. |
 | `app/globals.css` | All styling (Mac OS 9 theme, rem-based scaling, responsive rules). Imports Tailwind. |
@@ -45,13 +49,16 @@ server implements those paths.
 | `lib/history.ts` | Undo/redo stack of whole-lineup snapshots (`record`, `undo`, `redo`, `MAX_HISTORY` = 200), plus `itemIdentity` and `rebaseHistory` for carrying history across a save. |
 | `lib/draftStore.ts` | Persistent per-channel drafts: `encodeDraft` / `decodeDraft` (lineup states as index arrays into the loaded lineup), `createDraftStore` (IndexedDB `tunarr-lineup/drafts`, in-memory fallback, at most `MAX_DRAFTS` = 60), shared via `draftStore()`. |
 | `lib/schedule.ts` | Slot-editing helpers: `sourceOptions`, `slotLabel`, `changeSlotSource`, `duplicateSlot`, `newSlotId` (v4 via `getRandomValues`), `shiftTimeSlots`, `slotProblems`, clock conversions, and types `Slot`, `SlotSchedule`, `SchedulePreview`. |
+| `lib/library.ts` | Library types (`MediaSource`, `LibraryItem`, `ContentProgram`, `ListSummary`, `ChannelSettings`) and helpers (`topLevelType`, `childType`, `toContentProgram`, `lineupEntry`, `itemLabel`). |
 | `lib/programInfo.ts` | `getProgram`, `programTitle`, `programDetail`, `programArtwork`. |
 | `lib/tunarrClient.ts` | Browser client for `/api/tunarr/*`: `checkHealth`, `tunarrApi`, `TunarrApiError`, `ConnectionState`. |
 | `lib/demoData.ts` | Demo channels and lineup (`demoChannels`, `demoProgramming()`, `demoDate`). |
 | `local/index.html`, `local/main.tsx` | Companion SPA entry: renders `<Home />` into `#root` under `StrictMode` and imports `app/globals.css`. |
 | `server/tunarrProxy.ts` | Framework-free proxy and validation: `handleTunarrApi`, `createProxyConfig`, `parseTunarrUrl`, validators, artwork passthrough. |
 | `server/nodeAdapter.ts` | Adapts Node `IncomingMessage`/`ServerResponse` to `handleTunarrApi` (`handleNodeApiRequest`, `isTunarrApiPath`). |
-| `server/slotSchedule.ts` | Slot-schedule rules: `buildEditedSchedule` (existing sources only, current settings kept, materialized fields stripped), `programPool` (port of Tunarr's `lineupItemAppearsInSchedule`), `slotSourceKey`, `validateSeed`. Pure, so `lib/` imports it too. |
+| `server/slotSchedule.ts` | Slot-schedule rules: `buildSchedule` (create, convert or edit; per-type settings allowlist; slot, filler and mid-roll validation; materialized fields stripped), `defaultSchedule`, `programPool` (port of Tunarr's `lineupItemAppearsInSchedule`, plus extra programs), `validateExtraPrograms`, `slotSourceKey`, `validateSeed`. Pure, so `lib/` imports it too. |
+| `server/content.ts` | Library, list and channel-settings routes: `matchContentRoute`, `handleContentRoute`, `sanitizeMediaSources`, `buildLibrarySearch`, `validateFillerListBody`, `validateCustomShowBody`, `channelSettings`, `validateChannelSettings`. |
+| `server/upstream.ts` | Shared upstream plumbing: `fetchUpstream`, `callTunarr` (GET/POST/PUT/DELETE), `UpstreamError`, `json`, `fail`. |
 | `server/lineupVersion.ts` | `programmingVersion(lineup, schedule)`: a non-cryptographic fingerprint (two cyrb53 hashes plus length), shared by the browser and the proxy for `If-Match`. |
 | `server/auth.ts` | Optional HTTP Basic sign-in: `createAuthConfig`, `isAuthorized`, `AUTH_CHALLENGE`. |
 | `server/app.ts` | `createLineupServer({ config, auth, staticRoot })`: request routing, static files, SPA fallback, security headers. |
@@ -166,17 +173,20 @@ per channel within this process:
 3. **Schedule saves.**
    - The requested type must match the current `schedule.type`, else `409 schedule_type_mismatch`.
    - `buildEditedSchedule(current.schedule, edit)` validates the slots and returns Tunarr's current schedule with only `slots` replaced (plus `timeZoneOffset` if it's a valid offset). Errors give `400 invalid_schedule`.
-   - The program list is computed server-side with `programPool(slots, current.lineup, current.programs)`: content and custom items already in the lineup that some slot draws from.
+   - The program list is computed server-side with `programPool(slots, current.lineup, current.programs, extraPrograms)`: content and custom items already in the lineup that some slot draws from, plus validated extra program ids (for example movies for a movie slot).
    - The proxy then posts `{type, schedule, programs, seed, discardCount}`.
 
 Guarantees:
 - **Between Lineup sessions,** the lock makes check-then-write atomic. Tested: two concurrent saves leave the second with a 412.
 - **Against Tunarr's own UI,** a write landing between the GET and the POST is not detected, because Tunarr's API has no conditional write.
 
-Tunarr's generator draws a slot's programs from its source (for example, all of
-a show's episodes in the library), plus the program pool. So editing slots
-never adds a source the schedule didn't already use, but it can schedule other
-episodes from those same shows.
+`buildSchedule` starts from the channel's current schedule when the type is
+unchanged, so fields Lineup doesn't edit (such as iteration groups and
+per-slot overrides) are kept. When creating or converting, it starts from
+`defaultSchedule(type)`, which uses Tunarr's editor defaults. Settings are
+limited to a per-type allowlist. Tunarr's generator draws a slot's programs
+from its source (for example, all of a show's episodes in the library) plus the
+program pool.
 
 ### Upstream call (`fetchUpstream`)
 
@@ -205,6 +215,25 @@ episodes from those same shows.
 `nodeAdapter.send` writes string or byte bodies with `content-length`. POST
 bodies are capped at `MAX_BODY_BYTES` (20 MiB, else `413`).
 
+### Library, lists and channel settings (`server/content.ts`)
+
+`handleTunarrApi` first tries `matchContentRoute` on the path below
+`/api/tunarr`. Matching routes get the same method allowlist, Origin check,
+no-query rule and JSON body parsing, then `handleContentRoute`.
+
+| Route | Methods | Upstream and rules |
+| --- | --- | --- |
+| `/media-sources` | GET | `GET /api/media-sources` → `sanitizeMediaSources` (id, name, type, mediaType, enabled libraries; `uri`, `username`, `userId` and `clientIdentifier` are dropped) |
+| `/library/search` | POST | `buildLibrarySearch` validates `{ mediaSourceId, libraryId?, text?, type?, parentId?, page?, limit? }` (UUIDs, `type` in `SEARCH_TYPES`, limit ≤ 100). It builds Tunarr's `type =` / `parent.id =` filter itself, and converts Lineup's 0-based page to Tunarr's 1-based page for free-text queries (`SearchProgramsCommand`). |
+| `/programs/:id/descendants` | GET | `GET /api/programs/:id/descendants`, capped at `MAX_LIST_ITEMS` |
+| `/filler-lists`, `/custom-shows` | GET, POST | List summaries (id, name, count, `synced`); create with `validateFillerListBody` (at least one full content program) or `validateCustomShowBody` (condensed content entries; sync fields null) |
+| `/filler-lists/:id`, `/custom-shows/:id` | PUT, DELETE | Update or delete. Custom-show updates re-read the show and re-send its sync settings, because Tunarr clears sync unless `enableSync` is set. |
+| `/filler-lists/:id/programs`, `/custom-shows/:id/programs` | GET | Contents |
+| `/smart-collections` | GET | `GET /api/smart_collections` → `{ id, name }` |
+| `/channels/:id/settings` | GET, PUT | `GET /api/channels/:id` → `channelSettings` (only `CHANNEL_SETTING_FIELDS`). PUT validates with `validateChannelSettings`, then under `withChannelLock` re-reads the channel, merges only the allowed fields, drops read-only fields (`programCount`, `sessions`, `fallback`, `transcoding`), and `PUT`s the whole channel. |
+
+`nodeAdapter` reads request bodies for POST and PUT (up to 20 MiB).
+
 ## 7. Client data flow (`app/page.tsx`)
 
 ### State
@@ -214,6 +243,7 @@ All state is local React state in `Home`. There is no context, store or browser 
 - **Connection and mode:** `mode` (`'live' | 'demo'`, starting `'live'`) and `connection` (`ConnectionState`).
 - **Data:** `channels`, `activeChannelId`, `programming`, `originalLineup` (the saved baseline) and `guide`.
 - **Selection and cursor:** `anchorIndex` and `selectedIndex` form a contiguous block (`normalizeBlock`). `cursorStart` records the start time of the focused row, which disambiguates repeats of the same item within a day.
+- **Dialogs for full editing:** `insertOpen`, `libraryPicker` (`{ purpose: 'insert' | 'slot-show' | 'movies', … }`), `listsOpen` (`'filler' | 'custom'`), `settingsOpen`, and `catalog` (custom shows, filler lists, smart collections and channels for slot sources).
 - **Editing:**
   - `history` (`lib/history.ts`); `grab` (`{ before, block }` while a block is picked up); `draggedIndex`.
   - `base` (`{ channelId, version, lineup }`): the lineup objects exactly as Tunarr returned them and their version. Every history snapshot is a permutation of `base.lineup`.
@@ -267,6 +297,9 @@ block (`followBlock`, which uses `occurrenceStart`).
 | Move to time | Move dialog (live preview via `previewTime`) | `moveToTime` → `moveBlockToTime`, which tries every insertion point against the real cycle and returns the exact resulting start |
 | Pick up / slide / drop | OK/Enter, ↑/↓, OK/Enter; inspector button; Edit menu | `pickUp` stores `grab`; `slideGrab` → `shiftBlock` without history; `drop` records one entry; `cancelGrab` restores `grab.before` |
 | Undo / Redo / Revert all | ⌘Z / ⇧⌘Z / Ctrl+Y, Edit menu, edit list | `undo` / `redo` (`lib/history.ts`); `revertAll` restores the baseline and clears history |
+| Insert | `I`, Edit menu, inspector, empty-lineup inspector | `InsertDialog` → `insertAt(where, items, label, meta)` → `insertItems`. Library programs come from `LibraryBrowser` via `pickFromLibrary` → `lineupEntry`; their metadata is merged into `programming.programs`. Breaks use `makeCommercialBreak` (flex with `fillerConfig`); also `makeFlex` and `makeRedirect`. |
+| Remove | `Delete`, Edit menu, inspector | `removeSelection` → `removeBlock` |
+| Change length | Inspector `LengthEditor` (flex, breaks, redirects) | `changeLength` → `setItemDuration` (returns a new item object) |
 
 ### Keyboard and remote
 
@@ -299,6 +332,12 @@ activate, and Escape/Back to close. Outside clicks close menus.
 
 ### Drafts (`lib/draftStore.ts`)
 
+Drafts store order as indices into the loaded lineup, followed by `extras`
+(inserted items, or items whose length changed) and `programs` (metadata for
+inserted programs). That way an insert survives a reload with its title.
+`rebaseHistory` keeps objects not present in the saved lineup, so a removal can
+still be undone after a save.
+
 - **Writing.** An effect writes the active channel's draft whenever `lineup`, `history` or `base` change in live mode. It skips writes while loading or grabbing, or when the lineup length doesn't match `base`. The draft is `encodeDraft(channelId, base.version, base.lineup, lineup, history, dirty)`, and is deleted when there's nothing to keep.
 - **Loading.** `loadProgramming` (without `rebase`) reads the stored draft.
   - **Same version:** `decodeDraft` restores the order and history, with a "Restored your unsaved changes" notice when the draft was dirty.
@@ -308,7 +347,12 @@ activate, and Escape/Back to close. Outside clicks close menus.
 
 ### Slot schedule editing
 
-1. **Open.** `openSlotEditor` (Channel menu, or the button in the generated-schedule warning) loads `tunarrApi.schedule(id)` and copies its slots into `slotEditor.draft`. `ScheduleEditor` edits the draft.
+1. **Open.** `openSlotEditor` (Channel menu, or the generated-schedule warning) loads `catalog`. For a channel with a schedule, it loads `tunarrApi.schedule(id)` into `slotEditor.draft` via `draftFromSchedule` (a `ScheduleDraftState`: type, settings, slots, extra movies). For a manual channel, it starts a new draft (`isNew`). `ScheduleEditor` edits the draft:
+   - type conversion with `convertDraft`
+   - settings and slots, with sources from `catalogOptions` and `showOption` (library shows)
+   - per-slot commercials (`SlotCommercials`)
+   - extra movies
+   - **Detach to manual lineup** (`detachToManual`), which saves the current base lineup as a manual lineup
 2. **Preview.** `previewSlots` calls `tunarrApi.previewSchedule(id, draft)` and switches to preview mode.
    - The timeline renders `scheduleForDay(null, preview.lineup, preview.startTime, date)` with `viewPrograms` (the programs merged with the preview's).
    - Rows are read-only, a sticky `.preview-bar` and the inspector offer save, edit and discard, and keyboard edits are disabled (Back discards).
@@ -397,7 +441,7 @@ bundle (`envPrefix`); none are used.
     - schedule proxy routes: preview routing, server-computed pool, 409/400/412 refusals
     - slot helpers
     - draft encoding and decoding, the IndexedDB store via `fake-indexeddb`, the memory fallback, `rebaseHistory` and version fingerprints
-  - `page.test.tsx` (jsdom): `Home` against a stateful `fakeCompanion()`. The fake enforces `If-Match` like the companion. Covers live loading, saves, 412 conflicts, remote slide and cancel, block moves, the Move dialog, menus, the on-air marker, export, drafts kept across channel switches and reloads, undo past a save, stale drafts dropped, the slot editor (only existing sources, preview then save with the seed, discard), demo guards, and no silent demo fallback.
+  - `page.test.tsx` (jsdom): `Home` against a stateful `fakeCompanion()`. The fake enforces `If-Match` like the companion. Covers live loading, saves, 412 conflicts, remote slide and cancel, block moves, the Move dialog, menus, the on-air marker, export, drafts kept across channel switches and reloads, undo past a save, stale drafts dropped, the slot editor (catalog sources, adding slots with commercials and mid-roll, creating a time-slot schedule for a manual channel, preview then save with the seed, discard), library inserts, commercial breaks, remove/length/undo, drafts with inserted items, filler-list creation, and channel filler settings, demo guards, and no silent demo fallback.
 - **`e2e/` (Playwright):**
   - `desk.spec.ts` runs at 1920×1080 against the built companion and `fake-tunarr.mjs`. The fake mimics Tunarr's guide window and provides `/__test/reset`, `/__test/state` and `/__test/edit-elsewhere` hooks.
   - It covers:

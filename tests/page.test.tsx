@@ -9,6 +9,10 @@ import { guideFor, mixedLineup, mixedPrograms } from './fixtures';
 
 type Reply = { status: number; body: unknown } | 'network-error';
 
+const FILLER_ID = 'f0000000-0000-4000-8000-0000000000f1';
+const CUSTOM_ID = 'c0000000-0000-4000-8000-0000000000c1';
+const LIBRARY_MOVIE = { uuid: 'a1b2c3d4-0000-4000-8000-0000000000d1', type: 'movie', title: 'Zulu Movie', year: 1999, duration: 90 * 60_000 };
+
 const today = () => {
   const now = new Date();
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
@@ -17,7 +21,12 @@ const today = () => {
 /** A stateful fake of the companion's /api/tunarr routes. */
 function fakeCompanion(options: { schedule?: { type: string; slots: unknown[]; [key: string]: unknown }; health?: Reply; programming?: Reply; lineupStatus?: number } = {}) {
   const startTime = dayRange(today()).from.getTime() - 60 * 60_000;
-  const state = { lineup: mixedLineup() as LineupItem[], previewedSlots: undefined as unknown };
+  const state = {
+    lineup: mixedLineup() as LineupItem[],
+    previewedSlots: undefined as unknown,
+    fillerLists: [{ id: FILLER_ID, name: 'Station Ads', contentCount: 3, synced: false }] as Array<{ id: string; name: string; contentCount?: number; synced: boolean }>,
+    settings: { id: 'chan-news', name: 'Newsroom', number: 3, fillerCollections: [] as unknown[], fillerRepeatCooldown: 30000, disableFillerOverlay: false, guideMinimumDuration: 30000, guideFlexTitle: '', groupTitle: 'tunarr', startTime },
+  };
   const channels = [
     { id: 'chan-movies', name: 'Movie Night', number: 7, startTime, duration: 140 * 60_000, programCount: 6 },
     { id: 'chan-news', name: 'Newsroom', number: 3, startTime, duration: 140 * 60_000, programCount: 6 },
@@ -32,6 +41,21 @@ function fakeCompanion(options: { schedule?: { type: string; slots: unknown[]; [
     if (!url.pathname.startsWith('/api/tunarr/')) throw new Error(`Unexpected request to ${url}`);
     if (url.pathname === '/api/tunarr/health') return reply(options.health ?? { status: 200, body: { status: 'connected', tunarrHost: 'tunarr:8000', channelCount: 2 } });
     if (url.pathname === '/api/tunarr/channels') return reply({ status: 200, body: channels });
+    // Library and lists (see server/content.ts for the real routes).
+    if (url.pathname === '/api/tunarr/media-sources') return reply({ status: 200, body: [{ id: 'src-1', name: 'Plex', type: 'plex', libraries: [{ id: 'lib-movies', name: 'Movies', mediaType: 'movies' }] }] });
+    if (url.pathname === '/api/tunarr/library/search') return reply({ status: 200, body: { results: [LIBRARY_MOVIE], page: 0, totalPages: 1, totalHits: 1 } });
+    if (url.pathname === '/api/tunarr/custom-shows') return reply({ status: 200, body: [{ id: CUSTOM_ID, name: 'Marathon', contentCount: 2, synced: false }] });
+    if (url.pathname === '/api/tunarr/smart-collections') return reply({ status: 200, body: [] });
+    if (url.pathname === '/api/tunarr/filler-lists' && method === 'GET') return reply({ status: 200, body: state.fillerLists });
+    if (url.pathname === '/api/tunarr/filler-lists' && method === 'POST') {
+      const created = JSON.parse(String(init!.body)) as { name: string; programs: unknown[] };
+      state.fillerLists.push({ id: 'f0000000-0000-4000-8000-0000000000f9', name: created.name, contentCount: created.programs.length, synced: false });
+      return reply({ status: 201, body: { id: 'f0000000-0000-4000-8000-0000000000f9' } });
+    }
+    if (url.pathname === '/api/tunarr/channels/chan-news/settings') {
+      if (method === 'PUT') Object.assign(state.settings, JSON.parse(String(init!.body)));
+      return reply({ status: 200, body: state.settings });
+    }
     const match = /^\/api\/tunarr\/channels\/([^/]+)\/(programming|lineup|schedule|schedule-preview)$/.exec(url.pathname);
     if (match?.[2] === 'schedule') return reply({ status: 200, body: { schedule: options.schedule } });
     if (match?.[2] === 'schedule-preview') {
@@ -498,14 +522,59 @@ describe('slot schedule editing', () => {
     expect(screen.queryByRole('region', { name: 'Schedule preview' })).toBeNull();
   });
 
-  it('only offers sources the schedule already uses', async () => {
+  it('offers existing sources, every catalog source, and library shows', async () => {
     fakeCompanion({ schedule });
     render(<Home />);
     await screen.findAllByText('Alpha Movie');
     fireEvent.click(screen.getByRole('button', { name: 'Edit slot schedule…' }));
     const dialog = await screen.findByRole('dialog', { name: /Slot schedule ·/ });
-    const select = within(dialog).getByLabelText('Slot 1 source') as unknown as HTMLSelectElement;
-    expect([...select.options].map((option) => option.text)).toEqual(['Bravo Show', 'Movies', 'Flex (open airtime)']);
+    await waitFor(() => expect([...(within(dialog).getByLabelText('Slot 1 source') as unknown as HTMLSelectElement).options].map((option) => option.text)).toContain('Custom show: Marathon'));
+    const texts = [...(within(dialog).getByLabelText('Slot 1 source') as unknown as HTMLSelectElement).options].map((option) => option.text);
+    expect(texts).toEqual(expect.arrayContaining(['Bravo Show', 'Movies', 'Custom show: Marathon', 'Filler list: Station Ads', 'Redirect to CH 7 Movie Night', 'Flex (open airtime)', 'Another show from the library…']));
+    expect(texts).not.toContain('Redirect to CH 3 Newsroom');
+  });
+
+  it('adds a slot with commercials and saves its settings', async () => {
+    const { requests } = fakeCompanion({ schedule });
+    render(<Home />);
+    await screen.findAllByText('Alpha Movie');
+    fireEvent.click(screen.getByRole('button', { name: 'Edit slot schedule…' }));
+    const dialog = await screen.findByRole('dialog', { name: /Slot schedule ·/ });
+    await waitFor(() => expect(within(within(dialog).getByLabelText('Add a slot')).getByRole('option', { name: 'Custom show: Marathon' })).toBeTruthy());
+    fireEvent.change(within(dialog).getByLabelText('Add a slot'), { target: { value: `custom-show:${CUSTOM_ID}` } });
+    expect(within(dialog).getByLabelText('Slot 3 source')).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Commercials for slot 3' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add commercials' }));
+    fireEvent.click(within(dialog).getByLabelText('Mid-roll breaks inside programs'));
+    fireEvent.click(within(within(dialog).getByRole('group', { name: 'Where commercial list 1 plays' })).getByLabelText('Mid-roll breaks'));
+    fireEvent.change(within(dialog).getByDisplayValue('By weight'), { target: { value: 'none' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Preview lineup' }));
+    fireEvent.click(within(await screen.findByRole('region', { name: 'Schedule preview' })).getByRole('button', { name: 'Save schedule' }));
+    await waitFor(() => expect(count(requests, 'POST', '/api/tunarr/channels/chan-news/programming')).toBe(1));
+    const body = requests.find((r) => r.method === 'POST' && r.path.endsWith('/programming'))!.body as { type: string; schedule: { settings: { randomDistribution: string }; slots: Array<Record<string, unknown>> } };
+    expect(body.type).toBe('random');
+    expect(body.schedule.settings.randomDistribution).toBe('none');
+    expect(body.schedule.slots[2]).toMatchObject({ type: 'custom-show', customShowId: CUSTOM_ID, weight: 1, filler: [{ fillerListId: FILLER_ID, types: ['pre', 'mid'] }], midRoll: { maxBreaks: 3 } });
+    expect(body.schedule.slots[2].id).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it('creates a slot schedule for a manual channel', async () => {
+    const { requests } = fakeCompanion();
+    render(<Home />);
+    await screen.findAllByText('Alpha Movie');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Channel' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /Create Slot Schedule/ }));
+    const dialog = await screen.findByRole('dialog', { name: /New slot schedule ·/ });
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'Time slots' }));
+    await waitFor(() => expect(within(within(dialog).getByLabelText('Add a slot')).getByRole('option', { name: 'Movies' })).toBeTruthy());
+    fireEvent.change(within(dialog).getByLabelText('Add a slot'), { target: { value: 'movie' } });
+    fireEvent.change(within(dialog).getByLabelText('Slot 1 start'), { target: { value: '20:00:00' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Preview lineup' }));
+    fireEvent.click(within(await screen.findByRole('region', { name: 'Schedule preview' })).getByRole('button', { name: 'Save schedule' }));
+    await waitFor(() => expect(count(requests, 'POST', '/api/tunarr/channels/chan-news/programming')).toBe(1));
+    const body = requests.find((r) => r.method === 'POST' && r.path.endsWith('/programming'))!.body as { type: string; schedule: { slots: Array<Record<string, unknown>> } };
+    expect(body.type).toBe('time');
+    expect(body.schedule.slots).toEqual([expect.objectContaining({ type: 'movie', startTime: 20 * 3_600_000 })]);
   });
 
   it('discards a preview with Back and leaves Tunarr untouched', async () => {
@@ -518,5 +587,118 @@ describe('slot schedule editing', () => {
     fireEvent.keyDown(document.body, { key: 'Escape' });
     expect(screen.queryByRole('region', { name: 'Schedule preview' })).toBeNull();
     expect(count(requests, 'POST', '/api/tunarr/channels/chan-news/programming')).toBe(0);
+  });
+});
+
+describe('full lineup editing', () => {
+  const posted = (requests: ReturnType<typeof fakeCompanion>['requests']) => (requests.find((r) => r.method === 'POST' && r.path.endsWith('/programming'))!.body as { lineup: LineupItem[] }).lineup;
+
+  it('inserts programs from the library after the selection', async () => {
+    const { requests } = fakeCompanion();
+    render(<Home />);
+    await screen.findAllByText('Alpha Movie');
+    fireEvent.click(screen.getByRole('button', { name: 'Insert…' }));
+    const insert = await screen.findByRole('dialog', { name: 'Insert into the lineup' });
+    fireEvent.click(within(insert).getByRole('button', { name: 'Browse library…' }));
+    const library = await screen.findByRole('dialog', { name: 'Insert programs' });
+    fireEvent.click(await within(library).findByRole('button', { name: 'Add Zulu Movie (1999)' }));
+    fireEvent.click(within(library).getByRole('button', { name: 'Insert 1' }));
+    expect(await screen.findByText('Inserted “Zulu Movie”')).toBeTruthy();
+    expect(screen.getAllByText('Zulu Movie').length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole('button', { name: 'Save lineup' }));
+    await waitFor(() => expect(count(requests, 'POST', '/api/tunarr/channels/chan-news/programming')).toBe(1));
+    expect(posted(requests).slice(0, 2)).toEqual([mixedLineup()[0], { type: 'content', id: LIBRARY_MOVIE.uuid, duration: LIBRARY_MOVIE.duration }]);
+  });
+
+  it('inserts a commercial break that plays from filler lists', async () => {
+    const { requests } = fakeCompanion();
+    render(<Home />);
+    await screen.findAllByText('Alpha Movie');
+    fireEvent.keyDown(document.body, { key: 'i' });
+    const insert = await screen.findByRole('dialog', { name: 'Insert into the lineup' });
+    fireEvent.click(within(insert).getByRole('radio', { name: 'Commercial break' }));
+    fireEvent.click(await within(insert).findByLabelText(/Station Ads/));
+    fireEvent.change(within(insert).getByLabelText('Length minutes'), { target: { value: '3' } });
+    fireEvent.click(within(insert).getByRole('radio', { name: /Before/ }));
+    fireEvent.click(within(insert).getByRole('button', { name: 'Insert' }));
+    expect(await screen.findByText('Inserted a commercial break')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Save lineup' }));
+    await waitFor(() => expect(count(requests, 'POST', '/api/tunarr/channels/chan-news/programming')).toBe(1));
+    expect(posted(requests)[0]).toEqual({ type: 'flex', duration: 3 * 60_000, fillerConfig: { fillerListIds: [FILLER_ID], fillerRepeatCooldownMs: 0, origin: 'flex' } });
+  });
+
+  it('removes with Delete, changes a flex length, and undoes', async () => {
+    const { requests } = fakeCompanion();
+    render(<Home />);
+    await screen.findAllByText('Alpha Movie');
+    // The fixture's flex entry plays from filler lists, so it is shown as a commercial break.
+    const flexRow = [...document.querySelectorAll<HTMLButtonElement>('.program')].find((row) => row.textContent?.includes('Commercial break'))!;
+    fireEvent.click(flexRow);
+    fireEvent.change(screen.getByLabelText('Length minutes'), { target: { value: '25' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+    expect(screen.getByText('Changed “Commercial break” to 0:25:00')).toBeTruthy();
+    const alpha = [...document.querySelectorAll<HTMLButtonElement>('.program')].find((row) => row.textContent?.includes('Alpha Movie'))!;
+    fireEvent.click(alpha);
+    fireEvent.keyDown(alpha, { key: 'Delete' });
+    expect(screen.getByText('Removed “Alpha Movie”')).toBeTruthy();
+    fireEvent.click(screen.getAllByRole('button', { name: 'Undo' })[0]);
+    fireEvent.click(screen.getByRole('button', { name: 'Save lineup' }));
+    await waitFor(() => expect(count(requests, 'POST', '/api/tunarr/channels/chan-news/programming')).toBe(1));
+    expect(posted(requests).map((item) => [item.type, item.duration])).toEqual(mixedLineup().map((item) => [item.type, item.type === 'flex' ? 25 * 60_000 : item.duration]));
+  });
+
+  it('keeps inserted programs, with their titles, in a draft across a reload', async () => {
+    fakeCompanion();
+    const first = render(<Home />);
+    await screen.findAllByText('Alpha Movie');
+    fireEvent.click(screen.getByRole('button', { name: 'Insert…' }));
+    fireEvent.click(within(await screen.findByRole('dialog', { name: 'Insert into the lineup' })).getByRole('button', { name: 'Browse library…' }));
+    const library = await screen.findByRole('dialog', { name: 'Insert programs' });
+    fireEvent.click(await within(library).findByRole('button', { name: 'Add Zulu Movie (1999)' }));
+    fireEvent.click(within(library).getByRole('button', { name: 'Insert 1' }));
+    await waitFor(async () => expect((await draftStore().get('chan-news'))?.extras).toHaveLength(1));
+    first.unmount();
+    render(<Home />);
+    expect(await screen.findByText(/Restored your unsaved changes/)).toBeTruthy();
+    expect(screen.getAllByText('Zulu Movie').length).toBeGreaterThan(0);
+  });
+});
+
+describe('lists and channel settings', () => {
+  it('creates a filler list from library programs', async () => {
+    const { requests } = fakeCompanion();
+    render(<Home />);
+    await screen.findAllByText('Alpha Movie');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Lists' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /Filler Lists/ }));
+    const manager = await screen.findByRole('dialog', { name: /Filler lists/ });
+    expect(await within(manager).findByText('Station Ads')).toBeTruthy();
+    fireEvent.click(within(manager).getByRole('button', { name: 'New filler list' }));
+    fireEvent.change(within(manager).getByLabelText('List name'), { target: { value: 'Bumpers' } });
+    fireEvent.click(within(manager).getByRole('button', { name: 'Add programs…' }));
+    const library = await screen.findByRole('dialog', { name: 'Add to Bumpers' });
+    fireEvent.click(await within(library).findByRole('button', { name: 'Add Zulu Movie (1999)' }));
+    fireEvent.click(within(library).getByRole('button', { name: 'Add 1' }));
+    fireEvent.click(within(manager).getByRole('button', { name: 'Create filler list' }));
+    await waitFor(() => expect(count(requests, 'POST', '/api/tunarr/filler-lists')).toBe(1));
+    expect(requests.find((r) => r.method === 'POST' && r.path === '/api/tunarr/filler-lists')!.body).toEqual({ name: 'Bumpers', programs: [{ type: 'content', id: LIBRARY_MOVIE.uuid, duration: LIBRARY_MOVIE.duration, program: LIBRARY_MOVIE }] });
+    expect(await within(manager).findByText('Bumpers', { selector: 'b' })).toBeTruthy();
+  });
+
+  it('adds channel-wide commercials for flex time', async () => {
+    const { requests, state } = fakeCompanion();
+    render(<Home />);
+    await screen.findAllByText('Alpha Movie');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Channel' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /Channel Settings/ }));
+    const dialog = await screen.findByRole('dialog', { name: 'Channel settings' });
+    fireEvent.click(await within(dialog).findByRole('button', { name: 'Add filler list' }));
+    fireEvent.change(within(dialog).getByLabelText('Filler list 1 weight'), { target: { value: '5' } });
+    fireEvent.change(within(dialog).getByLabelText('Filler list 1 cooldown minutes'), { target: { value: '10' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save settings' }));
+    await waitFor(() => expect(count(requests, 'PUT', '/api/tunarr/channels/chan-news/settings')).toBe(1));
+    expect(requests.find((r) => r.method === 'PUT')!.body).toEqual({ fillerCollections: [{ id: FILLER_ID, weight: 5, cooldownSeconds: 600 }] });
+    expect(state.settings.fillerCollections).toHaveLength(1);
+    expect(await screen.findByText('Channel settings saved to Tunarr')).toBeTruthy();
   });
 });

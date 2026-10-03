@@ -111,6 +111,13 @@ export function changeSlotSource(slot: Slot, option: SourceOption): Slot {
   if (NEEDS_ID.has(next.type)) next.id = typeof slot.id === 'string' && NEEDS_ID.has(slot.type) ? slot.id : newSlotId();
   else delete next.id;
   if (next.type === 'flex') for (const field of SOURCE_FIELDS) delete next[field];
+  // Commercials belong to the slot being edited, not to the slot the new source was copied from.
+  delete next.filler;
+  delete next.midRoll;
+  if (['movie', 'show', 'custom-show', 'smart-collection'].includes(next.type)) {
+    if (slot.filler !== undefined) next.filler = slot.filler;
+    if (slot.midRoll !== undefined) next.midRoll = slot.midRoll;
+  }
   return next;
 }
 
@@ -163,4 +170,123 @@ export function slotProblems(schedule: Pick<SlotSchedule, 'type' | 'period'>, sl
     if (spec?.type === 'fixed' && !(Number(spec.durationMs) > 0)) return 'Fixed length must be longer than 0.';
     return null;
   });
+}
+
+// ------------------------------------------------------------- full editing
+
+/** The schedule being edited: its type, settings, slots, and extra pool programs. */
+export type ScheduleDraftState = {
+  type: 'time' | 'random';
+  settings: Record<string, unknown>;
+  slots: Slot[];
+  /** Movies added to the pool movie slots draw from (not already on the channel). */
+  extraMovies: Array<{ id: string; title: string }>;
+};
+
+/** Settings Lineup edits per schedule type (the companion validates the same list). */
+export const SETTING_KEYS: Record<'time' | 'random', string[]> = {
+  time: ['period', 'flexPreference', 'padMs', 'latenessMs', 'maxDays', 'overflow'],
+  random: ['randomDistribution', 'flexPreference', 'padMs', 'padStyle', 'maxDays'],
+};
+
+export const DEFAULT_SETTINGS: Record<'time' | 'random', Record<string, unknown>> = {
+  time: { period: 'day', flexPreference: 'distribute', padMs: 1, latenessMs: 0, maxDays: 365, overflow: { type: 'duration', maxMs: 0 } },
+  random: { randomDistribution: 'uniform', flexPreference: 'distribute', padMs: 1, padStyle: 'slot', maxDays: 365 },
+};
+
+/** Same choices Tunarr's slot editors offer. */
+export const PAD_OPTIONS: Array<[number, string]> = [[1, 'Do not pad'], [5 * 60_000, ':00, :05, :10 …'], [10 * 60_000, ':00, :10, :20 …'], [15 * 60_000, ':00, :15, :30, :45'], [30 * 60_000, ':00, :30'], [60 * 60_000, 'On the hour']];
+export const LATENESS_OPTIONS: Array<[number, string]> = [[0, 'Do not allow'], [5 * 60_000, '5 minutes'], [10 * 60_000, '10 minutes'], [15 * 60_000, '15 minutes'], [30 * 60_000, '30 minutes'], [60 * 60_000, '1 hour'], [2 * 3_600_000, '2 hours'], [4 * 3_600_000, '4 hours'], [8 * 3_600_000, '8 hours']];
+export const FILLER_POSITIONS: Array<[string, string]> = [['pre', 'Before each program'], ['post', 'After each program'], ['head', 'Start of slot'], ['tail', 'End of slot'], ['mid', 'Mid-roll breaks'], ['fallback', 'Fallback']];
+export const FILLER_ORDER_LABELS: Record<string, string> = { shuffle_prefer_short: 'Shuffle, prefer short', shuffle_prefer_long: 'Shuffle, prefer long', uniform: 'Uniform shuffle' };
+
+/** Starts a draft from a channel's current schedule, or a new one of `type`. */
+export function draftFromSchedule(schedule: SlotSchedule | null | undefined, type: 'time' | 'random' = 'random'): ScheduleDraftState {
+  const kind = schedule?.type ?? type;
+  const settings: Record<string, unknown> = { ...DEFAULT_SETTINGS[kind] };
+  if (schedule) for (const key of SETTING_KEYS[kind]) if (schedule[key] !== undefined) settings[key] = schedule[key];
+  return { type: kind, settings, slots: structuredClone(schedule?.slots ?? []), extraMovies: [] };
+}
+
+/** Converts a draft between random and time slots, keeping what each slot plays. */
+export function convertDraft(draft: ScheduleDraftState, type: 'time' | 'random'): ScheduleDraftState {
+  if (draft.type === type) return draft;
+  const settings: Record<string, unknown> = { ...DEFAULT_SETTINGS[type] };
+  for (const key of ['flexPreference', 'maxDays']) if (draft.settings[key] !== undefined) settings[key] = draft.settings[key];
+  if (Number(draft.settings.padMs) >= 1) settings.padMs = draft.settings.padMs;
+  const count = Math.max(draft.slots.length, 1);
+  const step = Math.max(60_000, Math.floor(DAY_MS / count / 60_000) * 60_000);
+  const slots = draft.slots.map((slot, index) => {
+    const next: Slot = { ...slot };
+    if (type === 'time') {
+      for (const field of ['weight', 'cooldownMs', 'durationSpec', 'index', 'periodMs']) delete next[field];
+      next.startTime = (index * step) % DAY_MS;
+    } else {
+      for (const field of ['startTime', 'overflow', 'latenessMs']) delete next[field];
+      Object.assign(next, { weight: 1, cooldownMs: 0, durationSpec: { type: 'dynamic', programCount: 1 } });
+    }
+    return next;
+  });
+  return { ...draft, type, settings, slots };
+}
+
+/** Everything a slot can play: shows used so far, plus the full catalogs. */
+export type SlotCatalog = {
+  customShows: Array<{ id: string; name: string }>;
+  fillerLists: Array<{ id: string; name: string }>;
+  smartCollections: Array<{ id: string; name: string }>;
+  channels: Array<{ id: string; name: string; number: number }>;
+};
+
+/** Source choices for a slot: existing sources first, then everything in the catalog. */
+export function catalogOptions(slots: Slot[], catalog: SlotCatalog, currentChannelId?: string): SourceOption[] {
+  const options = new Map<string, SourceOption>();
+  const add = (option: SourceOption) => { if (!options.has(option.key)) options.set(option.key, option); };
+  for (const option of sourceOptions(slots)) if (option.key !== 'flex') add(option);
+  add({ key: 'movie', label: 'Movies', template: { type: 'movie', order: 'shuffle', direction: 'asc' } });
+  for (const show of catalog.customShows) add({ key: `custom-show:${show.id}`, label: `Custom show: ${show.name}`, template: { type: 'custom-show', customShowId: show.id, customShow: { name: show.name }, order: 'next', direction: 'asc' } });
+  for (const list of catalog.fillerLists) add({ key: `filler:${list.id}`, label: `Filler list: ${list.name}`, template: { type: 'filler', fillerListId: list.id, fillerList: { name: list.name }, order: 'shuffle_prefer_short', durationWeighting: 'linear', decayFactor: 0.5, recoveryFactor: 0.05 } });
+  for (const collection of catalog.smartCollections) add({ key: `smart-collection:${collection.id}`, label: `Smart collection: ${collection.name}`, template: { type: 'smart-collection', smartCollectionId: collection.id, smartCollection: { name: collection.name }, order: 'shuffle', direction: 'asc' } });
+  for (const channel of catalog.channels) {
+    if (channel.id === currentChannelId) continue;
+    add({ key: `redirect:${channel.id}`, label: `Redirect to CH ${channel.number} ${channel.name}`, template: { type: 'redirect', channelId: channel.id, channelName: channel.name, channel: { name: channel.name } } });
+  }
+  add({ key: 'flex', label: slotLabel({ type: 'flex' }), template: { type: 'flex' } });
+  return [...options.values()];
+}
+
+/** The source option for a show picked from the library. */
+export const showOption = (show: { id: string; title: string }): SourceOption => ({
+  key: `show:${show.id}`,
+  label: show.title,
+  template: { type: 'show', showId: show.id, show: { title: show.title }, order: 'next', direction: 'asc', seasonFilter: [], seasonExcludeFilter: [] },
+});
+
+/** A new slot playing `option`, timed after the existing ones. */
+export function newSlot(draft: ScheduleDraftState, option: SourceOption): Slot {
+  const base = changeSlotSource({ type: 'flex' }, option);
+  if (draft.type === 'time') {
+    const taken = new Set(draft.slots.map((slot) => Number(slot.startTime)));
+    const last = draft.slots.reduce((max, slot) => Math.max(max, Number(slot.startTime) || 0), -3_600_000);
+    let start = (last + 3_600_000) % periodMs({ type: 'time', period: draft.settings.period as 'day' | 'week' });
+    while (taken.has(start)) start = (start + 60_000) % periodMs({ type: 'time', period: draft.settings.period as 'day' | 'week' });
+    return { ...base, startTime: start };
+  }
+  return { ...base, weight: 1, cooldownMs: 0, durationSpec: { type: 'dynamic', programCount: 1 } };
+}
+
+export const slotCanHaveCommercials = (slot: Slot) => ['movie', 'show', 'custom-show', 'smart-collection'].includes(slot.type);
+
+export type SlotFiller = { types: string[]; fillerListId: string; fillerOrder?: string };
+export type MidRoll = { breakRule?: { type: string; intervalMs?: number }; intervalMs?: number; maxBreaks: number; minProgramDurationMs: number; breakDurationMs?: number; strategy?: string; [key: string]: unknown };
+
+export const DEFAULT_MID_ROLL: MidRoll = { breakRule: { type: 'fixed_interval', intervalMs: 10 * 60_000 }, maxBreaks: 3, minProgramDurationMs: 20 * 60_000, breakDurationMs: 2 * 60_000, strategy: 'eager' };
+
+/** Short summary of a slot's commercials for its row. */
+export function commercialSummary(slot: Slot, fillerNames: Map<string, string>) {
+  const fillers = Array.isArray(slot.filler) ? (slot.filler as SlotFiller[]) : [];
+  const parts = fillers.map((filler) => `${fillerNames.get(filler.fillerListId) ?? 'Filler'} (${filler.types.join(', ')})`);
+  const mid = slot.midRoll as MidRoll | undefined;
+  if (mid) parts.push(`breaks every ${Math.round((mid.breakRule?.intervalMs ?? mid.intervalMs ?? 0) / 60_000)} min`);
+  return parts.join(' · ');
 }

@@ -34,7 +34,7 @@ function send(res: ServerResponse, status: number, headers: Record<string, strin
 export async function handleNodeApiRequest(req: IncomingMessage, res: ServerResponse, config: ProxyConfig) {
   const method = req.method ?? 'GET';
   let body: string | undefined;
-  if (method === 'POST') {
+  if (method === 'POST' || method === 'PUT') {
     const raw = await readBody(req, MAX_BODY_BYTES);
     if (raw === null) {
       send(res, 413, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }, JSON.stringify({ error: { code: 'payload_too_large', message: 'Request body is too large.' } }));

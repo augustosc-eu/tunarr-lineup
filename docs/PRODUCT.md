@@ -2,15 +2,19 @@
 
 ## What it is
 
-Tunarr Lineup is a focused **programming desk** for the **order of programs
-already on a [Tunarr](https://tunarr.com) channel**. Tunarr builds live-TV-style channels
-from a media library. Lineup shows a channel's schedule for any day and lets
-the user move or swap programs, then saves the new order back to Tunarr.
+Tunarr Lineup is a **programming desk** for [Tunarr](https://tunarr.com)
+channels. Tunarr builds live-TV-style channels from media libraries. Lineup
+shows a channel's schedule for any day and lets the user:
+- arrange, insert and remove programs
+- build and edit slot schedules
+- add commercials and filler
+- manage filler lists, custom shows and programming-related channel settings
 
-It is not a library browser or a channel builder. It never adds media, creates
-programming, or edits channel settings. The UI states this directly in the
-sidebar: "No library clutter. This view only changes programs already
-assigned to a channel." (`app/page.tsx`).
+Everything is saved through Tunarr's own API.
+
+It works only with media Tunarr has already indexed. It doesn't add media
+sources, scan libraries, change transcoding or streaming, or create and delete
+channels. Those stay in Tunarr's own interface.
 
 The interface imitates classic Mac OS 9: platinum window chrome, striped title
 bars, bevelled buttons, Geneva/Charcoal-style type. The visual identity is
@@ -18,7 +22,7 @@ deliberate (see `docs/DECISIONS.md`).
 
 ## Who it serves
 
-People who self-host Tunarr and want to rearrange an existing lineup. The
+People who self-host Tunarr and program their channels like a broadcaster. The
 repository owner runs it on a
 **television** and views it from a distance, which shapes the typography
 (`app/globals.css`: "about 24px on a 1080p TV viewed from the couch").
@@ -73,8 +77,7 @@ In every non-connected case the user can **Check again** or choose **Use demo da
 
 ### 3. Rearrange
 
-All of these are limited to items already in the lineup. A selection is one
-program or a **block**: Shift-click, or Shift+↑/↓, selects a contiguous run.
+A selection is one program or a **block**: Shift-click, or Shift+↑/↓, selects a contiguous run.
 
 - **↑ Earlier / ↓ Later** (inspector or Edit menu): slide the selection past its neighbour.
 - **Pick up to slide** (OK/Enter on a row):
@@ -102,21 +105,44 @@ Edits mark the lineup unsaved:
 - **After a successful save,** the app re-reads programming and the visible day from Tunarr and refreshes the channel list.
 - **On failure,** the error appears in a toast ("Not saved: …") and the unsaved changes are kept.
 
-### 5. Edit a slot schedule
+### 4a. Insert, remove and change lengths
 
-For channels Tunarr generates from a slot schedule (most of the owner's channels use random slots):
+- **Insert…** (`I`, Edit menu, inspector): choose where (before or after the selection) and what:
+  - **Programs from the library:** browse a media source and library, search, open a show or season, then add single items or **Add all**. Picks collect in a basket; **Insert N** adds them in order.
+  - **Commercial break:** flex time of a set length, filled from chosen filler lists, with an optional repeat cooldown.
+  - **Flex time** or a **redirect** to another channel, of a set length.
+- **Remove** (`Delete`, Edit menu, inspector) takes the selection out of the lineup.
+- **Length:** flex time, commercial breaks and redirects show a length editor in the inspector.
+- **Saving:** inserted items are kept in the draft with their titles, and saved like any other edit. Tunarr validates that every program exists.
 
-1. Open **Edit slot schedule…** from the generated-schedule panel or the Channel menu.
-2. Adjust the slots:
-   - **Random slots:** what each slot plays (any source the schedule already uses, or flex), weight (with each slot's share; shown as "equal" for uniform distribution), cooldown, length (number of programs or minutes) and order. Slots can be reordered, duplicated or removed.
-   - **Time slots:** start time (and day, for weekly schedules), source and order, plus "shift every slot" by ±5 or ±15 minutes.
+### 4b. Filler lists, custom shows and channel commercials
+
+- **Lists → Filler Lists… / Custom Shows…:** create, rename, delete, and add or remove programs (custom shows can also be reordered). Filler lists are where commercials, bumpers and station IDs live. A filler list needs at least one program. Custom shows synced from a Plex playlist keep their sync.
+- **Channel → Channel Settings…:** name, number, group, guide title for flex time, minimum guide entry length, lineup start time (shifts the whole schedule, with a warning), and **commercials during flex time** (filler lists with weight, share and cooldown; a repeat cooldown; and whether to hide the watermark during filler).
+
+### 5. Edit or create a slot schedule
+
+For channels Tunarr generates from a slot schedule (most of the owner's
+channels use random slots), and for manual channels that should get one:
+
+1. Open **Edit slot schedule…** (or **Create Slot Schedule…**) from the generated-schedule panel or the Channel menu.
+2. Choose **Random slots** or **Time slots** (switching converts the slots), and set the schedule:
+   - **Random:** how slots are picked (evenly, by weight, in order), pad style.
+   - **Time:** repeat daily or weekly, late start allowed, running over.
+   - **Both:** start-time padding, where flex goes, days to generate.
+3. Adjust the slots:
+   - **Sources:** any slot can play a show (from the library), movies, a custom show, a filler list, a smart collection, a redirect, or flex. **Add a slot that plays…** adds one.
+   - **Random slots:** weight (with share, or "equal"), cooldown, length (programs or minutes), order; reorder, copy or remove.
+   - **Time slots:** start time (and day, for weekly schedules), source, order, plus "shift every slot".
+   - **Ads** on a show, movie, custom-show or smart-collection slot: filler lists playing before or after each program, at the slot's start or end, as fallback, or as **mid-roll breaks** (every N minutes, break length, a maximum count, only in programs longer than N minutes).
+   - **Movie pool:** movie slots draw from the channel's movies; **Add movies…** adds more from the library. They're used on save; Tunarr's preview only uses movies already on the channel.
 
    Problems Tunarr would reject (overlapping start times, negative weights) are flagged per slot.
 3. **Preview lineup** regenerates the lineup in Tunarr without saving and shows it in the timeline, with a pinned preview bar. Browse any day, then **Save schedule**, **Edit slots** or **Discard preview** (also Back).
 4. **Save schedule** uses the preview's random seed and reports whether Tunarr's saved result matches the preview. The lineup's edit list starts fresh, because the lineup was regenerated.
 
-Schedule-wide settings (padding, lateness, distribution, days generated) and new
-sources can't be changed from Lineup.
+**Detach to manual lineup** keeps today's lineup as a manual lineup and drops
+the schedule.
 
 ### 6. Export a program log
 
@@ -166,8 +192,8 @@ The menus can also be operated with the arrows, OK and Back.
 ## Out of scope (as built)
 
 The code does not implement:
-- adding or removing programs
-- editing channel settings, schedule-wide slot settings, or filler/mid-roll configuration; adding new sources to a slot schedule; creating or converting schedules
-- library browsing
+- adding media sources, scanning libraries, or changing transcoding, streaming, watermarks or offline-screen settings
+- creating or deleting channels
+- per-season filters on show slots, time-slot per-slot padding/lateness overrides, slot iteration groups (existing ones are kept), and smart-collection authoring
 - user accounts or roles beyond the single optional password
-- syncing drafts between devices (drafts live in each browser)
+- syncing drafts between devices (drafts live in each browser), or persisting slot-schedule drafts across reloads

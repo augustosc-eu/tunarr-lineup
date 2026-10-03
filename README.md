@@ -1,11 +1,10 @@
 # Tunarr Lineup
 
 A Mac OS 9–style programming desk for the channels on your
-[Tunarr](https://tunarr.com) server. Pick a channel, jump to a date, then
-rearrange what's already scheduled and save it back to Tunarr. Lineup only
-rearranges items that are already in a channel; it never adds media or
-programming. It is designed to be driven from a TV with a remote as well as
-with a mouse and keyboard.
+[Tunarr](https://tunarr.com) server. Pick a channel and a date, then arrange,
+insert and remove programs, build slot schedules, and add commercials and
+filler, all saved through Tunarr's own API. It is designed to be driven from a
+TV with a remote as well as with a mouse and keyboard.
 
 ## Programming desk features
 
@@ -24,13 +23,28 @@ with a mouse and keyboard.
   - The edit list carries over a save, so a save can be undone and saved again.
   - Channels with unsaved work are marked "unsaved" in the channel list.
 - **Slot schedules.** For channels Tunarr generates from a random-slot or time-slot schedule, **Channel → Edit Slot Schedule…** opens the slots.
-  - **Random slots:** change the source (one the schedule already uses), weight, cooldown, length and order; reorder, duplicate or remove slots.
+  - **Random slots:** change the source, weight, cooldown, length and order; reorder, duplicate or remove slots.
   - **Time slots:** change start times and shift every slot at once.
   - **Preview lineup** shows the regenerated lineup in the timeline. **Save schedule** saves it with the preview's random seed and reports any difference from the preview.
 - **Safe saving.**
   - **Conflict check:** every save says which version of the channel it was based on (`If-Match`). The companion checks that version and writes while holding a per-channel lock. If the channel changed in the meantime, nothing is saved.
   - **Remaining gap:** this fully closes the gap between Lineup sessions. Against edits made in Tunarr's own UI, it leaves a window of a few milliseconds (Tunarr has no conditional save of its own).
   - **Generated schedules:** channels driven by a slot or time schedule ask for confirmation first.
+- **Full lineup editing.** **Edit → Insert…** (or `I`) adds, before or after the selection:
+  - programs from your libraries: movies, episodes, whole seasons or shows, other videos
+  - commercial breaks (flex time filled from filler lists)
+  - flex time
+  - redirects to another channel
+
+  **Remove** (or `Delete`) takes items out. Flex, breaks and redirects have an adjustable length in the inspector. Every edit is in the edit list and the stored draft.
+- **Library browser.** Browse or search any media source and library Tunarr has indexed (Plex, Jellyfin, Emby, local folders), and drill into shows and seasons.
+- **Commercials and filler.**
+  - **Lists → Filler Lists…** creates and edits filler lists (commercials, bumpers, station IDs). **Lists → Custom Shows…** manages custom shows.
+  - **Channel → Channel Settings…** sets which filler lists play during a channel's flex time (weights and cooldowns), plus the channel's name, number, group, guide flex title and start time.
+  - Slots can carry their own commercials: before or after each program, at the start or end of the slot, or as mid-roll breaks inside programs.
+- **Slot schedules.**
+  - **Channel → Create / Edit Slot Schedule…** builds a random- or time-slot schedule from any source: shows from the library, movies, custom shows, filler lists, smart collections, or redirects to other channels.
+  - You can change every schedule setting, convert between random and time slots, add movies to the movie pool, or **Detach to manual lineup**.
 - **Program log.** **File → Export Program Log…** downloads the visible day as CSV.
 - **Artwork** is loaded through the companion, so the browser never contacts Tunarr or your media server.
 - **Pull-down menus** (File, Edit, View, Channel, Help) work with the mouse, the keyboard, or a remote.
@@ -75,6 +89,13 @@ accident.
 | `GET /api/tunarr/channels/:id/lineup?from=…&to=…` | `GET {TUNARR_URL}/api/channels/:id/lineup` |
 | `GET /api/tunarr/channels/:id/schedule` | `GET {TUNARR_URL}/api/channels/:id/schedule` (slot schedule with show and collection names) |
 | `POST /api/tunarr/channels/:id/schedule-preview` | `POST {TUNARR_URL}/api/channels/:id/schedule-slots` or `/schedule-time-slots` (generates a lineup; saves nothing) |
+| `GET /api/tunarr/media-sources` | `GET {TUNARR_URL}/api/media-sources` (ids, names, types and enabled libraries only; addresses and accounts are dropped) |
+| `POST /api/tunarr/library/search` | `POST {TUNARR_URL}/api/programs/search` (built from `{ mediaSourceId, libraryId?, text?, type?, parentId?, page?, limit? }`) |
+| `GET /api/tunarr/programs/:id/descendants` | `GET {TUNARR_URL}/api/programs/:id/descendants` (every program in a show or season) |
+| `GET`/`POST /api/tunarr/filler-lists`, `PUT`/`DELETE …/:id`, `GET …/:id/programs` | Tunarr's filler-list API |
+| `GET`/`POST /api/tunarr/custom-shows`, `PUT`/`DELETE …/:id`, `GET …/:id/programs` | Tunarr's custom-show API (playlist sync settings are preserved on update) |
+| `GET /api/tunarr/smart-collections` | `GET {TUNARR_URL}/api/smart_collections` |
+| `GET`/`PUT /api/tunarr/channels/:id/settings` | `GET`/`PUT {TUNARR_URL}/api/channels/:id` (only programming-related fields can change; everything else is kept as Tunarr has it) |
 | `GET /api/tunarr/programs/:id/artwork/:type` | `GET {TUNARR_URL}/api/programs/:id/artwork/:type` (image types only; `:id` must be a UUID; `:type` is `poster`, `thumbnail`, `landscape` or `banner`) |
 
 The proxy is deliberately narrow (`server/tunarrProxy.ts`):
@@ -84,10 +105,11 @@ The proxy is deliberately narrow (`server/tunarrProxy.ts`):
 - Channel IDs must match `[A-Za-z0-9][A-Za-z0-9_-]{0,63}`. Unexpected query parameters are rejected.
 - `from`/`to` must be ISO 8601 date-times, `to` must be after `from`, and the range is capped at 14 days.
 - **Manual saves** must be `application/json` with `{"type":"manual","lineup":[…],"append":false}`, and every item needs a known type and a positive duration. Lineup items are forwarded unchanged, so Tunarr's own fields (flex filler config, redirect targets, custom-show and filler references, offsets…) survive.
-- **Slot-schedule saves** (`{"type":"random"|"time","schedule":{"slots":[…]},"seed":[…]}`) can only use sources the channel's current schedule already uses.
-  - Every other schedule setting comes from Tunarr's current copy.
-  - The companion builds the program list itself from programs already on the channel, as Tunarr's own slot editors do; a `programs` list sent by the browser is ignored.
-  - A channel's schedule type can't be switched.
+- **Slot-schedule saves and previews** (`{"type":"random"|"time","schedule":{"settings":{…},"slots":[…]},"seed":[…],"extraPrograms":[…]}`) are validated by the companion.
+  - It checks slot types, source ids, play orders, timing, weights, commercials and mid-roll breaks, and the settings allowed for the schedule type.
+  - Settings Lineup doesn't edit keep Tunarr's current values.
+  - The program pool is computed server-side from programs on the channel plus `extraPrograms`; a `programs` list sent by the browser is ignored.
+  - Tunarr's own strict validation still runs.
 - **Every save needs `If-Match: "<version>"`,** the version of the channel it was based on. Without it the response is 428; if the channel changed meanwhile, 412 `lineup_changed`.
 - Writes from another site are blocked: the `Origin` must match the companion's host.
 - Browser cookies, `Authorization` and hop-by-hop headers are never forwarded. Upstream redirects are not followed.

@@ -1,5 +1,7 @@
 import { programmingVersion } from './lineupVersion.js';
-import { buildEditedSchedule, programPool, validateSeed } from './slotSchedule.js';
+import { handleContentRoute, matchContentRoute, type ContentRoute } from './content.js';
+import { callTunarr, fail, fetchUpstream, json, UpstreamError } from './upstream.js';
+import { buildSchedule, programPool, validateExtraPrograms, validateSeed } from './slotSchedule.js';
 
 // Narrow backend-for-frontend for Tunarr.
 //
@@ -104,26 +106,6 @@ export function createProxyConfig(env: Record<string, string | undefined>): Prox
   };
 }
 
-const jsonHeaders = {
-  'content-type': 'application/json; charset=utf-8',
-  'cache-control': 'no-store',
-  'x-content-type-options': 'nosniff',
-};
-
-function json(status: number, data: unknown, extraHeaders: Record<string, string> = {}): ProxyResponse {
-  return { status, headers: { ...jsonHeaders, ...extraHeaders }, body: JSON.stringify(data) };
-}
-
-function fail(status: number, code: string, message: string, extra: Record<string, unknown> = {}, headers: Record<string, string> = {}) {
-  return json(status, { error: { code, message, ...extra } }, headers);
-}
-
-class UpstreamError extends Error {
-  constructor(readonly status: number, readonly code: string, message: string) {
-    super(message);
-  }
-}
-
 type Route =
   | { name: 'health'; methods: string[] }
   | { name: 'channels'; methods: string[] }
@@ -181,7 +163,7 @@ type CurrentProgramming = { lineup?: unknown; programs?: unknown; schedule?: unk
 
 type Write =
   | { kind: 'manual'; lineup: unknown[] }
-  | { kind: 'schedule'; type: 'time' | 'random'; edit: unknown; seed?: number[]; discardCount?: number };
+  | { kind: 'schedule'; type: 'time' | 'random'; edit: unknown; seed?: number[]; discardCount?: number; extra: string[] };
 
 function header(headers: ProxyRequest['headers'], name: string) {
   const value = headers[name];
@@ -249,89 +231,6 @@ export function validateManualProgramming(body: unknown): { lineup: unknown[] } 
   return { lineup: request.lineup };
 }
 
-/** Keeps upstream validation text useful but bounded and single-line. */
-function upstreamMessage(text: string) {
-  let message = text;
-  try {
-    const parsed = JSON.parse(text) as unknown;
-    if (typeof parsed === 'string') message = parsed;
-    else if (parsed && typeof parsed === 'object') {
-      const record = parsed as Record<string, unknown>;
-      const candidate = record.error ?? record.message;
-      if (typeof candidate === 'string') message = candidate;
-    }
-  } catch {
-    // Plain-text body; use it as-is.
-  }
-  return message.replace(/\s+/g, ' ').trim().slice(0, 300);
-}
-
-async function fetchUpstream(
-  config: ProxyConfig,
-  target: TunarrTarget,
-  method: 'GET' | 'POST',
-  path: string,
-  options: { accept: string; body?: string; notFound: string },
-): Promise<{ response: Response; bytes: Uint8Array }> {
-  const headers: Record<string, string> = { accept: options.accept };
-  if (options.body !== undefined) headers['content-type'] = 'application/json';
-  if (target.authorization) headers.authorization = target.authorization;
-  const timeoutMs = method === 'POST' ? config.saveTimeoutMs : config.timeoutMs;
-  const doFetch = config.fetchImpl ?? fetch;
-
-  let response: Response;
-  let bytes: Uint8Array;
-  try {
-    response = await doFetch(`${target.origin}${target.basePath}${path}`, {
-      method,
-      headers,
-      body: options.body,
-      redirect: 'manual',
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-    bytes = new Uint8Array(await response.arrayBuffer());
-  } catch (error) {
-    const name = (error as { name?: string })?.name;
-    if (name === 'TimeoutError' || name === 'AbortError') {
-      throw new UpstreamError(504, 'tunarr_timeout', `Tunarr at ${target.host} did not respond within ${Math.round(timeoutMs / 1000)} seconds.`);
-    }
-    const cause = (error as { cause?: { code?: unknown } })?.cause?.code;
-    const detail = typeof cause === 'string' && /^[A-Z_]+$/.test(cause) ? ` (${cause})` : '';
-    throw new UpstreamError(502, 'tunarr_unreachable', `Could not reach Tunarr at ${target.host}${detail}.`);
-  }
-
-  if (response.status >= 300 && response.status < 400) {
-    throw new UpstreamError(502, 'tunarr_redirect', `Tunarr at ${target.host} answered with a redirect. Check TUNARR_URL.`);
-  }
-  if (response.status === 404) throw new UpstreamError(404, 'not_found', options.notFound);
-  if (response.status === 400) {
-    const text = new TextDecoder().decode(bytes);
-    throw new UpstreamError(400, 'tunarr_rejected', upstreamMessage(text) || 'Tunarr rejected the request.');
-  }
-  if (response.status === 401 || response.status === 403) {
-    throw new UpstreamError(502, 'tunarr_auth', `Tunarr at ${target.host} refused the request (HTTP ${response.status}).`);
-  }
-  if (!response.ok) {
-    throw new UpstreamError(502, 'tunarr_error', `Tunarr at ${target.host} returned HTTP ${response.status}.`);
-  }
-  return { response, bytes };
-}
-
-async function callTunarr(
-  config: ProxyConfig,
-  target: TunarrTarget,
-  method: 'GET' | 'POST',
-  path: string,
-  body?: string,
-): Promise<unknown> {
-  const { bytes } = await fetchUpstream(config, target, method, path, { accept: 'application/json', body, notFound: 'Tunarr could not find that channel.' });
-  try {
-    return JSON.parse(new TextDecoder().decode(bytes)) as unknown;
-  } catch {
-    throw new UpstreamError(502, 'tunarr_invalid_response', `Tunarr at ${target.host} returned a response that is not JSON. Check TUNARR_URL.`);
-  }
-}
-
 /** Fetches program artwork through Tunarr. Only image bytes are passed on. */
 async function fetchArtwork(config: ProxyConfig, target: TunarrTarget, programId: string, artworkType: string): Promise<ProxyResponse> {
   const fallback = ARTWORK_TYPES.filter((type) => type !== artworkType).join(',');
@@ -355,10 +254,50 @@ async function fetchArtwork(config: ProxyConfig, target: TunarrTarget, programId
   };
 }
 
+function notConfigured(config: ProxyConfig) {
+  return config.configError
+    ? { code: 'invalid_config', message: config.configError }
+    : { code: 'not_configured', message: 'TUNARR_URL is not set on the Lineup server.' };
+}
+
+/** Library, list and channel-settings routes (see content.ts). */
+async function handleContent(request: ProxyRequest, config: ProxyConfig, url: URL, method: string, route: ContentRoute): Promise<ProxyResponse> {
+  if (!route.methods.includes(method)) {
+    return fail(405, 'method_not_allowed', `${method.slice(0, 10)} is not allowed on this route.`, {}, { allow: route.methods.join(', ') });
+  }
+  if (isCrossOrigin(request.headers)) return fail(403, 'cross_origin_blocked', 'Requests must come from this app.');
+  if ([...url.searchParams.keys()].length) return fail(400, 'invalid_query', 'This route does not accept query parameters.');
+  let body: unknown;
+  if (method === 'POST' || method === 'PUT') {
+    if (!/^application\/json\b/i.test(header(request.headers, 'content-type') ?? '')) return fail(415, 'unsupported_media_type', 'Send JSON.');
+    try {
+      body = JSON.parse(request.body ?? '');
+    } catch {
+      return fail(400, 'invalid_json', 'Request body is not valid JSON.');
+    }
+  }
+  const target = config.target;
+  if (!target) {
+    const error = notConfigured(config);
+    return fail(503, error.code, error.message);
+  }
+  try {
+    return await handleContentRoute(route, { config, target, method, body, withChannelLock });
+  } catch (error) {
+    if (!(error instanceof UpstreamError)) throw error;
+    return fail(error.status, error.code, error.message, { tunarrHost: target.host });
+  }
+}
+
 export async function handleTunarrApi(request: ProxyRequest, config: ProxyConfig): Promise<ProxyResponse> {
   try {
     const url = new URL(request.url, 'http://companion.invalid');
     const method = request.method.toUpperCase();
+    if (url.pathname.startsWith(`${API_PREFIX}/`)) {
+      const content = matchContentRoute(url.pathname.slice(API_PREFIX.length), CHANNEL_ID);
+      if (content && 'invalid' in content) return fail(400, 'invalid_parameter', content.invalid);
+      if (content) return await handleContent(request, config, url, method, content);
+    }
     const route = matchRoute(url.pathname);
 
     if (!route) return fail(404, 'route_not_allowed', 'This Tunarr route is not available through Lineup.');
@@ -394,10 +333,12 @@ export async function handleTunarrApi(request: ProxyRequest, config: ProxyConfig
       } else {
         const type = (parsed as { type?: unknown } | null)?.type;
         if (type === 'time' || type === 'random') {
-          const body = parsed as { schedule?: unknown; seed?: unknown; discardCount?: unknown };
+          const body = parsed as { schedule?: unknown; seed?: unknown; discardCount?: unknown; extraPrograms?: unknown };
           const seed = validateSeed(body.seed, body.discardCount);
           if ('error' in seed) return fail(400, 'invalid_programming', seed.error);
-          write = { kind: 'schedule', type, edit: body.schedule, ...seed };
+          const extra = validateExtraPrograms(body.extraPrograms);
+          if ('error' in extra) return fail(400, 'invalid_programming', extra.error);
+          write = { kind: 'schedule', type, edit: { ...(body.schedule as object), type }, ...seed, extra: extra.ids };
         } else {
           const checked = validateManualProgramming(parsed);
           if ('error' in checked) return fail(400, 'invalid_programming', checked.error);
@@ -410,12 +351,8 @@ export async function handleTunarrApi(request: ProxyRequest, config: ProxyConfig
 
     const target = config.target;
     if (!target) {
-      const notConfigured = config.configError
-        ? { code: 'invalid_config', message: config.configError }
-        : { code: 'not_configured', message: 'TUNARR_URL is not set on the Lineup server.' };
-      return route.name === 'health'
-        ? json(503, { status: 'not_configured', error: notConfigured })
-        : fail(503, notConfigured.code, notConfigured.message);
+      const error = notConfigured(config);
+      return route.name === 'health' ? json(503, { status: 'not_configured', error }) : fail(503, error.code, error.message);
     }
 
     try {
@@ -445,12 +382,11 @@ export async function handleTunarrApi(request: ProxyRequest, config: ProxyConfig
             if (pending.kind === 'manual') {
               body = { type: 'manual', lineup: pending.lineup, append: false };
             } else {
-              if ((current?.schedule as { type?: unknown } | undefined)?.type !== pending.type) {
-                throw new UpstreamError(409, 'schedule_type_mismatch', `This channel does not use a ${pending.type === 'time' ? 'time-slot' : 'random-slot'} schedule.`);
-              }
-              const built = buildEditedSchedule(current.schedule, pending.edit);
+              // Creating, converting or editing: buildSchedule keeps the current
+              // schedule's other fields when the type is unchanged.
+              const built = buildSchedule(current?.schedule, pending.edit);
               if ('error' in built) throw new UpstreamError(400, 'invalid_schedule', built.error);
-              const programs = programPool(built.schedule.slots as Array<Record<string, unknown>>, current.lineup, current.programs);
+              const programs = programPool(built.schedule.slots as Array<Record<string, unknown>>, current?.lineup, current?.programs, pending.extra);
               body = { type: pending.type, schedule: built.schedule, programs, seed: pending.seed, discardCount: pending.discardCount };
             }
             return json(200, await callTunarr(config, target, 'POST', path, JSON.stringify(body)));
@@ -460,7 +396,7 @@ export async function handleTunarrApi(request: ProxyRequest, config: ProxyConfig
           return json(200, await callTunarr(config, target, 'GET', `/api/channels/${route.channelId}/schedule`));
         case 'schedule-preview': {
           const current = (await callTunarr(config, target, 'GET', `/api/channels/${route.channelId}/programming`)) as CurrentProgramming;
-          const built = buildEditedSchedule(current?.schedule, previewEdit);
+          const built = buildSchedule(current?.schedule, previewEdit);
           if ('error' in built) throw new UpstreamError(400, 'invalid_schedule', built.error);
           const endpoint = built.schedule.type === 'time' ? 'schedule-time-slots' : 'schedule-slots';
           // A POST, so generation gets the longer save timeout.

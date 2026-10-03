@@ -330,6 +330,28 @@ describe('over real HTTP', () => {
     expect(seen[0]['x-forwarded-for']).toBeUndefined();
   });
 
+  it('passes PUT bodies through the Node adapter', async () => {
+    const seen: Array<{ method?: string; body: string }> = [];
+    const tunarrPort = await listen(http.createServer((req, res) => {
+      let body = '';
+      req.on('data', (chunk) => { body += chunk; });
+      req.on('end', () => {
+        seen.push({ method: req.method, body });
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ id: '0e2d2a41-5f2f-4a7e-9d3a-2b1f0c9e8d7a' }));
+      });
+    }));
+    const config = createProxyConfig({ TUNARR_URL: `http://127.0.0.1:${tunarrPort}` });
+    const appPort = await listen(http.createServer((req, res) => void handleNodeApiRequest(req, res, config)));
+    const response = await fetch(`http://127.0.0.1:${appPort}/api/tunarr/filler-lists/0e2d2a41-5f2f-4a7e-9d3a-2b1f0c9e8d7a`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'Renamed' }),
+    });
+    expect(response.status).toBe(200);
+    expect(seen).toEqual([{ method: 'PUT', body: JSON.stringify({ name: 'Renamed' }) }]);
+  });
+
   it('rejects oversized request bodies', async () => {
     const config = createProxyConfig({ TUNARR_URL: 'http://127.0.0.1:9' });
     const appPort = await listen(http.createServer((req, res) => void handleNodeApiRequest(req, res, config)));

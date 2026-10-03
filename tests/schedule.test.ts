@@ -16,7 +16,7 @@ import {
   type Slot,
 } from '../lib/schedule';
 import { programmingVersion } from '../server/lineupVersion';
-import { buildEditedSchedule, programPool, slotSourceKey, validateSeed } from '../server/slotSchedule';
+import { buildSchedule, defaultSchedule, programPool, slotSourceKey, validateExtraPrograms, validateSeed } from '../server/slotSchedule';
 import { createProxyConfig, handleTunarrApi, type ProxyConfig } from '../server/tunarrProxy';
 import { mixedLineup } from './fixtures';
 
@@ -35,9 +35,9 @@ const randomSchedule = () => ({
   lockWeights: false,
   timeZoneOffset: -120,
   slots: [
-    { id: 'a1', type: 'show', showId: SHOW_A, order: 'next', direction: 'asc', weight: 3, cooldownMs: 0, durationSpec: { type: 'dynamic', programCount: 1 }, seasonFilter: [], seasonExcludeFilter: [], iterationGroup: 'g1', linkMode: 'continue' },
-    { id: 'b1', type: 'custom-show', customShowId: CUSTOM, order: 'shuffle', direction: 'asc', weight: 1, cooldownMs: 8 * MINUTE, durationSpec: { type: 'dynamic', programCount: 2 } },
-    { id: 'c1', type: 'movie', order: 'shuffle', direction: 'asc', weight: 1, cooldownMs: 0 },
+    { id: 'a0000000-0000-4000-8000-000000000001', type: 'show', showId: SHOW_A, order: 'next', direction: 'asc', weight: 3, cooldownMs: 0, durationSpec: { type: 'dynamic', programCount: 1 }, seasonFilter: [], seasonExcludeFilter: [], iterationGroup: 'g1', linkMode: 'continue' },
+    { id: 'b0000000-0000-4000-8000-000000000002', type: 'custom-show', customShowId: CUSTOM, order: 'shuffle', direction: 'asc', weight: 1, cooldownMs: 8 * MINUTE, durationSpec: { type: 'dynamic', programCount: 2 } },
+    { id: 'c0000000-0000-4000-8000-000000000003', type: 'movie', order: 'shuffle', direction: 'asc', weight: 1, cooldownMs: 0 },
   ],
 });
 
@@ -51,46 +51,84 @@ const timeSchedule = () => ({
   timeZoneOffset: 0,
   overflow: { type: 'duration', maxMs: 0 },
   slots: [
-    { id: 't1', type: 'show', showId: SHOW_A, order: 'next', direction: 'asc', startTime: 18 * 60 * MINUTE },
-    { id: 't2', type: 'show', showId: SHOW_B, order: 'next', direction: 'asc', startTime: 20 * 60 * MINUTE },
+    { id: 'd0000000-0000-4000-8000-000000000004', type: 'show', showId: SHOW_A, order: 'next', direction: 'asc', startTime: 18 * 60 * MINUTE },
+    { id: 'e0000000-0000-4000-8000-000000000005', type: 'show', showId: SHOW_B, order: 'next', direction: 'asc', startTime: 20 * 60 * MINUTE },
   ],
 });
 
 describe('slot schedule validation (server)', () => {
-  it('re-arranges existing sources and keeps every other setting from Tunarr’s copy', () => {
-    const current = randomSchedule();
+  const FILLER = 'f0000000-0000-4000-8000-0000000000f1';
+
+  it('edits slots and settings, keeping fields Lineup does not manage', () => {
+    const current = { ...randomSchedule(), customField: 'kept' };
     const slots = [{ ...current.slots[1], weight: 5, customShow: { name: 'materialized' }, isMissing: false }, current.slots[0]];
-    const result = buildEditedSchedule(current, { slots, timeZoneOffset: 60, maxDays: 999, padMs: 5 });
+    const result = buildSchedule(current, { slots, timeZoneOffset: 60, settings: { maxDays: 7, randomDistribution: 'weighted' } });
     if ('error' in result) throw new Error(result.error);
-    expect(result.schedule.maxDays).toBe(2);
-    expect(result.schedule.padMs).toBe(0);
-    expect(result.schedule.timeZoneOffset).toBe(60);
+    expect(result.schedule).toMatchObject({ type: 'random', maxDays: 7, padMs: 0, randomDistribution: 'weighted', timeZoneOffset: 60, customField: 'kept' });
     const saved = result.schedule.slots as Array<Record<string, unknown>>;
-    expect(saved.map((slot) => slot.id)).toEqual(['b1', 'a1']);
+    expect(saved.map((slot) => slot.id)).toEqual(['b0000000-0000-4000-8000-000000000002', 'a0000000-0000-4000-8000-000000000001']);
     expect(saved.map((slot) => slot.index)).toEqual([0, 1]);
-    expect(saved[0].weight).toBe(5);
     expect('customShow' in saved[0] || 'isMissing' in saved[0]).toBe(false);
   });
 
-  it('refuses sources the schedule does not already use', () => {
+  it('accepts new sources, and rejects malformed ones', () => {
     const current = randomSchedule();
-    const result = buildEditedSchedule(current, { slots: [{ ...current.slots[0], showId: SHOW_B }] });
-    expect(result).toEqual({ error: "Slot 1 uses a source this channel's schedule doesn't already use." });
-    expect(buildEditedSchedule(current, { slots: [{ type: 'redirect', channelId: 'x', weight: 1, cooldownMs: 0 }] })).toHaveProperty('error');
-    // Flex is always allowed: it adds no media.
-    expect(buildEditedSchedule(current, { slots: [{ type: 'flex', weight: 1, cooldownMs: 0 }] })).not.toHaveProperty('error');
+    const newShow = { ...current.slots[0], showId: SHOW_B };
+    expect(buildSchedule(current, { slots: [newShow] })).not.toHaveProperty('error');
+    expect(buildSchedule(current, { slots: [{ type: 'redirect', channelId: 'ch-2', channelName: 'Two', weight: 1, cooldownMs: 0 }] })).not.toHaveProperty('error');
+    expect(buildSchedule(current, { slots: [{ ...current.slots[1], customShowId: 'not-a-uuid' }] })).toEqual({ error: 'Slot 1 needs a custom show.' });
+    expect(buildSchedule(current, { slots: [{ ...current.slots[0], id: 'x' }] })).toEqual({ error: 'Slot 1 is missing its id.' });
+    expect(buildSchedule(current, { slots: [{ ...current.slots[0], order: 'random' }] })).toEqual({ error: 'Slot 1 needs a play order.' });
   });
 
-  it('validates random and time slot fields', () => {
+  it('creates and converts schedules from Tunarr’s defaults', () => {
+    const created = buildSchedule(undefined, { type: 'time', settings: { period: 'week' }, slots: [{ ...timeSchedule().slots[0], startTime: 6 * DAY_MS }] });
+    if ('error' in created) throw new Error(created.error);
+    const defaults = Object.fromEntries(Object.entries(defaultSchedule('time')).filter(([key]) => key !== 'slots'));
+    expect(created.schedule).toMatchObject({ ...defaults, period: 'week', type: 'time' });
+    expect(created.schedule.slots).toHaveLength(1);
+    const converted = buildSchedule(randomSchedule(), { type: 'time', slots: [{ ...randomSchedule().slots[0], startTime: 0 }] });
+    if ('error' in converted) throw new Error(converted.error);
+    const slot = (converted.schedule.slots as Array<Record<string, unknown>>)[0];
+    expect(slot.startTime).toBe(0);
+    expect('weight' in slot || 'durationSpec' in slot || 'index' in slot).toBe(false);
+    expect(buildSchedule(undefined, { slots: [{ type: 'flex' }] })).toEqual({ error: 'Choose a random-slot or time-slot schedule.' });
+  });
+
+  it('validates settings per schedule type', () => {
     const random = randomSchedule();
-    expect(buildEditedSchedule(random, { slots: [{ ...random.slots[0], weight: -1 }] })).toHaveProperty('error');
-    expect(buildEditedSchedule(random, { slots: [{ ...random.slots[0], durationSpec: { type: 'dynamic', programCount: 0 } }] })).toHaveProperty('error');
-    expect(buildEditedSchedule(random, { slots: [] })).toHaveProperty('error');
+    expect(buildSchedule(random, { slots: random.slots, settings: { period: 'week' } })).toHaveProperty('error');
+    expect(buildSchedule(random, { slots: random.slots, settings: { maxDays: 0 } })).toHaveProperty('error');
     const time = timeSchedule();
-    expect(buildEditedSchedule(time, { slots: [{ ...time.slots[0], startTime: DAY_MS }] })).toHaveProperty('error');
-    expect(buildEditedSchedule(time, { slots: [{ ...time.slots[0], startTime: 1.5 }] })).toHaveProperty('error');
-    expect(buildEditedSchedule(time, { slots: [{ ...time.slots[1], startTime: 0 }] })).not.toHaveProperty('error');
-    expect(buildEditedSchedule({ type: 'manual' }, { slots: [] })).toEqual({ error: 'This channel has no slot schedule to edit.' });
+    expect(buildSchedule(time, { slots: time.slots, settings: { padMs: 0 } })).toHaveProperty('error');
+    expect(buildSchedule(time, { slots: time.slots, settings: { overflow: { type: 'oneExtra' }, latenessMs: 300000 } })).not.toHaveProperty('error');
+  });
+
+  it('validates slot timing, weights and lengths', () => {
+    const random = randomSchedule();
+    expect(buildSchedule(random, { slots: [{ ...random.slots[0], weight: -1 }] })).toHaveProperty('error');
+    expect(buildSchedule(random, { slots: [{ ...random.slots[0], durationSpec: { type: 'dynamic', programCount: 0 } }] })).toHaveProperty('error');
+    expect(buildSchedule(random, { slots: [] })).toHaveProperty('error');
+    const time = timeSchedule();
+    expect(buildSchedule(time, { slots: [{ ...time.slots[0], startTime: DAY_MS }] })).toHaveProperty('error');
+    expect(buildSchedule(time, { slots: [{ ...time.slots[0], startTime: 1.5 }] })).toHaveProperty('error');
+    expect(buildSchedule(time, { slots: [time.slots[0], { ...time.slots[1], startTime: time.slots[0].startTime }] })).toEqual({ error: 'Slot 2 starts at the same time as another slot.' });
+  });
+
+  it('validates per-slot commercials (filler and mid-roll breaks)', () => {
+    const random = randomSchedule();
+    const withBreaks = {
+      ...random.slots[0],
+      filler: [{ types: ['pre', 'post'], fillerListId: FILLER, fillerOrder: 'shuffle_prefer_short' }],
+      midRoll: { breakRule: { type: 'fixed_interval', intervalMs: 600000 }, maxBreaks: 3, minProgramDurationMs: 900000, breakDurationMs: 120000, strategy: 'eager' },
+    };
+    expect(buildSchedule(random, { slots: [withBreaks] })).not.toHaveProperty('error');
+    expect(buildSchedule(random, { slots: [{ ...withBreaks, filler: [{ types: [], fillerListId: FILLER }] }] })).toHaveProperty('error');
+    expect(buildSchedule(random, { slots: [{ ...withBreaks, midRoll: { maxBreaks: 1, minProgramDurationMs: 0, breakDurationMs: 1 } }] })).toHaveProperty('error');
+    expect(buildSchedule(random, { slots: [{ type: 'flex', weight: 1, cooldownMs: 0, filler: withBreaks.filler }] })).toEqual({ error: "Slot 1 can't have commercials of its own." });
+    const fillerSlot = { type: 'filler', fillerListId: FILLER, order: 'shuffle_prefer_short', durationWeighting: 'linear', decayFactor: 0.5, recoveryFactor: 0.1, weight: 1, cooldownMs: 0 };
+    expect(buildSchedule(random, { slots: [fillerSlot] })).not.toHaveProperty('error');
+    expect(buildSchedule(random, { slots: [{ ...fillerSlot, decayFactor: 1 }] })).toHaveProperty('error');
   });
 
   it('builds the program pool from programs already on the channel, like Tunarr’s editor', () => {
@@ -111,6 +149,12 @@ describe('slot schedule validation (server)', () => {
     const slots = randomSchedule().slots;
     expect(programPool(slots, lineup, programs)).toEqual(['ep-a', 'film', 'cs-item']);
     expect(programPool([{ type: 'show', showId: SHOW_B }], lineup, programs)).toEqual(['ep-b']);
+  });
+
+  it('adds requested programs to the pool once', () => {
+    expect(programPool([{ type: 'movie' }], [{ type: 'content', id: 'film', duration: 1 }], { film: { program: { type: 'movie' } } }, ['extra-1', 'film', 'extra-1'])).toEqual(['film', 'extra-1']);
+    expect(validateExtraPrograms(['not-a-uuid'])).toHaveProperty('error');
+    expect(validateExtraPrograms(undefined)).toEqual({ ids: [] });
   });
 
   it('identifies slot sources and validates seeds', () => {
@@ -171,21 +215,30 @@ describe('slot schedule routes (proxy)', () => {
     expect((post.body as { schedule: { maxDays: number } }).schedule.maxDays).toBe(2);
   });
 
-  it('rejects schedule saves that change type, add sources, or are out of date', async () => {
+  it('converts a schedule type on save and refuses out-of-date saves', async () => {
     const current = { lineup, programs, schedule: randomSchedule() };
     const version = programmingVersion(current.lineup, current.schedule);
     const save = (body: unknown, ifMatch = version) => {
       const { calls, config } = harness(current);
-      return handleTunarrApi(request('programming', body, { 'if-match': `"${ifMatch}"` }), config).then((response) => ({ response, posts: calls.filter((call) => call.method === 'POST').length }));
+      return handleTunarrApi(request('programming', body, { 'if-match': `"${ifMatch}"` }), config).then((response) => ({ response, posts: calls.filter((call) => call.method === 'POST') }));
     };
-    const wrongType = await save({ type: 'time', schedule: { slots: timeSchedule().slots } });
-    expect(wrongType.response.status).toBe(409);
-    const newSource = await save({ type: 'random', schedule: { slots: [{ ...randomSchedule().slots[0], showId: SHOW_B }] } });
-    expect(newSource.response.status).toBe(400);
-    expect(newSource.posts).toBe(0);
+    const converted = await save({ type: 'time', schedule: { slots: timeSchedule().slots, settings: { period: 'day' } } });
+    expect(converted.response.status).toBe(200);
+    expect((converted.posts[0].body as { type: string; schedule: { type: string } }).schedule.type).toBe('time');
+    const badSlot = await save({ type: 'random', schedule: { slots: [{ ...randomSchedule().slots[0], showId: '' }] } });
+    expect(badSlot.response.status).toBe(400);
+    expect(badSlot.posts).toHaveLength(0);
     const stale = await save({ type: 'random', schedule: { slots: randomSchedule().slots } }, 'stale-version');
     expect(stale.response.status).toBe(412);
-    expect(stale.posts).toBe(0);
+    expect(stale.posts).toHaveLength(0);
+  });
+
+  it('adds requested programs to the saved pool', async () => {
+    const current = { lineup, programs, schedule: randomSchedule() };
+    const { calls, config } = harness(current);
+    const extra = 'f1111111-0000-4000-8000-000000000001';
+    await handleTunarrApi(request('programming', { type: 'random', schedule: { slots: randomSchedule().slots }, extraPrograms: [extra] }, { 'if-match': `"${programmingVersion(current.lineup, current.schedule)}"` }), config);
+    expect((calls.find((call) => call.method === 'POST')!.body as { programs: string[] }).programs).toEqual(['ep-a', extra]);
   });
 
   it('serves the materialized schedule', async () => {
@@ -202,6 +255,7 @@ describe('slot editing helpers (browser)', () => {
 
   it('offers only sources already in the schedule, plus flex', () => {
     const options = sourceOptions([{ ...slots[0], show: { title: 'Betty' } }, slots[1], slots[2]]);
+    expect(options.length).toBe(4);
     expect(new Set(options.map((option) => option.key))).toEqual(new Set([`custom-show:${CUSTOM}`, `show:${SHOW_A}`, 'movie', 'flex']));
     expect(options.at(-1)!.key).toBe('flex');
     expect(options.find((option) => option.key === `show:${SHOW_A}`)!.label).toBe('Betty');
@@ -210,7 +264,7 @@ describe('slot editing helpers (browser)', () => {
   it('switches a slot’s source but keeps its timing', () => {
     const custom = sourceOptions(slots).find((option) => option.key === `custom-show:${CUSTOM}`)!;
     const switched = changeSlotSource(slots[0], custom);
-    expect(switched).toMatchObject({ type: 'custom-show', customShowId: CUSTOM, weight: 3, cooldownMs: 0, id: 'a1' });
+    expect(switched).toMatchObject({ type: 'custom-show', customShowId: CUSTOM, weight: 3, cooldownMs: 0, id: 'a0000000-0000-4000-8000-000000000001' });
     expect('showId' in switched || 'iterationGroup' in switched).toBe(false);
     const flex = changeSlotSource(slots[0], sourceOptions(slots).at(-1)!);
     expect(flex).toEqual({ type: 'flex', weight: 3, cooldownMs: 0, durationSpec: { type: 'dynamic', programCount: 1 } });

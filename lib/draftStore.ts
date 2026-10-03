@@ -3,8 +3,9 @@
 //
 // A draft is stored relative to the exact programming version it was made
 // against: every lineup state is a list of indices into that version's
-// lineup. If Tunarr's lineup has changed since, the draft no longer applies
-// and is dropped.
+// lineup, followed by any entries the draft added (inserted programs, breaks,
+// changed lengths) and the program details needed to title them. If Tunarr's
+// lineup has changed since, the draft no longer applies and is dropped.
 import type { Block } from './broadcast';
 import type { History, HistoryEntry } from './history';
 import type { LineupItem } from './lineup';
@@ -19,6 +20,10 @@ export type StoredDraft = {
   current: number[];
   past: StoredEntry[];
   future: StoredEntry[];
+  /** Entries not in the loaded lineup; index base.length + i refers to extras[i]. */
+  extras?: LineupItem[];
+  /** Program details for added entries, keyed by program id. */
+  programs?: Record<string, unknown>;
 };
 
 export type DraftStore = {
@@ -34,28 +39,42 @@ export const MAX_DRAFTS = 60;
 const DB_NAME = 'tunarr-lineup';
 const STORE = 'drafts';
 
-export function encodeDraft(channelId: string, version: string, base: LineupItem[], current: LineupItem[], history: History, dirty: boolean): StoredDraft | null {
+export function encodeDraft(
+  channelId: string,
+  version: string,
+  base: LineupItem[],
+  current: LineupItem[],
+  history: History,
+  dirty: boolean,
+  programs: Record<string, unknown> = {},
+): StoredDraft {
   const position = new Map<LineupItem, number>(base.map((item, index) => [item, index]));
-  const encode = (lineup: LineupItem[]) => {
-    const indices = lineup.map((item) => position.get(item));
-    return indices.every((index) => index !== undefined) ? (indices as number[]) : null;
-  };
-  const entry = (item: HistoryEntry): StoredEntry | null => {
-    const before = encode(item.before);
-    const after = encode(item.after);
-    return before && after ? { label: item.label, before, after, blockBefore: item.blockBefore, blockAfter: item.blockAfter } : null;
-  };
-  const encodedCurrent = encode(current);
-  const past = history.past.map(entry);
-  const future = history.future.map(entry);
-  if (!encodedCurrent || past.includes(null) || future.includes(null)) return null;
-  return { channelId, version, updatedAt: Date.now(), dirty, current: encodedCurrent, past: past as StoredEntry[], future: future as StoredEntry[] };
+  const extras: LineupItem[] = [];
+  const encode = (lineup: LineupItem[]) => lineup.map((item) => {
+    let index = position.get(item);
+    if (index === undefined) {
+      index = base.length + extras.length;
+      extras.push(item);
+      position.set(item, index);
+    }
+    return index;
+  });
+  const entry = (item: HistoryEntry): StoredEntry => ({ label: item.label, before: encode(item.before), after: encode(item.after), blockBefore: item.blockBefore, blockAfter: item.blockAfter });
+  const draft: StoredDraft = { channelId, version, updatedAt: Date.now(), dirty, current: encode(current), past: history.past.map(entry), future: history.future.map(entry) };
+  if (extras.length) {
+    draft.extras = extras;
+    const added: Record<string, unknown> = {};
+    for (const item of extras) if (typeof item.id === 'string' && programs[item.id]) added[item.id] = programs[item.id];
+    if (Object.keys(added).length) draft.programs = added;
+  }
+  return draft;
 }
 
-export function decodeDraft(draft: StoredDraft, base: LineupItem[]): { current: LineupItem[]; history: History } | null {
+export function decodeDraft(draft: StoredDraft, base: LineupItem[]): { current: LineupItem[]; history: History; programs: Record<string, unknown> } | null {
+  const pool = [...base, ...(Array.isArray(draft.extras) ? draft.extras : [])];
   const decode = (indices: unknown) => {
-    if (!Array.isArray(indices) || indices.length !== base.length) return null;
-    const items = indices.map((index) => (Number.isInteger(index) ? base[index as number] : undefined));
+    if (!Array.isArray(indices)) return null;
+    const items = indices.map((index) => (Number.isInteger(index) ? pool[index as number] : undefined));
     return items.every(Boolean) ? (items as LineupItem[]) : null;
   };
   const entry = (item: StoredEntry): HistoryEntry | null => {
@@ -67,7 +86,7 @@ export function decodeDraft(draft: StoredDraft, base: LineupItem[]): { current: 
   const past = (draft.past ?? []).map(entry);
   const future = (draft.future ?? []).map(entry);
   if (!current || past.includes(null) || future.includes(null)) return null;
-  return { current, history: { past: past as HistoryEntry[], future: future as HistoryEntry[] } };
+  return { current, history: { past: past as HistoryEntry[], future: future as HistoryEntry[] }, programs: draft.programs ?? {} };
 }
 
 function memoryStore(): DraftStore {

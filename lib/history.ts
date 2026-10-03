@@ -53,17 +53,9 @@ export function rebaseHistory(history: History, saved: LineupItem[], fresh: Line
     if (itemIdentity(saved[index]) !== itemIdentity(fresh[index])) return null;
     mapping.set(saved[index], fresh[index]);
   }
-  const remap = (lineup: LineupItem[]) => {
-    const next = lineup.map((item) => mapping.get(item));
-    return next.every(Boolean) ? (next as LineupItem[]) : null;
-  };
-  const entry = (item: HistoryEntry) => {
-    const before = remap(item.before);
-    const after = remap(item.after);
-    return before && after ? { ...item, before, after } : null;
-  };
-  const past = history.past.map(entry);
-  const future = history.future.map(entry);
-  if (past.includes(null) || future.includes(null)) return null;
-  return { past: past as HistoryEntry[], future: future as HistoryEntry[] };
+  // Entries no longer in the saved lineup (removed before saving) keep their
+  // own objects, so undoing a removal still restores them.
+  const remap = (lineup: LineupItem[]) => lineup.map((item) => mapping.get(item) ?? item);
+  const entry = (item: HistoryEntry): HistoryEntry => ({ ...item, before: remap(item.before), after: remap(item.after) });
+  return { past: history.past.map(entry), future: history.future.map(entry) };
 }

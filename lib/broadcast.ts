@@ -146,3 +146,47 @@ const csvCell = (value: string | number) => {
 export function toCsv(header: string[], rows: Array<Array<string | number>>) {
   return [header, ...rows].map((row) => row.map(csvCell).join(',')).join('\r\n') + '\r\n';
 }
+
+/** Inserts new entries at `at` (0..length). Returns them selected. */
+export function insertItems(lineup: LineupItem[], at: number, items: LineupItem[]) {
+  if (!items.length || at < 0 || at > lineup.length) return null;
+  return { lineup: [...lineup.slice(0, at), ...items, ...lineup.slice(at)], block: { start: at, end: at + items.length - 1 } };
+}
+
+/** Removes a block. Selection moves to the entry that took its place. */
+export function removeBlock(lineup: LineupItem[], block: Block) {
+  if (!validBlock(lineup, block)) return null;
+  const next = [...lineup.slice(0, block.start), ...lineup.slice(block.end + 1)];
+  const index = Math.min(block.start, Math.max(next.length - 1, 0));
+  return { lineup: next, block: { start: index, end: index } };
+}
+
+/** Flex, commercial breaks and redirects have an adjustable length. */
+export const hasAdjustableLength = (item: LineupItem | undefined) => item?.type === 'flex' || item?.type === 'redirect';
+
+export function setItemDuration(lineup: LineupItem[], index: number, duration: number) {
+  const item = lineup[index];
+  if (!hasAdjustableLength(item) || !(duration > 0) || item.duration === duration) return null;
+  const next = [...lineup];
+  next[index] = { ...item, duration: Math.round(duration) };
+  return next;
+}
+
+export function makeFlex(duration: number): LineupItem {
+  return { type: 'flex', duration: Math.round(duration) };
+}
+
+/**
+ * A commercial break: flex time that Tunarr fills from the chosen filler lists
+ * (with a repeat cooldown), as Tunarr's own "offline filler" for flex works.
+ */
+export function makeCommercialBreak(duration: number, fillerListIds: string[], repeatCooldownMs = 0): LineupItem {
+  return { type: 'flex', duration: Math.round(duration), fillerConfig: { fillerListIds, fillerRepeatCooldownMs: repeatCooldownMs, origin: 'flex' } };
+}
+
+export const isCommercialBreak = (item: LineupItem | undefined) =>
+  item?.type === 'flex' && Array.isArray((item.fillerConfig as { fillerListIds?: unknown } | undefined)?.fillerListIds) && ((item.fillerConfig as { fillerListIds: unknown[] }).fillerListIds.length > 0);
+
+export function makeRedirect(channel: { id: string; number: number; name: string }, duration: number): LineupItem {
+  return { type: 'redirect', channel: channel.id, channelNumber: channel.number, channelName: channel.name, duration: Math.round(duration) };
+}

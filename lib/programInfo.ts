@@ -1,4 +1,5 @@
 // How lineup items are titled, described and illustrated in the interface.
+import { isCommercialBreak as isBreak } from './broadcast';
 import type { LineupItem, Program, Programming } from './lineup';
 
 export function getProgram(item: LineupItem, programs: Programming['programs']): Program | undefined {
@@ -15,7 +16,7 @@ export function programTitle(item: LineupItem, programs: Programming['programs']
   if (program?.type === 'episode') return program.show?.title || program.season?.show?.title || program.showTitle || program.title || 'Episode';
   if (program?.type === 'track') return program.artistName || program.title || 'Track';
   if (program?.title) return program.title;
-  if (item.type === 'flex') return 'Flex time';
+  if (item.type === 'flex') return isBreak(item) ? 'Commercial break' : 'Flex time';
   if (item.type === 'redirect') return String(item.channelName || 'Channel redirect');
   if (item.type === 'custom') return 'Custom show';
   if (item.type === 'filler') return 'Filler';
@@ -24,7 +25,11 @@ export function programTitle(item: LineupItem, programs: Programming['programs']
 
 export function programDetail(item: LineupItem, programs: Programming['programs']) {
   const program = getProgram(item, programs);
-  if (!program) return item.type === 'flex' ? 'Open airtime' : item.type;
+  if (!program) {
+    if (item.type === 'flex') return isBreak(item) ? `Filler from ${(item.fillerConfig as { fillerListIds: unknown[] }).fillerListIds.length} ${(item.fillerConfig as { fillerListIds: unknown[] }).fillerListIds.length === 1 ? 'list' : 'lists'}` : 'Open airtime';
+    if (item.type === 'redirect') return `Redirect to CH ${String(item.channelNumber ?? '')}`.trim();
+    return item.type;
+  }
   if (program.type === 'episode') {
     const season = program.seasonNumber ?? program.season?.index ?? program.season?.number;
     const episode = program.episodeNumber;

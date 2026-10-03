@@ -10,8 +10,9 @@ Read this first; read the docs below before non-trivial changes.
 
 ## What this is
 
-A Mac OS 9–styled web editor that reorders the existing programming of
-[Tunarr](https://tunarr.com) channels. It ships as two targets built from one
+A Mac OS 9–styled programming desk for [Tunarr](https://tunarr.com) channels:
+arrange, insert and remove programs, build and edit slot schedules, and manage
+commercials, filler lists, custom shows and programming-related channel settings. It ships as two targets built from one
 React page (`app/page.tsx`):
 
 - **Local companion** (supported for real use): `server/` (dependency-free Node HTTP
@@ -46,17 +47,28 @@ Chromium with `npx playwright install chromium`. CI runs all of them
    Never put `TUNARR_URL` or any Tunarr address in client code. Only the `LINEUP_PUBLIC_`
    env prefix is exposed to the client (`vite.local.config.ts`). Never add a
    user-entered URL workflow, wildcard CORS, or a generic proxy.
-2. **The proxy stays an allowlist.** `server/tunarrProxy.ts` allows exactly eight
-   route/method pairs (`matchRoute`). The artwork route passes image bytes only, from
-   UUID program IDs. Slot-schedule edits are validated in `server/slotSchedule.ts`: only
-   sources the current schedule already uses, schedule-wide settings taken from Tunarr's
-   copy, and a program pool computed server-side. Adding a route means validating its params and query, adding tests,
-   and documenting it in `docs/ARCHITECTURE.md`. Keep the SSRF guards: fixed upstream
-   origin, channel-ID regex, `redirect: 'manual'`, timeouts, no forwarded cookies or auth,
-   the Origin check, and normalized JSON errors without stack traces.
-3. **Only rearrange what exists.** The editor may reorder lineup items but must never
-   add media or programming. Lineup item objects are passed through untouched on save
-   (`buildManualSave`); never rebuild them from a subset of fields.
+2. **The proxy stays an allowlist.**
+   - Channel routes live in `server/tunarrProxy.ts` (`matchRoute`). Library, list and
+     channel-settings routes live in `server/content.ts` (`matchContentRoute`). Every
+     route is explicit, IDs are validated, and no raw Tunarr request is accepted:
+     search filters are built server-side (`buildLibrarySearch`), channel settings are
+     an allowlist merged onto Tunarr's copy, and media sources are sanitized so server
+     addresses and accounts never reach the browser.
+   - Slot schedules are validated in `server/slotSchedule.ts` (`buildSchedule`), and
+     the program pool is computed server-side.
+   - Adding a route means validating its params and body, adding tests, and documenting
+     it in `docs/ARCHITECTURE.md`.
+   - Keep the SSRF guards: fixed upstream origin, ID regexes, `redirect: 'manual'`,
+     timeouts, no forwarded cookies or auth, the Origin check, and normalized JSON
+     errors without stack traces.
+3. **Edits go through Tunarr, and Tunarr's data is preserved.**
+   - Adding programs, breaks, slots, sources and list contents is allowed (owner
+     decision, 2026-10-03), but only through Tunarr's own APIs and only with programs
+     Tunarr already indexes.
+   - Lineup item objects are passed through untouched on save (`buildManualSave`);
+     never rebuild them from a subset of fields.
+   - Custom-show updates must keep their Plex sync settings.
+   - Don't add endpoints that create media, edit media sources, or change transcoding.
 4. **Every save is conditional.**
    - The client sends `If-Match` with `programmingVersion(lineup, schedule)` of what it
      loaded (`server/lineupVersion.ts`, shared with the browser).
@@ -95,15 +107,17 @@ Chromium with `npx playwright install chromium`. CI runs all of them
   functions at module scope; `server/` and `lib/` use small typed functions with brief
   "why" comments. Use custom CSS classes in `app/globals.css`; Tailwind is imported
   but its utilities are essentially unused.
-- **Put pure logic in `lib/`** (testable without React): `lineup.ts` for schedule math,
+- **Put pure logic in `lib/`** (testable without React): `library.ts` for library types and helpers, `lineup.ts` for schedule math,
   `broadcast.ts` for block moves, timecode, totals and CSV, `history.ts` for
   undo/redo and rebasing, `draftStore.ts` for persistent drafts, `schedule.ts` for slot
   editing, and `programInfo.ts` for titles and artwork.
 - **Put HTTP and validation logic in `server/`:** `tunarrProxy.ts` (framework-free),
-  `slotSchedule.ts`, `lineupVersion.ts`, `auth.ts` and `app.ts`. Keep `app/page.tsx` for
-  UI state and rendering, and `app/components/` for larger UI pieces (`MenuBar`,
-  `MoveDialog`, `ScheduleEditor`). `lib/` may import pure modules from `server/`
-  (`lineupVersion`, `slotSchedule`) but never Node APIs.
+  `content.ts`, `upstream.ts`, `slotSchedule.ts`, `lineupVersion.ts`, `auth.ts` and
+  `app.ts`. `lib/` may import pure modules from `server/` (`lineupVersion`,
+  `slotSchedule`) but never Node APIs.
+- **Keep `app/page.tsx` for UI state and rendering,** and `app/components/` for larger
+  UI pieces: `MenuBar`, `MoveDialog`, `ScheduleEditor`, `InsertDialog`,
+  `LibraryBrowser`, `ListsManager`, `ChannelSettingsDialog`.
 - **Add or update tests** for any behavior change.
   - Unit and UI tests go in `tests/`. Proxy tests inject `fetchImpl`; UI tests mock
     `fetch` with a stateful fake companion (`tests/page.test.tsx`).
