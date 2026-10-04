@@ -47,3 +47,6 @@ next-env.d.ts
 
 # Saved templates (LINEUP_DATA_DIR default)
 /data/
+
+# Local Tunarr runtime state (databases, logs, guide data and search indexes)
+/tunarr-data/

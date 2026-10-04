@@ -139,11 +139,12 @@ Edits mark the lineup unsaved:
 
 - **General:** general entertainment, kids & cartoons, movie channel, music videos, 24-hour news.
 - **Inspired by mainstream networks:**
-  - **Japan:** NHK General, NHK E-tele, Nippon TV, TBS, Fuji TV, TV Asahi, TV Tokyo
+  - **Japan:** NHK General, NHK E-tele, Nippon TV, TBS, Fuji TV, TV Asahi, TV Tokyo, MTV Japan, Space Shower TV, MUSIC ON! TV, Music Japan TV
   - **Argentina:** Telefe, El Trece, TV Pública, América, El Nueve, TN
-  - **United States:** ABC, CBS, NBC, FOX, The CW, PBS, Univision, Telemundo, ESPN, CNN, HBO, Nickelodeon, Disney Channel, Cartoon Network, Discovery, MTV (classic), TCM
+  - **United States:** ABC, CBS, NBC, FOX, The CW, PBS, Univision, Telemundo, ESPN, CNN, HBO, Nickelodeon, Disney Channel, Cartoon Network, Discovery, MTV (classic), VH1 (classic), CMT music, BET Jams, TCM
+  - **Canada:** MuchMusic (classic)
   - **Spain:** La 1, La 2, Antena 3, Telecinco, Cuatro, laSexta
-  - **United Kingdom:** BBC One, BBC Two, ITV1, Channel 4, Channel 5
+  - **United Kingdom:** BBC One, BBC Two, ITV1, Channel 4, Channel 5, The Box, Kerrang! TV
   - **Italy:** Rai 1, Rai 2, Rai 3, Canale 5, Italia 1, Rete 4, La7
 - **My templates:** the user's saved ones, shared by every browser.
 

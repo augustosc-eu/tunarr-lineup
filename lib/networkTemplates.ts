@@ -1,10 +1,10 @@
-// Templates inspired by the mainstream channels of Japan, Argentina, the
-// United States, Spain, the United Kingdom and Italy. Each is a simplified
-// daypart plan in the network's style (the kinds of programs it airs and
-// roughly when, and its commercial pattern), not its official schedule. Times
-// are local to the channel. Network names appear only as "Inspired by" text.
+// Templates inspired by mainstream and music channels around the world. Each
+// is a simplified daypart plan in the network's style (the kinds of programs
+// it airs and roughly when, and its commercial pattern), not its official
+// schedule. Times are local to the channel. Network names appear only as
+// "Inspired by" text on the music templates added after the original catalog.
 import type { Block, Template, TemplateDays, TemplateRole } from '../server/templateSchema';
-import { AD_STYLES, preset } from './templates';
+import { AD_STYLES, preset, videos } from './templates';
 
 const MIN = 60_000;
 
@@ -16,6 +16,11 @@ const patch = (base: Block[], changes: Block[]): Block[] => {
 
 /** A preset role under its own id, for a second role of the same kind in one template. */
 const named = (id: string, role: TemplateRole): TemplateRole => ({ ...role, id });
+
+/** A music-video role with an optional genre suggestion. */
+const videoRole = (id: string, label: string, hint: string, genres: string[] = [], order: TemplateRole['order'] = 'shuffle'): TemplateRole => ({
+  id, label, hint, order, suggest: videos(...genres),
+});
 
 type Spec = {
   id: string; name: string; network: string; region: string; description: string;
@@ -110,6 +115,78 @@ const japan: Template[] = [
       weekdays: [['05:45', 'news'], ['07:05', 'kids'], ['08:00', 'lifestyle', 'light'], ['13:40', 'movie'], ['16:00', 'lifestyle'], ['18:00', 'anime'], ['19:00', 'variety'], ['22:00', 'news'], ['23:00', 'drama'], ['00:00', 'anime']],
       saturday: [['06:00', 'kids'], ['08:00', 'anime'], ['10:00', 'lifestyle'], ['16:00', 'movie'], ['18:00', 'variety'], ['21:00', 'drama'], ['23:00', 'anime']],
       sunday: [['06:00', 'kids'], ['07:30', 'anime'], ['10:00', 'lifestyle'], ['13:00', 'movie'], ['17:30', 'anime'], ['19:00', 'variety'], ['22:00', 'news'], ['23:00', 'anime']],
+    },
+  }),
+  net({
+    id: 'jp-mtv-japan', name: 'Japanese Pop & Global Hits', network: 'MTV Japan programming', region: JP,
+    description: 'A polished mix of current J-pop and international videos, an after-school chart block, artist spotlights and concert specials in prime time, with classics overnight.',
+    ads: AD_STYLES.music, pad: 1, late: 15,
+    roles: [
+      videoRole('jpop', 'J-pop hits', 'Current Japanese pop music videos', ['J-Pop', 'Pop']),
+      videoRole('global', 'Global hits', 'Current international music videos', ['Pop', 'Dance', 'R&B']),
+      videoRole('countdown', 'Chart countdown', 'Current hits, newest first', [], 'chronological'),
+      videoRole('classics', 'MTV-era classics', 'Classic pop, rock and dance videos', ['Pop', 'Rock', 'Dance']),
+      named('special', preset('music', 'Artist & concert special', 'Artist profiles, live performances and music specials')),
+    ],
+    days: {
+      weekdays: [['06:00', 'jpop'], ['10:00', 'global'], ['13:00', 'jpop'], ['17:00', 'countdown'], ['19:00', 'global'], ['22:00', 'special'], ['00:00', 'classics'], ['02:00', 'jpop', 'light']],
+      saturday: [['06:00', 'jpop'], ['10:00', 'global'], ['14:00', 'countdown'], ['18:00', 'special'], ['21:00', 'jpop'], ['00:00', 'classics']],
+      sunday: [['06:00', 'classics'], ['10:00', 'jpop'], ['14:00', 'global'], ['18:00', 'special'], ['22:00', 'countdown'], ['00:00', 'jpop', 'light']],
+    },
+  }),
+  net({
+    id: 'jp-space-shower', name: 'Japanese Music, Festivals & Discovery', network: 'Space Shower TV programming', region: JP,
+    description: 'Japanese music first: new and independent artists by day, long chart programs at weekends, rock and alternative in the evening, and artist, festival and live-event specials in prime time.',
+    ads: AD_STYLES.music, pad: 1, late: 20,
+    roles: [
+      videoRole('hits', 'Japanese hits', 'Current Japanese music videos', ['J-Pop', 'Pop']),
+      videoRole('discovery', 'New & independent', 'Emerging Japanese artists and independent releases', ['Indie', 'Alternative']),
+      videoRole('rock', 'Rock & alternative', 'Japanese rock, alternative and indie videos', ['Rock', 'Alternative', 'Indie']),
+      videoRole('countdown', 'Long-form countdown', 'A broad chart countdown, newest first', [], 'chronological'),
+      named('artist', preset('music', 'Featured artist', 'Artist interviews, documentaries and music-video specials')),
+      named('live', preset('music', 'Festivals & live sets', 'Concerts, festivals and live sessions')),
+    ],
+    days: {
+      weekdays: [['06:00', 'hits'], ['10:00', 'discovery'], ['13:00', 'hits'], ['17:00', 'countdown'], ['20:00', 'rock'], ['22:00', 'artist'], ['00:00', 'live'], ['02:00', 'discovery', 'light']],
+      saturday: [['06:00', 'hits'], ['12:00', 'countdown'], ['17:00', 'rock'], ['19:00', 'live'], ['23:00', 'artist'], ['01:00', 'discovery']],
+      sunday: [['06:00', 'countdown'], ['11:00', 'hits'], ['15:00', 'artist'], ['18:00', 'live'], ['23:00', 'rock'], ['01:00', 'discovery']],
+    },
+  }),
+  net({
+    id: 'jp-m-on', name: 'Japanese Charts, Karaoke & Live', network: 'MUSIC ON! TV (M-ON!) programming', region: JP,
+    description: 'Chart-led J-pop, karaoke favourites and lyric-video blocks, with dedicated K-pop and anime-song hours, artist marathons, concerts and decade-themed hit programs.',
+    ads: AD_STYLES.music, pad: 1, late: 20,
+    roles: [
+      videoRole('hits', 'J-pop hits', 'Current Japanese hits and lyric videos', ['J-Pop', 'Pop']),
+      videoRole('karaoke', 'Karaoke favourites', 'Popular sing-along music videos', ['J-Pop', 'Pop']),
+      videoRole('kpop', 'K-pop hits', 'Korean pop music videos', ['K-Pop', 'Pop']),
+      videoRole('anison', 'Anime songs', 'Anime themes and voice-artist music videos', ['Anime', 'J-Pop']),
+      videoRole('throwbacks', 'Decade hits', 'Japanese hits from earlier decades', ['J-Pop', 'Pop']),
+      videoRole('countdown', 'Chart countdown', 'Current chart music, newest first', [], 'chronological'),
+      named('live', preset('music', 'Live & artist special', 'Concerts, festivals and extended artist features')),
+    ],
+    days: {
+      weekdays: [['06:00', 'throwbacks'], ['08:00', 'hits'], ['13:00', 'countdown'], ['17:00', 'hits'], ['19:00', 'kpop'], ['20:00', 'karaoke'], ['22:00', 'live'], ['00:00', 'throwbacks'], ['02:00', 'anison']],
+      saturday: [['06:00', 'countdown'], ['10:00', 'hits'], ['13:00', 'karaoke'], ['18:00', 'live'], ['22:00', 'kpop'], ['00:00', 'anison'], ['01:00', 'throwbacks']],
+      sunday: [['06:00', 'throwbacks'], ['08:00', 'karaoke'], ['12:30', 'countdown'], ['17:00', 'hits'], ['20:00', 'live'], ['23:00', 'kpop'], ['01:00', 'anison']],
+    },
+  }),
+  net({
+    id: 'jp-music-japan-tv', name: 'Japanese Requests, Idols & Anime Hits', network: 'Music Japan TV (MJTV; sometimes searched as JTV Music) programming', region: JP,
+    description: 'A viewer-friendly Japanese video channel with current hits, request blocks, idol and dance-pop hours, anime-song selections, K-pop and compact artist specials.',
+    ads: AD_STYLES.music, pad: 1, late: 15,
+    roles: [
+      videoRole('hits', 'Latest Japanese hits', 'Current Japanese music videos', ['J-Pop', 'Pop']),
+      videoRole('requests', 'Viewer requests', 'A broad request-driven music-video mix'),
+      videoRole('idols', 'Idols & dance pop', 'Japanese idol groups and dance-pop videos', ['J-Pop', 'Dance', 'Pop']),
+      videoRole('anison', 'Anime & voice-artist songs', 'Anime themes and voice-artist videos', ['Anime', 'J-Pop']),
+      videoRole('kpop', 'K-pop', 'Korean pop groups and soloists', ['K-Pop', 'Pop']),
+      named('artist', preset('music', 'Artist special', 'Interviews and focused music-video collections')),
+    ],
+    days: {
+      weekdays: [['06:00', 'hits'], ['10:00', 'requests'], ['14:00', 'idols'], ['17:00', 'hits'], ['20:00', 'artist'], ['22:00', 'kpop'], ['00:00', 'anison'], ['02:00', 'requests', 'light']],
+      saturday: [['06:00', 'requests'], ['10:00', 'hits'], ['14:00', 'idols'], ['18:00', 'artist'], ['21:00', 'kpop'], ['23:00', 'anison'], ['01:00', 'requests']],
+      sunday: [['06:00', 'hits'], ['10:00', 'anison'], ['13:00', 'requests'], ['17:00', 'idols'], ['20:00', 'artist'], ['22:00', 'kpop'], ['00:00', 'hits']],
     },
   }),
 ];
@@ -360,6 +437,54 @@ const unitedStates: Template[] = [
     days: { all: [['06:00', 'musicvideos'], ['15:00', 'countdown'], ['17:00', 'musicvideos'], ['20:00', 'reality', 'heavy'], ['22:00', 'rock'], ['01:00', 'musicvideos', 'light']] },
   }),
   net({
+    id: 'us-vh1-classic', name: 'Adult Pop, Soul & Classic Rock', network: 'classic VH1 programming', region: US,
+    description: 'An adult-leaning video mix: morning soft rock and soul, pop through the day, a countdown in access time, artist profiles and concerts in prime time, and classic rock overnight.',
+    ads: AD_STYLES.music, pad: 1, late: 15,
+    roles: [
+      videoRole('adultpop', 'Adult pop', 'Adult contemporary, singer-songwriter and pop videos', ['Pop', 'Adult Contemporary', 'Singer-Songwriter']),
+      videoRole('soul', 'Soul & R&B', 'Soul, R&B and quiet-storm videos', ['Soul', 'R&B']),
+      videoRole('classicrock', 'Classic rock', 'Classic and album-rock videos', ['Rock', 'Classic Rock']),
+      videoRole('countdown', 'Top video countdown', 'Popular videos, newest first', [], 'chronological'),
+      named('stories', preset('music', 'Artist stories & concerts', 'Artist profiles, documentaries, unplugged sets and concerts')),
+    ],
+    days: {
+      weekdays: [['06:00', 'adultpop', 'light'], ['10:00', 'soul'], ['13:00', 'adultpop'], ['18:00', 'countdown'], ['20:00', 'stories'], ['22:00', 'classicrock'], ['01:00', 'soul', 'light']],
+      saturday: [['06:00', 'adultpop'], ['10:00', 'countdown'], ['14:00', 'classicrock'], ['19:00', 'stories'], ['23:00', 'soul'], ['01:00', 'adultpop']],
+      sunday: [['06:00', 'soul'], ['10:00', 'adultpop'], ['15:00', 'stories'], ['20:00', 'countdown'], ['22:00', 'classicrock'], ['01:00', 'adultpop']],
+    },
+  }),
+  net({
+    id: 'us-cmt-music', name: 'Country Music & Americana', network: 'music-era CMT programming', region: US,
+    description: 'Country videos through the day, new releases and a fan countdown around dinner, live performances and artist stories in prime time, then classic country and Americana overnight.',
+    ads: AD_STYLES.music, pad: 1, late: 15,
+    roles: [
+      videoRole('country', 'Country hits', 'Current country music videos', ['Country']),
+      videoRole('newcountry', 'New country', 'New releases and rising country artists', ['Country'], 'chronological'),
+      videoRole('classics', 'Classic country', 'Classic country and western videos', ['Country', 'Western']),
+      videoRole('americana', 'Americana & roots', 'Americana, folk, bluegrass and roots music', ['Americana', 'Folk', 'Bluegrass', 'Country']),
+      videoRole('countdown', 'Country countdown', 'Country chart videos, newest first', ['Country'], 'chronological'),
+      named('live', preset('music', 'Live & artist stories', 'Country concerts, acoustic sets and artist profiles')),
+    ],
+    days: {
+      weekdays: [['06:00', 'country'], ['10:00', 'newcountry'], ['13:00', 'country'], ['18:00', 'countdown'], ['20:00', 'live'], ['22:00', 'americana'], ['00:00', 'classics']],
+      saturday: [['06:00', 'classics'], ['10:00', 'country'], ['14:00', 'countdown'], ['18:00', 'live'], ['22:00', 'newcountry'], ['00:00', 'americana']],
+      sunday: [['06:00', 'americana'], ['10:00', 'country'], ['14:00', 'live'], ['19:00', 'countdown'], ['22:00', 'classics'], ['01:00', 'country', 'light']],
+    },
+  }),
+  net({
+    id: 'us-bet-jams', name: 'Hip-Hop & R&B Video Mix', network: 'BET Jams programming', region: US,
+    description: 'A continuous hip-hop and R&B video service: mellow R&B mornings, current rap by day, a chart block in prime access, new releases at night and throwbacks after midnight.',
+    ads: AD_STYLES.music, pad: 1, late: 15,
+    roles: [
+      videoRole('hiphop', 'Hip-hop hits', 'Current rap and hip-hop videos', ['Hip-Hop', 'Rap']),
+      videoRole('rnb', 'R&B', 'Current R&B and soul videos', ['R&B', 'Soul']),
+      videoRole('new', 'New releases', 'Newest hip-hop and R&B videos', ['Hip-Hop', 'Rap', 'R&B'], 'chronological'),
+      videoRole('throwbacks', 'Throwback jams', 'Classic hip-hop and R&B videos', ['Hip-Hop', 'Rap', 'R&B', 'Soul']),
+      videoRole('countdown', 'Jams countdown', 'Charting hip-hop and R&B, newest first', ['Hip-Hop', 'Rap', 'R&B'], 'chronological'),
+    ],
+    days: { all: [['06:00', 'rnb', 'light'], ['10:00', 'hiphop'], ['17:00', 'countdown'], ['19:00', 'hiphop'], ['22:00', 'new'], ['00:00', 'throwbacks'], ['03:00', 'rnb', 'light']] },
+  }),
+  net({
     id: 'us-tcm', name: 'Turner Classic Movies', network: 'TCM programming', region: US,
     description: 'No commercials. Classic films back to back from the quarter hour, a prime-time feature at 20:00, westerns and noir at weekends and foreign films late on Sunday.',
     ads: AD_STYLES.premium, pad: 15, late: 30,
@@ -368,6 +493,30 @@ const unitedStates: Template[] = [
       weekdays: [['06:00', 'classic'], ['20:00', 'movie'], ['00:00', 'thriller'], ['03:00', 'classic']],
       saturday: [['06:00', 'western'], ['12:00', 'classic'], ['20:00', 'thriller'], ['00:00', 'classic']],
       sunday: [['06:00', 'classic'], ['20:00', 'movie'], ['00:00', 'foreign'], ['03:00', 'classic']],
+    },
+  }),
+];
+
+// ------------------------------------------------------------------ Canada
+
+const CA = 'Canada';
+const canada: Template[] = [
+  net({
+    id: 'ca-muchmusic-classic', name: 'Canadian Hits, VJs & Alternative', network: 'classic MuchMusic (Much Music) programming', region: CA,
+    description: 'A lively Canadian music mix with VJ-style hit blocks, a daily countdown, Canadian artists, dedicated hip-hop and alternative hours, interviews and live specials.',
+    ads: AD_STYLES.music, pad: 1, late: 15,
+    roles: [
+      videoRole('hits', 'Hit rotation', 'Current pop and rock music videos', ['Pop', 'Rock']),
+      videoRole('canadian', 'Canadian artists', 'Canadian pop, rock, hip-hop and independent videos'),
+      videoRole('hiphop', 'Rap & hip-hop', 'Hip-hop, rap and R&B videos', ['Hip-Hop', 'Rap', 'R&B']),
+      videoRole('alternative', 'Alternative & indie', 'Alternative, indie and left-field videos', ['Alternative', 'Indie', 'Rock']),
+      videoRole('countdown', 'Daily countdown', 'Popular videos, newest first', [], 'chronological'),
+      named('live', preset('music', 'VJ, interview & live special', 'Artist interviews, studio performances and concert specials')),
+    ],
+    days: {
+      weekdays: [['06:00', 'hits'], ['10:00', 'canadian'], ['13:00', 'hits'], ['17:00', 'countdown'], ['19:00', 'live'], ['21:00', 'hiphop'], ['23:00', 'alternative'], ['02:00', 'hits', 'light']],
+      saturday: [['06:00', 'hits'], ['10:00', 'canadian'], ['14:00', 'countdown'], ['18:00', 'live'], ['21:00', 'hiphop'], ['23:00', 'alternative']],
+      sunday: [['06:00', 'alternative'], ['10:00', 'hits'], ['14:00', 'canadian'], ['18:00', 'live'], ['21:00', 'countdown'], ['23:00', 'hiphop']],
     },
   }),
 ];
@@ -504,6 +653,39 @@ const unitedKingdom: Template[] = [
       sunday: [['06:00', 'preschool', 'none'], ['10:00', 'lifestyle'], ['13:00', 'movie'], ['18:30', 'news'], ['19:00', 'docs'], ['21:00', 'investigative', 'heavy'], ['22:00', 'thriller']],
     },
   }),
+  net({
+    id: 'uk-the-box', name: 'UK Pop Requests & Chart Hits', network: 'The Box programming', region: UK,
+    description: 'A fast-moving viewer-request and chart-video format: current pop and dance by day, a countdown after school, themed party blocks in the evening and throwbacks overnight.',
+    ads: AD_STYLES.music, pad: 1, late: 15,
+    roles: [
+      videoRole('hits', 'UK chart hits', 'Current UK pop and crossover videos', ['Pop']),
+      videoRole('requests', 'Viewer requests', 'A request-driven mix of current videos'),
+      videoRole('dance', 'Dance & club', 'Dance, electronic and club videos', ['Dance', 'Electronic']),
+      videoRole('rnb', 'R&B & urban pop', 'R&B, hip-hop and urban pop videos', ['R&B', 'Hip-Hop', 'Pop']),
+      videoRole('countdown', 'Chart countdown', 'Chart hits, newest first', [], 'chronological'),
+      videoRole('throwbacks', 'Pop throwbacks', 'Familiar pop and dance videos from earlier decades', ['Pop', 'Dance']),
+    ],
+    days: { all: [['06:00', 'hits'], ['10:00', 'requests'], ['16:00', 'countdown'], ['18:00', 'hits'], ['20:00', 'rnb'], ['22:00', 'dance'], ['00:00', 'throwbacks'], ['03:00', 'requests', 'light']] },
+  }),
+  net({
+    id: 'uk-kerrang', name: 'Rock, Metal & Alternative', network: 'Kerrang! TV programming', region: UK,
+    description: 'Guitar music around the clock: accessible rock in the morning, alternative and pop-punk by day, a rock chart at dinner, then heavier metal, live sets and classic anthems late.',
+    ads: AD_STYLES.music, pad: 1, late: 15,
+    roles: [
+      videoRole('rock', 'Rock hits', 'Current and familiar rock videos', ['Rock']),
+      videoRole('alternative', 'Alternative', 'Alternative and indie rock videos', ['Alternative', 'Indie', 'Rock']),
+      videoRole('poppunk', 'Pop-punk & emo', 'Pop-punk, emo and melodic rock videos', ['Pop Punk', 'Emo', 'Rock']),
+      videoRole('metal', 'Metal', 'Metal and hard-rock videos', ['Metal', 'Hard Rock']),
+      videoRole('classics', 'Classic anthems', 'Classic rock and metal videos', ['Classic Rock', 'Rock', 'Metal']),
+      videoRole('countdown', 'Rock chart', 'Current rock videos, newest first', ['Rock', 'Alternative', 'Metal'], 'chronological'),
+      named('live', preset('music', 'Live rock', 'Concerts, festival sets and studio sessions')),
+    ],
+    days: {
+      weekdays: [['06:00', 'rock'], ['10:00', 'alternative'], ['14:00', 'poppunk'], ['18:00', 'countdown'], ['20:00', 'rock'], ['22:00', 'metal'], ['00:00', 'classics'], ['02:00', 'live']],
+      saturday: [['06:00', 'classics'], ['10:00', 'rock'], ['14:00', 'poppunk'], ['18:00', 'countdown'], ['20:00', 'live'], ['23:00', 'metal'], ['01:00', 'alternative']],
+      sunday: [['06:00', 'alternative'], ['10:00', 'rock'], ['14:00', 'classics'], ['18:00', 'live'], ['21:00', 'countdown'], ['23:00', 'metal'], ['01:00', 'poppunk']],
+    },
+  }),
 ];
 
 // ------------------------------------------------------------------- Italy
@@ -591,5 +773,5 @@ const italy: Template[] = [
   }),
 ];
 
-export const REGIONS = ['Japan', 'Argentina', 'United States', 'Spain', 'United Kingdom', 'Italy'] as const;
-export const NETWORK_TEMPLATES: Template[] = [...japan, ...argentina, ...unitedStates, ...spain, ...unitedKingdom, ...italy];
+export const REGIONS = ['Japan', 'Argentina', 'United States', 'Canada', 'Spain', 'United Kingdom', 'Italy'] as const;
+export const NETWORK_TEMPLATES: Template[] = [...japan, ...argentina, ...unitedStates, ...canada, ...spain, ...unitedKingdom, ...italy];

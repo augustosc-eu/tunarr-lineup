@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { placeEvent, repeatLabel } from '../lib/events';
 import type { LineupItem } from '../lib/lineup';
 import { DAY_MS, type ScheduleDraftState, type SourceOption } from '../lib/schedule';
-import { BUILT_IN_TEMPLATES, inGroup } from '../lib/templateCatalog';
+import { BUILT_IN_TEMPLATES, inGroup, matchesSearch } from '../lib/templateCatalog';
 import { daySegments, defaultSource, isWeekly, midRollFor, roleUsage, scheduleToTemplate, templateToDraft, weekGrid, AD_STYLES, type Template } from '../lib/templates';
 import { buildSchedule } from '../server/slotSchedule';
 import { validateTemplate } from '../server/templateSchema';
@@ -24,15 +24,29 @@ const byId = (id: string) => BUILT_IN_TEMPLATES.find((template) => template.id =
 const startsOf = (draft: ScheduleDraftState, n: number) => draft.slots.filter((slot) => slot.smartCollectionId === collection(n).template.smartCollectionId).map((slot) => Number(slot.startTime));
 
 describe('built-in templates', () => {
-  it('covers the mainstream channels of every country', () => {
+  it('covers the mainstream and music channels of every country', () => {
     const regions = (region: string) => BUILT_IN_TEMPLATES.filter((template) => inGroup(template, region as never)).map((template) => template.id);
-    expect(regions('Japan')).toEqual(['jp-nhk-g', 'jp-nhk-e', 'jp-ntv', 'jp-tbs', 'jp-fuji', 'jp-tv-asahi', 'jp-tv-tokyo']);
+    expect(regions('Japan')).toEqual(['jp-nhk-g', 'jp-nhk-e', 'jp-ntv', 'jp-tbs', 'jp-fuji', 'jp-tv-asahi', 'jp-tv-tokyo', 'jp-mtv-japan', 'jp-space-shower', 'jp-m-on', 'jp-music-japan-tv']);
     expect(regions('Argentina')).toEqual(['ar-telefe', 'ar-eltrece', 'ar-tvpublica', 'ar-america', 'ar-elnueve', 'ar-tn']);
     expect(regions('Spain')).toEqual(['es-la1', 'es-la2', 'es-antena3', 'es-telecinco', 'es-cuatro', 'es-lasexta']);
-    expect(regions('United Kingdom')).toEqual(['uk-bbc-one', 'uk-bbc-two', 'uk-itv1', 'uk-channel4', 'uk-channel5']);
+    expect(regions('United Kingdom')).toEqual(['uk-bbc-one', 'uk-bbc-two', 'uk-itv1', 'uk-channel4', 'uk-channel5', 'uk-the-box', 'uk-kerrang']);
     expect(regions('Italy')).toEqual(['it-rai1', 'it-rai2', 'it-rai3', 'it-canale5', 'it-italia1', 'it-rete4', 'it-la7']);
-    expect(regions('United States')).toEqual(expect.arrayContaining(['us-abc', 'us-cbs', 'us-nbc', 'us-fox', 'us-cw', 'us-pbs', 'us-univision', 'us-telemundo', 'us-espn', 'us-cnn', 'us-hbo', 'us-nickelodeon', 'us-disney', 'us-cartoon-network', 'us-discovery', 'us-mtv', 'us-tcm']));
+    expect(regions('United States')).toEqual(expect.arrayContaining(['us-abc', 'us-cbs', 'us-nbc', 'us-fox', 'us-cw', 'us-pbs', 'us-univision', 'us-telemundo', 'us-espn', 'us-cnn', 'us-hbo', 'us-nickelodeon', 'us-disney', 'us-cartoon-network', 'us-discovery', 'us-mtv', 'us-vh1-classic', 'us-cmt-music', 'us-bet-jams', 'us-tcm']));
+    expect(regions('Canada')).toEqual(['ca-muchmusic-classic']);
     expect(regions('General')).toEqual(['general', 'kids', 'movies', 'music', 'news']);
+  });
+
+  it('finds brand-inspired music templates without using brands as their names', () => {
+    const requested = [
+      ['jp-mtv-japan', 'MTV Japan'], ['jp-space-shower', 'Space Shower TV'], ['jp-m-on', 'M-ON'],
+      ['jp-music-japan-tv', 'JTV Music'], ['us-vh1-classic', 'VH1'], ['ca-muchmusic-classic', 'Much Music'],
+    ] as const;
+    for (const [id, brand] of requested) {
+      const template = byId(id);
+      expect(template.inspiredBy, id).toMatch(/^Inspired by /);
+      expect(matchesSearch(template, brand), id).toBe(true);
+      expect(template.name.toLowerCase(), id).not.toContain(brand.toLowerCase());
+    }
   });
 
   it('every built-in passes the template schema and uses every role it defines', () => {
