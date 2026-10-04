@@ -45,9 +45,34 @@ TV with a remote as well as with a mouse and keyboard.
 - **Slot schedules.**
   - **Channel → Create / Edit Slot Schedule…** builds a random- or time-slot schedule from any source: shows from the library, movies, custom shows, filler lists, smart collections, or redirects to other channels.
   - You can change every schedule setting, convert between random and time slots, add movies to the movie pool, or **Detach to manual lineup**.
+  - **More** on a slot sets which seasons a show slot plays (all, only some, or all but some), the play direction, and **linked slots**: slots of the same source that share one episode list, so the 8 pm slot picks up where the 6 pm slot stopped. In time-slot schedules a linked slot can instead rerun what the group played.
+- **Programming templates.** **Channel → Programming Templates…** starts a schedule from a daypart plan:
+  - **General:** general entertainment, kids & cartoons, movie channel, music videos, 24-hour news.
+  - **Inspired by mainstream networks:**
+    - **Japan:** NHK General, NHK E-tele, Nippon TV, TBS, Fuji TV, TV Asahi, TV Tokyo
+    - **Argentina:** Telefe, El Trece, TV Pública, América, El Nueve, TN
+    - **United States:** ABC, CBS, NBC, FOX, The CW, PBS, Univision, Telemundo, ESPN, CNN, HBO, Nickelodeon, Disney Channel, Cartoon Network, Discovery, MTV (classic), TCM
+    - **Spain:** La 1, La 2, Antena 3, Telecinco, Cuatro, laSexta
+    - **United Kingdom:** BBC One, BBC Two, ITV1, Channel 4, Channel 5
+    - **Italy:** Rai 1, Rai 2, Rai 3, Canale 5, Italia 1, Rete 4, La7
+
+    Each follows the network's dayparts, weekday and weekend differences (single weekdays too, such as Monday-night football or Fuji's Monday drama) and its market's commercial pattern. They are styles, not official schedules, and use no logos.
+  - **Filling it in:** each role ("Morning news", "Telenovela", "Prime drama"…) takes a show, movies, a custom show, an existing smart collection, or a new smart collection the template suggests (with its match count in your library). Choose a commercials list and a promos list. The result opens in the slot editor, for this channel or a new one, to preview and save.
+  - **Ad levels per block:** every block is "no commercials", "light", "standard" or "heavy". Light spaces breaks out, heavy brings them closer and makes them longer, and "no commercials" keeps only promos.
+- **My templates.** Save your own: **New template**, **Copy and edit…** a built-in one, or **Save this channel's format** (turns a time-slot channel's schedule into a template whose roles are pre-filled with that channel's sources). The editor covers name, day plan (every day, weekdays/Saturday/Sunday, or each day), blocks with ad levels, roles with suggestion genres, start-time grid, lateness and the commercial style. Saved templates live on the Lineup server (`LINEUP_DATA_DIR`), so the TV and every other browser see them.
+- **AI programming.** **Ask AI…** in the template gallery writes a template from a prompt ("a 90s Saturday-morning cartoon channel", "program this like Rai 1"). It can use your library's show and movie titles and genres, what the current channel plays, and any template as a starting point. It fills roles with your actual shows and collections where they fit, picks commercial lists, and explains what your library lacks. You can save the result to My templates, edit it, or apply it, and nothing changes until you preview and save. See [AI setup](#ai-setup).
+- **Events on a date.** **Edit → Schedule Event…** (or `E`) places a match, premiere or special at a date and time: programs from the library, a simulcast of another channel (a redirect), or off-air time. Tunarr can't cut a program short, so the event starts when the program on air ends (or in its place). **Replace** takes out what would have aired and pads with flex so everything after stays on time; **Push** moves everything later. The preview shows the exact start, what is taken off, and when the lineup repeats (the event repeats with it). On slot-scheduled channels the event lasts until the schedule is regenerated.
+- **Smart collections.** **Lists → Smart Collections…** builds saved searches from rules (genre, studio, actor, year, length, added in the last N weeks…), previews how many programs match, and saves them for slots to play.
+- **Channels.**
+  - **Channel → New Channel… / Duplicate Channel… / Delete Channel…** (delete asks first).
+  - **Channel → Channel Settings…** has tabs for General (name, number, group, start time, hidden, on demand), Logo & watermark (logo address, on-screen watermark, offline screen), Streaming (stream format, transcode profile, subtitles) and Commercials.
+  - **Logos** show in the channel list and the schedule header. They are loaded by the companion, from Tunarr for uploaded logos or from the public site a logo links to. Channels without a usable logo show their number.
+- **Setup.**
+  - **Setup → Media Sources…** adds Plex (address and token), Jellyfin or Emby (address, user name and password; Tunarr signs in and keeps only a token) or local folders, turns libraries on or off, refreshes and scans them, and removes sources. Addresses and tokens are sent to Tunarr and never shown again.
+  - **Setup → Transcode Profiles…** edits resolution, codecs, bitrates, hardware acceleration, loudness and error screens, and duplicates or deletes profiles.
 - **Program log.** **File → Export Program Log…** downloads the visible day as CSV.
 - **Artwork** is loaded through the companion, so the browser never contacts Tunarr or your media server.
-- **Pull-down menus** (File, Edit, View, Channel, Help) work with the mouse, the keyboard, or a remote.
+- **Pull-down menus** (File, Edit, View, Channel, Lists, Setup, Help) work with the mouse, the keyboard, or a remote.
 
 ## Architecture
 
@@ -96,6 +121,13 @@ accident.
 | `GET`/`POST /api/tunarr/custom-shows`, `PUT`/`DELETE …/:id`, `GET …/:id/programs` | Tunarr's custom-show API (playlist sync settings are preserved on update) |
 | `GET /api/tunarr/smart-collections` | `GET {TUNARR_URL}/api/smart_collections` |
 | `GET`/`PUT /api/tunarr/channels/:id/settings` | `GET`/`PUT {TUNARR_URL}/api/channels/:id` (only programming-related fields can change; everything else is kept as Tunarr has it) |
+| `GET /api/tunarr/channels/:id/logo?v=…` | The channel's `icon.path`: Tunarr-hosted logos (`/images/…`, whatever host they were saved under) from `TUNARR_URL`; other logos from their public site through a guarded fetch. `204` when there is no usable logo |
+| `POST /api/tunarr/channels/create`, `DELETE /api/tunarr/channels/:id` | `POST {TUNARR_URL}/api/channels` (`new` with Tunarr's defaults, or `copy`), `DELETE {TUNARR_URL}/api/channels/:id` |
+| `GET /api/tunarr/transcode-configs`, `PUT`/`DELETE …/:id`, `POST …/:id/copy` | Tunarr's transcode-config API (edits are an allowlist merged onto Tunarr's copy; the default profile and profiles in use can't be deleted) |
+| `GET /api/tunarr/media-sources/manage`, `POST …/add`, `DELETE …/:id`, `POST …/:id/refresh`, `PUT …/:id/libraries/:libraryId`, `POST …/:id/libraries/:libraryId/scan` | Tunarr's media-source API (Jellyfin and Emby sign-in goes through Tunarr's `/api/jellyfin/login` / `/api/emby/login`; addresses, tokens, accounts and folder paths are never returned) |
+| `POST /api/tunarr/smart-collections/create`, `POST …/preview`, `GET`/`PUT`/`DELETE …/:id` | Tunarr's smart-collection API and `POST /api/programs/search` for previews (rules are turned into Tunarr's filter by the companion) |
+| `GET`/`POST /api/tunarr/templates`, `PUT`/`DELETE …/:id` | Lineup's own saved templates (`LINEUP_DATA_DIR/templates.json`); not Tunarr |
+| `GET /api/tunarr/ai`, `POST /api/tunarr/ai/template` | Lineup's AI assistant: status, and a template from `{ prompt, channelId?, includeLibrary, baseTemplate? }`. Reads context from Tunarr (search, lists, channel programming) and calls the configured AI provider |
 | `GET /api/tunarr/programs/:id/artwork/:type` | `GET {TUNARR_URL}/api/programs/:id/artwork/:type` (image types only; `:id` must be a UUID; `:type` is `poster`, `thumbnail`, `landscape` or `banner`) |
 
 The proxy is deliberately narrow (`server/tunarrProxy.ts`):
@@ -116,6 +148,7 @@ The proxy is deliberately narrow (`server/tunarrProxy.ts`):
 - Timeouts are 10 s for reads and 30 s for saves. Override them with `TUNARR_TIMEOUT_MS` and `TUNARR_SAVE_TIMEOUT_MS`.
 - Errors come back as `{"error":{"code","message"}}`. Messages name the Tunarr host but never credentials, and never include stack traces.
 - Artwork responses must be an image type (JPEG, PNG, WebP, GIF or AVIF) of at most 8 MB.
+- **Logos from public sites** (YouTube, TMDB…) are fetched by the companion only over HTTP(S) on ports 80/443, only when every address the host resolves to is public (no loopback, private, link-local, CGNAT/Tailscale or multicast ranges; the check is pinned to the connection), with at most 3 redirects (each re-checked), an image content type, 4 MB and 8 s. Results are cached in memory for an hour. Set `LINEUP_EXTERNAL_LOGOS=false` to turn this off; channels then show logos only when Tunarr hosts them.
 
 If Tunarr sits behind a reverse proxy with basic auth, you can put credentials
 in `TUNARR_URL` (`http://user:pass@host`). The server sends them as an
@@ -131,7 +164,7 @@ in `TUNARR_URL` (`http://user:pass@host`). The server sends them as an
 - Demo data appears only after you choose **Use demo data**. It is labeled "Demo mode" and "Demo channels", and it never reads from or writes to Tunarr. A failed live request never switches to demo data on its own.
 - Date navigation uses Tunarr's `/lineup` guide for the requested day. Tunarr only keeps a guide for a window around the current time, and a guide can lag behind recent edits. Outside that window, or when the guide doesn't match the lineup, the day is projected from the lineup and a note says so.
 - Saving sends the lineup back as a manual lineup, then re-reads the channel's programming and the visible day from Tunarr.
-  - If the channel uses a generated slot or time schedule, Lineup asks for confirmation first, because saving a manual lineup can detach the channel from that schedule.
+  - If the channel uses a generated slot or time schedule, Lineup asks for confirmation first. Tunarr keeps the slot schedule, but regenerating it (saving the slot schedule, or changing the channel's start time) replaces the edited lineup.
   - Leaving a channel with unsaved changes asks for confirmation. **Undo changes** restores the last loaded lineup.
 - Artwork is fetched through `/api/tunarr/programs/:id/artwork/:type`; demo data uses letter tiles.
 
@@ -158,13 +191,14 @@ Open **http://localhost:3000**. Tunarr itself stays at http://localhost:8000.
 - The image has a healthcheck (`GET /healthz`).
 - The published `chrisbenincasa/tunarr:latest` image is amd64-only. On Apple silicon, add `platform: linux/amd64` to the `tunarr` service.
 - Lineup can rewrite channel programming. Publish it as `127.0.0.1:3000:3000` if it should only be reachable from the Docker host.
+- Saved templates are kept in the `lineup-data` named volume (`/data` in the container). Add the AI settings from the compose file's comments to turn on **Ask AI…**.
 
 To build and run only the companion against an existing Tunarr:
 
 ```sh
 docker build -t tunarr-lineup .
 docker run -d --name tunarr-lineup -p 3000:3000 \
-  -e TUNARR_URL=http://192.168.1.50:8000 tunarr-lineup
+  -e TUNARR_URL=http://192.168.1.50:8000 -v lineup-data:/data tunarr-lineup
 ```
 
 ## Run locally with Node
@@ -194,9 +228,37 @@ Server environment variables:
 | `HOST` | `0.0.0.0` | Listen address |
 | `TUNARR_TIMEOUT_MS` | `10000` | Upstream timeout for reads |
 | `TUNARR_SAVE_TIMEOUT_MS` | `30000` | Upstream timeout for saves |
+| `LINEUP_EXTERNAL_LOGOS` | `true` | Set to `false` to stop the companion fetching channel logos hosted on public sites |
+| `LINEUP_DATA_DIR` | `./data` (`/data` in Docker) | Where saved templates are kept (`templates.json`) |
+| `LINEUP_AI_PROVIDER` | (auto) | `anthropic` or `openai` (any OpenAI-compatible API, including Ollama) |
+| `LINEUP_AI_API_KEY` | (none) | API key; `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` also work |
+| `LINEUP_AI_MODEL` | `claude-sonnet-5-5` for Anthropic | Model name (required for OpenAI-compatible providers) |
+| `LINEUP_AI_BASE_URL` | the provider's API | E.g. `http://ollama:11434/v1` for a local model |
+| `LINEUP_AI_TIMEOUT_MS` | `180000` | How long to wait for the AI |
 | `LINEUP_PASSWORD` | (none) | Turns on HTTP Basic sign-in |
 | `LINEUP_USERNAME` | `lineup` | Sign-in user name |
 | `STATIC_DIR` | `dist-local` | Directory holding the built interface |
+
+## AI setup
+
+The AI assistant is off until the Lineup server has a provider. Everything is
+configured on the server; the browser never sees the key or the provider's
+address.
+
+```sh
+# Anthropic
+LINEUP_AI_PROVIDER=anthropic LINEUP_AI_API_KEY=sk-ant-... npm run start:local
+# A local model with Ollama (nothing leaves your network)
+LINEUP_AI_PROVIDER=openai LINEUP_AI_BASE_URL=http://localhost:11434/v1 LINEUP_AI_MODEL=llama3.1 npm run start:local
+```
+
+What is sent to the provider with each request:
+
+- your prompt
+- your list names (smart collections, custom shows, filler lists)
+- if you tick them, your shows' and movies' titles, years, genres and episode counts (up to 600 shows and 300 movies), and the titles the current channel plays
+
+Nothing is sent until you press **Write the schedule**. The reply must match a fixed template schema and is checked like any template: ids that aren't in your library are dropped, and invalid rules are removed. Small local models may need a few tries; larger models follow the schema more reliably.
 
 ## Hosted preview (Vinext)
 

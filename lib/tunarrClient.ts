@@ -1,10 +1,14 @@
 // Browser client for the companion's same-origin /api/tunarr routes. It never
 // knows or contacts the Tunarr server's own address.
 import type { Channel, ChannelLineup, ManualProgrammingRequest, Programming } from './lineup';
-import type { ChannelSettings, ContentProgram, ListSummary, MediaSource, NamedItem, SearchResult } from './library';
+import type { RuleSet } from '../server/smartCollection';
+import type { Template } from '../server/templateSchema';
+import type { ChannelSettings, ContentProgram, ListSummary, ManagedSource, MediaSource, NamedItem, NewMediaSource, SearchResult, SmartCollectionView, TranscodeProfile } from './library';
 import type { SchedulePreview, Slot, SlotSchedule } from './schedule';
 
 export type ScheduleDraft = { type: SlotSchedule['type']; settings?: Record<string, unknown>; slots: Slot[]; extraPrograms?: string[] };
+export type AiStatus = { enabled: true; provider: string; model: string } | { enabled: false; message: string };
+export type AiProposal = { template: Template; lists: { commercials?: string; promos?: string }; notes: string };
 export type LibraryQuery = { mediaSourceId: string; libraryId?: string; text?: string; type?: string; parentId?: string; page?: number; limit?: number };
 
 const jsonBody = (method: string, body: unknown): RequestInit => ({ method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
@@ -122,6 +126,33 @@ export const tunarrApi = {
   createCustomShow: (name: string, programs: ContentProgram[]) => request<{ id: string }>('/api/tunarr/custom-shows', jsonBody('POST', { name, programs })),
   updateCustomShow: (id: string, body: { name?: string; programs?: ContentProgram[] }) => request<unknown>(`/api/tunarr/custom-shows/${encodeURIComponent(id)}`, jsonBody('PUT', body)),
   deleteCustomShow: (id: string) => request<unknown>(`/api/tunarr/custom-shows/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  createChannel: (body: { name: string; number?: number; groupTitle?: string; transcodeConfigId?: string; copyFrom?: string }) =>
+    request<{ id: string; name: string; number: number }>('/api/tunarr/channels/create', jsonBody('POST', body)),
+  deleteChannel: (id: string) => request<unknown>(channelPath(id), { method: 'DELETE' }),
+  transcodeProfiles: () => request<TranscodeProfile[]>('/api/tunarr/transcode-configs'),
+  saveTranscodeProfile: (id: string, changes: Partial<TranscodeProfile>) => request<TranscodeProfile>(`/api/tunarr/transcode-configs/${encodeURIComponent(id)}`, jsonBody('PUT', changes)),
+  copyTranscodeProfile: (id: string) => request<TranscodeProfile>(`/api/tunarr/transcode-configs/${encodeURIComponent(id)}/copy`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }),
+  deleteTranscodeProfile: (id: string) => request<unknown>(`/api/tunarr/transcode-configs/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  managedSources: () => request<ManagedSource[]>('/api/tunarr/media-sources/manage'),
+  addMediaSource: (source: NewMediaSource) => request<{ id: string }>('/api/tunarr/media-sources/add', jsonBody('POST', source)),
+  deleteMediaSource: (id: string) => request<unknown>(`/api/tunarr/media-sources/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  refreshMediaSource: (id: string) => request<unknown>(`/api/tunarr/media-sources/${encodeURIComponent(id)}/refresh`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }),
+  setLibraryEnabled: (sourceId: string, libraryId: string, enabled: boolean) =>
+    request<{ id: string; enabled: boolean }>(`/api/tunarr/media-sources/${encodeURIComponent(sourceId)}/libraries/${encodeURIComponent(libraryId)}`, jsonBody('PUT', { enabled })),
+  scanLibrary: (sourceId: string, libraryId: string) =>
+    request<unknown>(`/api/tunarr/media-sources/${encodeURIComponent(sourceId)}/libraries/${encodeURIComponent(libraryId)}/scan`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }),
+  smartCollection: (id: string) => request<SmartCollectionView>(`/api/tunarr/smart-collections/${encodeURIComponent(id)}`),
+  createSmartCollection: (body: { name: string; keywords?: string } & RuleSet) => request<SmartCollectionView>('/api/tunarr/smart-collections/create', jsonBody('POST', body)),
+  updateSmartCollection: (id: string, body: { name?: string; keywords?: string } & Partial<RuleSet>) => request<SmartCollectionView>(`/api/tunarr/smart-collections/${encodeURIComponent(id)}`, jsonBody('PUT', body)),
+  deleteSmartCollection: (id: string) => request<unknown>(`/api/tunarr/smart-collections/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  previewSmartCollection: (body: { keywords?: string } & RuleSet) =>
+    request<{ totalHits: number; sample: Array<{ id?: string; title: string; type?: string; year?: number }> }>('/api/tunarr/smart-collections/preview', jsonBody('POST', body)),
+  savedTemplates: () => request<Template[]>('/api/tunarr/templates'),
+  createTemplate: (template: Omit<Template, 'id'> & { id?: string }) => request<Template>('/api/tunarr/templates', jsonBody('POST', template)),
+  updateTemplate: (id: string, template: Template) => request<Template>(`/api/tunarr/templates/${encodeURIComponent(id)}`, jsonBody('PUT', template)),
+  deleteTemplate: (id: string) => request<unknown>(`/api/tunarr/templates/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  aiStatus: () => request<AiStatus>('/api/tunarr/ai'),
+  aiTemplate: (body: { prompt: string; channelId?: string; includeLibrary: boolean; baseTemplate?: Template }) => request<AiProposal>('/api/tunarr/ai/template', jsonBody('POST', body)),
   lineup: (id: string, from: Date, to: Date) =>
     request<ChannelLineup>(`${channelPath(id)}/lineup?${new URLSearchParams({ from: from.toISOString(), to: to.toISOString() })}`),
 };

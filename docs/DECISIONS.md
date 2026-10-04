@@ -72,7 +72,7 @@ on the `broadcast-programming` branch.
 ## D9. Warn before saving over a generated schedule
 
 - **Status:** Explicit (confirm-dialog copy in `save()`; `README.md`).
-- **Decision:** If programming has a `schedule`, confirm first. Saving a manual lineup can detach the channel from that schedule, and regeneration may overwrite manual edits.
+- **Decision:** If programming has a `schedule`, confirm first. A manual save keeps Tunarr's slot schedule (`LineupRepository` only replaces the items), but regenerating it (saving the slot schedule, or a start-time change) replaces the edited lineup.
 
 ## D10. No silent fallback to demo data
 
@@ -243,7 +243,7 @@ on the `broadcast-programming` branch.
 
   Tunarr's strict validation still runs.
 - **Preview first:** saving requires a preview of the exact draft, reuses its seed, and reports any difference. Movies added to the pool are not part of Tunarr's preview (its preview API has no program list), and the UI says so.
-- **Not built:** per-season filters on show slots, editing iteration groups (existing ones are kept), per-slot time overrides, and smart-collection authoring. Slot-schedule drafts are not persisted.
+- **Not built:** per-slot time overrides. Slot-schedule drafts are not persisted. (Season filters, linked slots and smart-collection authoring were added later; see D34 and D35.)
 ## D29. Full lineup editing through Tunarr's APIs
 
 - **Status:**
@@ -253,7 +253,7 @@ on the `broadcast-programming` branch.
   - The manual lineup can gain programs from Tunarr's indexed libraries, commercial breaks, flex and redirects; items can be removed and flex, break and redirect lengths changed.
   - Every change goes through the same edit list, drafts and conditional save.
   - Inserted programs are minimal content entries (`{ type: 'content', id, duration }`); Tunarr validates that they exist.
-  - Lineup still doesn't add media sources, scan libraries, create channels, or change transcoding or streaming.
+  - Media sources, library scans, channel creation and transcoding/streaming were out of scope here; D33 later brought them in.
 
 ## D30. "Commercials" are Tunarr filler
 
@@ -272,7 +272,7 @@ on the `broadcast-programming` branch.
   - Library browsing, lists and channel settings get their own allowlisted routes.
   - **Search:** filters are built server-side from a small query (no raw Tunarr filters).
   - **Media sources:** returned without server addresses or accounts.
-  - **Channel settings:** an allowlist merged onto Tunarr's current channel under the channel lock, so transcoding, streaming and other fields are never sent from the browser.
+  - **Channel settings:** an allowlist merged onto Tunarr's current channel under the channel lock, so fields outside it are never sent from the browser. (D33 added streaming, logo, watermark and offline fields to the allowlist.)
   - **Custom shows:** updates re-send their Plex sync settings, because Tunarr's update otherwise clears them.
 
 ## D32. Search paging normalized by the companion
@@ -280,3 +280,77 @@ on the `broadcast-programming` branch.
 - **Status:** Explicit (comment in `buildLibrarySearch`, citing Tunarr's `SearchProgramsCommand`).
 - **Decision:** Tunarr pages free-text searches from 1 and plain listings from 0. Lineup always uses 0-based pages, and the companion adds 1 for free-text queries.
 - **Why it's recorded:** the first build sent 0 for text searches and got empty pages (with a non-zero `totalHits`) on the owner's server.
+
+## D33. Setting up Tunarr from Lineup (channels, media sources, transcoding)
+
+- **Status:** Explicit: the owner's request on 2026-10-03 ("creating or deleting channels, adding media sources, and transcoding or streaming settings"), `AGENTS.md` invariant 3, `server/admin.ts` header.
+- **Decision:**
+  - Channels can be created (Tunarr's web defaults, default transcode profile, next free number), duplicated (Tunarr's `copy`, then renamed) and deleted (after a confirmation).
+  - Channel settings also cover the logo, watermark, offline screen, stream mode, transcode profile, subtitles, hidden and on-demand flags.
+  - Transcode profiles can be edited from an allowlist (`TRANSCODE_FIELDS`), duplicated and deleted. The default profile and profiles in use can't be deleted. VAAPI device paths and drivers are left as Tunarr has them.
+  - Media sources can be added (Plex with a token; Jellyfin and Emby by signing in through Tunarr; local folders), removed, refreshed, and their libraries enabled and scanned.
+- **Secrets are write-only:** server addresses, tokens and passwords go to Tunarr and are never returned (`manageableSources` drops `uri`, `accessToken`, `username`, `userId` and `paths`). Jellyfin/Emby passwords are only passed to Tunarr's login endpoint, never stored.
+- **Still out of scope:** uploading or creating media files, Tunarr's global settings (FFmpeg, HDHomeRun, XMLTV), Plex OAuth sign-in (a token is entered instead).
+
+## D34. Season filters and linked slots follow Tunarr's own rules
+
+- **Status:** Evidenced (`validateEpisodesAndLinks` and `checkLinkGroups` in `server/slotSchedule.ts`, a port of Tunarr's `slotGroupValidator.ts`; `linkSlot` in `lib/schedule.ts`).
+- **Decision:**
+  - Show slots carry `seasonFilter` (only these) or `seasonExcludeFilter` (all but these). The editor uses one at a time. Non-show slots have them removed.
+  - Linked slots share an `iterationGroup` (a UUID). Every member must play the same source in the same order and direction; a group of one is unlinked. Linking a slot copies the group's order and direction, and changing either changes the whole group.
+  - Random-slot groups must all continue, so the rerun choice is only offered for time slots, and converting to random turns reruns into continues. Time-slot groups need at least one slot that continues.
+
+## D35. Smart collections are authored as rules
+
+- **Status:** Evidenced (`server/smartCollection.ts`, `SmartCollectionsManager`).
+- **Decision:**
+  - The browser sends rules (`{field, op, values|value|amount+unit}`) and match all/any; the companion builds Tunarr's filter tree (`rulesToFilter`) from a fixed field table, so no raw filter or query string is accepted.
+  - Stored filters are read back as rules when possible (`filterToRules`). A collection made in Tunarr with something else is shown with its query string, and its filter is kept unless new rules replace it.
+  - Removing every rule from a saved collection is refused: Tunarr's update keeps the old filter when none is sent.
+- **Why the field table:** it mirrors Tunarr's search aliases (`shared/src/util/searchUtil.ts`), including unit conversion for minutes and the `relativeDate` form for "in the last N weeks".
+
+## D36. Channel logos come through the companion, including public ones
+
+- **Status:** Evidenced (`server/logos.ts`, `tests/admin.test.ts`). Checked read-only against the owner's server on 2026-10-03: 103 of 104 logos loaded (68 uploads saved under `host.docker.internal`, 14 under a tailnet name, 1 under `localhost`, 14 TMDB, 6 YouTube); the remaining one is a dead YouTube link.
+- **Decision:**
+  - Uploaded logos are loaded from `TUNARR_URL` by path, ignoring the host they were saved under.
+  - Logos on public sites are fetched by the companion with SSRF guards (public addresses only, pinned DNS, ports 80/443, re-checked redirects, image types, size and time limits) and cached. `LINEUP_EXTERNAL_LOGOS=false` turns this off.
+  - A missing or unusable logo is `204`, and the interface shows the channel number.
+- **Reason:** keeps invariant 1 (the browser only talks to the companion) and the page's `img-src 'self'` CSP, while real channels' logos point at several hosts the browser often can't reach (`host.docker.internal`) or shouldn't contact directly.
+
+## D37. Programming templates are styles that become ordinary drafts
+
+- **Status:** Explicit: the owner's request on 2026-10-03 ("programming templates such as for general TV channels, brands such as FOX, Telefe, Asahi, NHK, HBO"). Evidenced: `lib/templates.ts`, `TemplatesDialog`, `tests/templates.test.ts`.
+- **Decision:**
+  - A template is roles plus daypart grids plus an ad style. It produces a time-slot draft that opens in the slot editor, so the existing validation, preview-before-save and conditional save all apply. Nothing is written to the channel by the template itself; the only writes before the editor opens are the smart collections the user chose to create (and a new channel when asked).
+  - Network names appear only as "Inspired by …" text. Templates describe a style, say they are not official schedules, and use no logos or branding.
+  - Every template, with all roles filled, must pass `buildSchedule` (tested).
+  - Suggestions use playable types and `show_genre` for TV (see ARCHITECTURE, *Programming templates*), measured against the owner's library.
+- **Later (2026-10-04):** saved templates (D38), per-block ad levels, the network catalog (D41), AI templates (D39) and events by date (D40) were added.
+
+## D38. Saved templates are stored by the companion
+
+- **Status:** Explicit: the owner asked for "saving your own templates" (2026-10-04). Evidenced: `server/templateStore.ts`, `server/lineupRoutes.ts`.
+- **Decision:** Saved templates live in one JSON file on the Lineup server (`LINEUP_DATA_DIR`, a Docker volume at `/data`), not in the browser, so the TV, laptop and phone share them. Writes are serialized and atomic, the server picks ids (`my-…`) so built-ins can't be shadowed, and a file it can't parse is reported and left alone. This is the companion's first stored state; Tunarr still holds all channel data.
+- **Alternatives considered:** browser IndexedDB (per device, like drafts) was rejected because the owner programs from the TV and other devices.
+
+## D39. The AI assistant writes templates, never schedules
+
+- **Status:** Explicit: the owner asked for "AI prompts to generate schedule / programming based on channels" (2026-10-04). Evidenced: `server/ai.ts`, tests in `tests/ai.test.ts`.
+- **Decision:**
+  - The provider (Anthropic Messages API, or any OpenAI-compatible API such as OpenAI or a local Ollama) is configured only on the server; it's off until set.
+  - The model gets the prompt, list names and, by choice, the library's show and movie titles/genres and what the channel plays, and must answer through one tool schema.
+  - Its answer goes through the same `validateTemplate` as anything else; ids not in the catalog are dropped. The result is a draft template the user saves, edits or applies, and applying still goes through preview and the conditional save.
+- **Default model:** `claude-sonnet-5-5` for Anthropic; any model can be set with `LINEUP_AI_MODEL`.
+- **Not verified live:** no provider key was available while building; both wire formats are covered by tests with fake providers, and the end-to-end suite runs against a fake OpenAI-compatible endpoint.
+
+## D40. Events by date are lineup edits
+
+- **Status:** Explicit: the owner asked for "scheduling sports or events by date" (2026-10-04). Evidenced: `lib/events.ts`, `EventDialog`.
+- **Decision:** Tunarr's schedules have no dated items and Tunarr can't cut a program short, so an event is placed into the lineup at a program boundary: replacing what would have aired (padding with flex to keep later programs on time) or pushing everything later. It is an ordinary edit: undoable, drafted, saved with the conditional save.
+- **Consequences, shown in the dialog:** the start may move to the nearest boundary; the event repeats every lineup cycle (a 30-day generated lineup airs it again 30 days later); on slot-scheduled channels, regenerating the schedule removes it.
+
+## D41. Network templates cover the mainstream channels of six countries
+
+- **Status:** Explicit: the owner asked for "all mainstream Japanese, Argentine, US, Spain, UK, and Italian channels" (2026-10-04). Evidenced: `lib/networkTemplates.ts`, `tests/templates.test.ts`.
+- **Decision:** One template per mainstream network (7 Japanese, 6 Argentine, 17 US broadcast and cable, 6 Spanish, 5 British, 7 Italian), built from shared role presets and market ad styles (public broadcasters without commercials: NHK, BBC, PBS, TVE). Each is a simplified daypart plan in the network's style, written from general knowledge of their programming, not their official current schedules; names appear only as "Inspired by …".

@@ -116,7 +116,10 @@ describe('channel settings', () => {
 
   it('validates the fields Lineup may change', () => {
     expect(validateChannelSettings({ fillerCollections: [{ id: UUID_A, weight: 50, cooldownSeconds: 600 }], fillerRepeatCooldown: 60000 })).toEqual({ changes: { fillerCollections: [{ id: UUID_A, weight: 50, cooldownSeconds: 600 }], fillerRepeatCooldown: 60000 } });
-    expect(validateChannelSettings({ transcodeConfigId: UUID_A })).toEqual({ error: '"transcodeConfigId" can\'t be changed here.' });
+    expect(validateChannelSettings({ programCount: 3 })).toEqual({ error: '"programCount" can\'t be changed here.' });
+    expect(validateChannelSettings({ transcodeConfigId: 'not-a-profile' })).toHaveProperty('error');
+    expect(validateChannelSettings({ streamMode: 'rtsp' })).toHaveProperty('error');
+    expect(validateChannelSettings({ icon: { path: 'javascript:alert(1)' } })).toHaveProperty('error');
     expect(validateChannelSettings({ number: 0 })).toHaveProperty('error');
     expect(validateChannelSettings({ fillerCollections: [{ id: 'x', weight: 1, cooldownSeconds: 0 }] })).toHaveProperty('error');
   });
@@ -133,6 +136,6 @@ describe('channel settings', () => {
     expect(put).toMatchObject({ name: 'Movie Night', number: 4, transcodeConfigId: UUID_B, streamMode: 'hls', icon: { path: '' } });
     expect('programCount' in put || 'sessions' in put).toBe(false);
     expect(parse(response)).toMatchObject({ name: 'Movie Night', fillerCollections: [{ id: UUID_A, weight: 1, cooldownSeconds: 0 }] });
-    expect('transcodeConfigId' in parse(response)).toBe(false);
+    expect('programCount' in parse(response) || 'sessions' in parse(response)).toBe(false);
   });
 });

@@ -44,3 +44,6 @@ next-env.d.ts
 /.vscode/
 /test-results/
 /playwright-report/
+
+# Saved templates (LINEUP_DATA_DIR default)
+/data/

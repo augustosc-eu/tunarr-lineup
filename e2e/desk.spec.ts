@@ -157,7 +157,10 @@ const ADS = '5e5e5e5e-1a2b-4c3d-8e9f-000000000001';
 type FullState = FakeState & {
   fillerLists: Array<{ id: string; name: string; programs: unknown[] }>;
   schedules: Record<string, { type: string; slots: Array<Record<string, unknown>> }>;
-  channels: Array<{ id: string; fillerCollections?: unknown[]; transcodeConfigId?: string }>;
+  channels: Array<{ id: string; name: string; number: number; fillerCollections?: unknown[]; transcodeConfigId?: string; streamMode?: string; watermark?: Record<string, unknown> }>;
+  smartCollections: Array<{ name: string; filter: unknown }>;
+  mediaSources: Array<{ name: string; type: string; uri?: string; accessToken?: string; libraries: Array<{ name: string; enabled: boolean }> }>;
+  transcodeConfigs: Array<{ id: string; videoBitRate: number; vaapiDevice: string }>;
 };
 const fullState = async (page: Page) => (await (await page.request.get(`${FAKE}/__test/state`)).json()) as FullState;
 
@@ -217,6 +220,7 @@ test('sets channel-wide commercials for flex time without touching other channel
   await page.getByRole('menuitem', { name: 'Channel' }).click();
   await page.getByRole('menuitem', { name: /Channel Settings/ }).click();
   const dialog = page.getByRole('dialog', { name: 'Channel settings' });
+  await dialog.getByRole('tab', { name: 'Commercials' }).click();
   await dialog.getByRole('button', { name: 'Add filler list' }).click();
   await dialog.getByLabel('Filler list 1 cooldown minutes').fill('10');
   await dialog.getByRole('button', { name: 'Save settings' }).click();
@@ -232,7 +236,7 @@ test('creates a time-slot schedule with commercials for a manual channel', async
   await editor.getByRole('radio', { name: 'Time slots' }).click();
   await editor.getByLabel('Add a slot').selectOption({ label: 'Movies' });
   await editor.getByLabel('Slot 1 start').fill('20:00:00');
-  await editor.getByRole('button', { name: 'Commercials for slot 1' }).click();
+  await editor.getByRole('button', { name: 'Options for slot 1' }).click();
   await editor.getByRole('button', { name: 'Add commercials' }).click();
   await editor.getByRole('button', { name: 'Preview lineup' }).click();
   await page.getByRole('region', { name: 'Schedule preview' }).getByRole('button', { name: 'Save schedule' }).click();
@@ -241,4 +245,213 @@ test('creates a time-slot schedule with commercials for a manual channel', async
   expect(schedule.type).toBe('time');
   expect(schedule.slots).toEqual([expect.objectContaining({ type: 'movie', startTime: 20 * 3_600_000, filler: [{ types: ['pre'], fillerListId: ADS, fillerOrder: 'shuffle_prefer_short' }] })]);
   await expect(page.locator('.warning')).toContainText('time-slot schedule (1 slot)');
+});
+
+const ROTATION = '5d0c1e8a-7b6a-4d4c-9e2f-0000000000cc';
+
+test('shows channel logos through the companion, and numbers when there is no usable logo', async ({ page }) => {
+  const news = page.locator('.channel', { hasText: 'Desk News' });
+  await expect.poll(() => news.locator('.channel-logo img').evaluate((image: HTMLImageElement) => image.naturalWidth)).toBeGreaterThan(0);
+  expect(await news.locator('.channel-logo img').getAttribute('src')).toMatch(/^\/api\/tunarr\/channels\/[^/]+\/logo\?v=/);
+  await expect(page.locator('.channel', { hasText: 'Desk Movies' }).locator('.no-logo')).toHaveText('9');
+  // The rotation logo lives on a site that can't be reached, so its number shows instead.
+  await expect(page.locator('.channel', { hasText: 'Desk Rotation' }).locator('.no-logo')).toHaveText('12');
+  await expect(page.locator('.head-logo img')).toBeVisible();
+  expect(await page.content()).not.toContain('host.docker.internal');
+});
+
+test('creates, duplicates and deletes channels', async ({ page }) => {
+  await page.getByRole('menuitem', { name: 'Channel' }).click();
+  await page.getByRole('menuitem', { name: /New Channel/ }).click();
+  const dialog = page.getByRole('dialog', { name: 'New channel' });
+  await dialog.getByLabel('Channel name').fill('Late Night');
+  await expect(dialog.getByLabel('Channel number')).toHaveValue('13');
+  await dialog.getByRole('button', { name: 'Create channel' }).click();
+  await expect(page.getByRole('status')).toHaveText('Channel created in Tunarr');
+  await expect(page.locator('.channel.active')).toContainText('Late Night');
+  await expect(page.locator('.empty')).toBeVisible();
+
+  await page.getByRole('menuitem', { name: 'Channel' }).click();
+  await page.getByRole('menuitem', { name: /Delete Channel/ }).click();
+  await page.getByRole('alertdialog', { name: 'Delete CH 13 Late Night?' }).getByRole('button', { name: 'Delete channel' }).click();
+  await expect(page.getByRole('status')).toHaveText('Deleted CH 13 Late Night');
+  await expect(page.locator('.channel', { hasText: 'Late Night' })).toHaveCount(0);
+
+  await page.locator('.channel', { hasText: 'Desk News' }).click();
+  await page.getByRole('menuitem', { name: 'Channel' }).click();
+  await page.getByRole('menuitem', { name: /Duplicate Channel/ }).click();
+  const copy = page.getByRole('dialog', { name: 'Duplicate channel' });
+  await expect(copy.getByLabel('Channel name')).toHaveValue('Desk News (copy)');
+  await copy.getByRole('button', { name: 'Duplicate channel' }).click();
+  await expect(page.locator('.channel.active')).toContainText('Desk News (copy)');
+  await expect(page.locator('.program', { hasText: 'Alpha Hour' }).first()).toBeVisible();
+  const channels = (await fullState(page)).channels;
+  expect(channels.map((channel) => [channel.name, channel.number])).toEqual([['Desk News', 5], ['Desk Movies', 9], ['Desk Rotation', 12], ['Desk News (copy)', 13]]);
+});
+
+test('limits a show slot to some seasons and links two slots', async ({ page }) => {
+  await page.locator('.channel', { hasText: 'Desk Rotation' }).click();
+  await page.getByRole('button', { name: 'Edit slot schedule…' }).click();
+  const editor = page.getByRole('dialog', { name: /Slot schedule ·/ });
+  await editor.getByRole('button', { name: 'Duplicate slot 1' }).click();
+  await editor.getByRole('button', { name: 'Options for slot 1' }).click();
+  await editor.getByLabel('Which seasons').selectOption('except');
+  await editor.getByRole('group', { name: 'Seasons' }).getByLabel(/Season 3/).check();
+  await editor.getByLabel('Slot 1 shares episodes with').selectOption({ label: 'Share episodes with slot 2' });
+  await expect(editor.getByText('Group 1: slots 1, 2 move through one episode list together.')).toBeVisible();
+  await editor.getByRole('button', { name: 'Preview lineup' }).click();
+  await page.getByRole('region', { name: 'Schedule preview' }).getByRole('button', { name: 'Save schedule' }).click();
+  await expect(page.getByRole('status')).toContainText('Schedule saved');
+  const slots = (await fullState(page)).schedules[ROTATION].slots;
+  expect(slots[0]).toMatchObject({ type: 'show', seasonExcludeFilter: [3], seasonFilter: [], linkMode: 'continue' });
+  expect(slots[1].iterationGroup).toBe(slots[0].iterationGroup);
+});
+
+test('creates a smart collection and uses it in a slot', async ({ page }) => {
+  await page.getByRole('menuitem', { name: 'Lists' }).click();
+  await page.getByRole('menuitem', { name: /Smart Collections/ }).click();
+  const dialog = page.getByRole('dialog', { name: 'Smart collections' });
+  await dialog.getByRole('button', { name: 'New smart collection' }).click();
+  await dialog.getByLabel('Collection name').fill('Recent movies');
+  await dialog.getByLabel('Rule 1 field').selectOption({ label: 'Added to library' });
+  await dialog.getByLabel('Rule 1 amount').fill('3');
+  await dialog.getByLabel('Rule 1 unit').selectOption('month');
+  await dialog.getByRole('button', { name: 'Create collection' }).click();
+  await expect(dialog.getByRole('option', { name: 'Recent movies' })).toBeVisible();
+  const [collection] = (await fullState(page)).smartCollections;
+  expect(collection.filter).toMatchObject({ type: 'value', fieldSpec: { key: 'addedAt', relativeDate: { op: 'inthelast', amount: 3, unit: 'month' } } });
+  await dialog.getByRole('button', { name: 'Done' }).click();
+
+  await page.locator('.channel', { hasText: 'Desk Rotation' }).click();
+  await page.getByRole('button', { name: 'Edit slot schedule…' }).click();
+  const editor = page.getByRole('dialog', { name: /Slot schedule ·/ });
+  await expect(editor.getByLabel('Add a slot').locator('option', { hasText: 'Smart collection: Recent movies' })).toHaveCount(1);
+});
+
+test('adds a media source and turns on its library without exposing secrets', async ({ page }) => {
+  await page.getByRole('menuitem', { name: 'Setup' }).click();
+  await page.getByRole('menuitem', { name: /Media Sources/ }).click();
+  const dialog = page.getByRole('dialog', { name: 'Media sources' });
+  await expect(dialog.getByLabel('Use library Movies')).toBeChecked();
+  expect(await dialog.innerText()).not.toMatch(/10\.9\.9\.9|secret/);
+  await dialog.getByRole('button', { name: 'Add media source…' }).click();
+  await dialog.getByLabel('Source name').fill('Den Plex');
+  await dialog.getByLabel('Server address').fill('http://192.168.1.20:32400');
+  await dialog.getByLabel('Plex token').fill('abcdef123456');
+  await dialog.getByRole('button', { name: 'Add source' }).click();
+  await expect(dialog.getByText('Den Plex')).toBeVisible();
+  await dialog.getByLabel('Use library TV Shows').check();
+  await expect(dialog.getByRole('status')).toContainText('Turned on TV Shows');
+  const sources = (await fullState(page)).mediaSources;
+  expect(sources[1]).toMatchObject({ name: 'Den Plex', type: 'plex', uri: 'http://192.168.1.20:32400', accessToken: 'abcdef123456', libraries: [{ name: 'TV Shows', enabled: true }] });
+  expect(await dialog.innerText()).not.toContain('abcdef123456');
+});
+
+test('edits a transcode profile and a channel’s streaming settings', async ({ page }) => {
+  await page.getByRole('menuitem', { name: 'Setup' }).click();
+  await page.getByRole('menuitem', { name: /Transcode Profiles/ }).click();
+  const profiles = page.getByRole('dialog', { name: 'Transcode profiles' });
+  await profiles.getByLabel('Resolution').selectOption({ label: '720p HD (1280×720)' });
+  await profiles.getByLabel('Video bitrate').fill('3500');
+  await profiles.getByRole('button', { name: 'Save profile' }).click();
+  await expect(profiles.getByRole('status')).toHaveText('Profile saved.');
+  const [profile] = (await fullState(page)).transcodeConfigs;
+  expect(profile).toMatchObject({ videoBitRate: 3500, resolution: { widthPx: 1280, heightPx: 720 }, vaapiDevice: '/dev/dri/renderD128' });
+  await profiles.getByRole('button', { name: 'Done' }).click();
+
+  await page.getByRole('menuitem', { name: 'Channel' }).click();
+  await page.getByRole('menuitem', { name: /Channel Settings/ }).click();
+  const settings = page.getByRole('dialog', { name: 'Channel settings' });
+  await settings.getByRole('tab', { name: 'Streaming' }).click();
+  await settings.getByLabel('Stream format').selectOption('mpegts');
+  await settings.getByRole('tab', { name: 'Logo & watermark' }).click();
+  await expect(settings.locator('.logo-preview img')).toBeVisible();
+  await settings.getByLabel('Show a watermark while this channel plays').check();
+  await settings.getByLabel('Watermark opacity').fill('60');
+  await settings.getByRole('button', { name: 'Save settings' }).click();
+  await expect(page.getByRole('status')).toHaveText('Channel settings saved to Tunarr');
+  const channel = (await fullState(page)).channels.find((item) => item.id === NEWS)!;
+  expect(channel).toMatchObject({ streamMode: 'mpegts', transcodeConfigId: profile.id, watermark: { enabled: true, opacity: 60 } });
+});
+
+test('builds a new channel from a programming template, previews and saves it', async ({ page }) => {
+  await page.getByRole('menuitem', { name: 'Channel' }).click();
+  await page.getByRole('menuitem', { name: /Programming Templates/ }).click();
+  const dialog = page.getByRole('dialog', { name: 'Programming templates' });
+  await dialog.getByLabel('Search templates').fill('HBO');
+  await dialog.getByRole('option', { name: /^HBO/ }).click();
+  await expect(dialog.getByLabel('Day plan')).toContainText('Premiere movie');
+  await expect(dialog.getByLabel('Movie source', { exact: true })).toHaveValue('__suggest__');
+  await dialog.getByLabel('Prestige drama source').selectOption('');
+  await dialog.getByLabel('Comedy source').selectOption('');
+  await dialog.getByLabel('Documentaries source').selectOption('');
+  await dialog.getByLabel('Promos list').selectOption({ label: 'Station Ads' });
+  await dialog.getByLabel('Use it for').selectOption('new');
+  await dialog.getByLabel('New channel name').fill('Cinema Max');
+  await dialog.getByRole('button', { name: 'Create 3 smart collections and open the schedule' }).click();
+
+  const editor = page.getByRole('dialog', { name: /New slot schedule · CH 13 Cinema Max/ });
+  await expect(editor.getByText(/Time slots, repeating every week/)).toBeVisible();
+  await editor.getByRole('button', { name: 'Preview lineup' }).click();
+  await page.getByRole('region', { name: 'Schedule preview' }).getByRole('button', { name: 'Save schedule' }).click();
+  await expect(page.getByRole('status')).toContainText('Schedule saved');
+
+  const state = await fullState(page);
+  const channel = state.channels.find((item) => item.name === 'Cinema Max')!;
+  const schedule = state.schedules[channel.id] as unknown as { period: string; padMs: number; slots: Array<Record<string, unknown>> };
+  expect(schedule).toMatchObject({ period: 'week', padMs: 30 * 60_000 });
+  expect(state.smartCollections.map((item) => item.name)).toEqual(['HBO · Family movie', 'HBO · Movie', 'HBO · Premiere movie']);
+  // Sunday 20:00 falls in the Sunday movies block that starts at 19:00.
+  expect(schedule.slots.some((slot) => slot.startTime === 19 * 3_600_000 && slot.type === 'smart-collection')).toBe(true);
+  expect(schedule.slots[0]).toMatchObject({ filler: [{ types: ['tail'] }] });
+  expect(schedule.slots.every((slot) => slot.midRoll === undefined)).toBe(true);
+});
+
+test('asks the AI for a schedule, saves it as a template and applies it', async ({ page }) => {
+  await page.getByRole('menuitem', { name: 'Channel' }).click();
+  await page.getByRole('menuitem', { name: /Programming Templates/ }).click();
+  const dialog = page.getByRole('dialog', { name: 'Programming templates' });
+  await dialog.getByRole('button', { name: 'Ask AI…' }).click();
+  await expect(dialog.getByText(/OpenAI-compatible API \(fake-model\)/)).toBeVisible();
+  await dialog.getByLabel('AI prompt').fill('Evening sitcoms and late movies');
+  await dialog.getByRole('button', { name: 'Write the schedule' }).click();
+  await expect(dialog.getByText('Built around Rotation Show.')).toBeVisible();
+  await expect(dialog.getByLabel('Comedy source')).toHaveValue(`show:7a7a7a7a-1a2b-4c3d-8e9f-0000000000f1`);
+  await expect(dialog.getByLabel('Commercials list')).toHaveValue(ADS);
+  await dialog.getByRole('button', { name: 'Save to My templates' }).click();
+  await expect(dialog.getByRole('status')).toHaveText('Saved “AI comedy nights” to My templates.');
+  await dialog.getByLabel('Template group').selectOption({ label: 'My templates (1)' });
+  await expect(dialog.getByRole('option', { name: /AI comedy nights/ })).toBeVisible();
+  await dialog.getByRole('button', { name: /open the schedule/ }).click();
+
+  const editor = page.getByRole('dialog', { name: /New slot schedule · CH 5 Desk News/ });
+  await editor.getByRole('button', { name: 'Preview lineup' }).click();
+  await page.getByRole('region', { name: 'Schedule preview' }).getByRole('button', { name: 'Save schedule' }).click();
+  await expect(page.getByRole('status')).toContainText('Schedule saved');
+  const schedule = (await fullState(page)).schedules[NEWS];
+  expect(schedule.slots).toEqual([
+    expect.objectContaining({ type: 'show', startTime: 18 * 3_600_000, midRoll: expect.objectContaining({ maxBreaks: 2 }), filler: [expect.objectContaining({ fillerListId: ADS, types: ['mid'] })] }),
+    expect.objectContaining({ type: 'smart-collection', startTime: 21 * 3_600_000 }),
+  ]);
+  expect(schedule.slots[1].midRoll).toBeUndefined();
+});
+
+test('schedules a movie as an event on a date and keeps the rest on time', async ({ page }) => {
+  await page.keyboard.press('e');
+  const dialog = page.getByRole('dialog', { name: 'Schedule an event' });
+  await dialog.getByLabel('Event time').fill('03:00');
+  await dialog.getByRole('button', { name: 'Choose programs…' }).click();
+  const library = page.getByRole('dialog', { name: 'Programs for the event' });
+  await library.getByRole('button', { name: 'Add Zulu Dawn (1979)' }).click();
+  await library.getByRole('button', { name: /^Use 1/ }).click();
+  await expect(dialog.getByRole('status', { name: 'Event placement' })).toContainText('Zulu Dawn:');
+  await dialog.getByRole('button', { name: 'Place event' }).click();
+  await expect(page.locator('.edit-list')).toContainText('Scheduled “Zulu Dawn”');
+  await page.keyboard.press('Control+s');
+  await expect(page.getByRole('status')).toHaveText('Lineup saved to Tunarr');
+  const lineup = (await fakeState(page)).lineups[NEWS];
+  expect(lineup.some((item) => item.id === '4d4d4d4d-1a2b-4c3d-8e9f-000000000001')).toBe(true);
+  // Replace mode keeps the cycle length: two hours before, two hours after.
+  const durations = lineup as unknown as Array<{ duration: number }>;
+  expect(durations.reduce((sum, item) => sum + item.duration, 0)).toBe(120 * 60_000);
 });

@@ -1,5 +1,11 @@
 import { programmingVersion } from './lineupVersion.js';
+import path from 'node:path';
+import { handleAdminRoute, matchAdminRoute, type AdminRoute } from './admin.js';
+import { createAiConfig, type AiConfig } from './ai.js';
+import { handleLineupRoute, matchLineupRoute, type LineupRoute } from './lineupRoutes.js';
+import { createTemplateStore, type TemplateStore } from './templateStore.js';
 import { handleContentRoute, matchContentRoute, type ContentRoute } from './content.js';
+import { channelLogo, type ExternalImageFetcher } from './logos.js';
 import { callTunarr, fail, fetchUpstream, json, UpstreamError } from './upstream.js';
 import { buildSchedule, programPool, validateExtraPrograms, validateSeed } from './slotSchedule.js';
 
@@ -28,6 +34,14 @@ export type ProxyConfig = {
   timeoutMs: number;
   saveTimeoutMs: number;
   fetchImpl?: typeof fetch;
+  /** Load channel logos hosted on public sites (LINEUP_EXTERNAL_LOGOS, default on). */
+  externalLogos?: boolean;
+  /** Test hook for the public-logo fetch. */
+  fetchExternalImage?: ExternalImageFetcher;
+  /** Saved programming templates (LINEUP_DATA_DIR). */
+  templates?: TemplateStore;
+  /** AI programming assistant (LINEUP_AI_*), or why it is off. */
+  ai?: AiConfig | { off: string };
 };
 
 export type ProxyRequest = {
@@ -103,6 +117,9 @@ export function createProxyConfig(env: Record<string, string | undefined>): Prox
     configError: parsed && 'error' in parsed ? parsed.error : undefined,
     timeoutMs: positiveInt(env.TUNARR_TIMEOUT_MS, DEFAULT_TIMEOUT_MS),
     saveTimeoutMs: positiveInt(env.TUNARR_SAVE_TIMEOUT_MS, DEFAULT_SAVE_TIMEOUT_MS),
+    externalLogos: env.LINEUP_EXTERNAL_LOGOS?.trim().toLowerCase() !== 'false',
+    templates: createTemplateStore(path.resolve(env.LINEUP_DATA_DIR?.trim() || 'data')),
+    ai: createAiConfig(env),
   };
 }
 
@@ -113,6 +130,7 @@ type Route =
   | { name: 'lineup'; methods: string[]; channelId: string }
   | { name: 'schedule'; methods: string[]; channelId: string }
   | { name: 'schedule-preview'; methods: string[]; channelId: string }
+  | { name: 'logo'; methods: string[]; channelId: string }
   | { name: 'artwork'; methods: string[]; programId: string; artworkType: string };
 
 function matchRoute(pathname: string): Route | { invalid: string } | null {
@@ -124,7 +142,7 @@ function matchRoute(pathname: string): Route | { invalid: string } | null {
     if (!(ARTWORK_TYPES as readonly string[]).includes(artwork[2])) return { invalid: 'Artwork type is not supported.' };
     return { name: 'artwork', methods: ['GET'], programId: artwork[1].toLowerCase(), artworkType: artwork[2] };
   }
-  const match = /^\/api\/tunarr\/channels\/([^/]+)\/(programming|lineup|schedule|schedule-preview)$/.exec(pathname);
+  const match = /^\/api\/tunarr\/channels\/([^/]+)\/(programming|lineup|schedule|schedule-preview|logo)$/.exec(pathname);
   if (!match) return null;
   // Validate the raw (still percent-encoded) segment so encoded slashes or
   // dots can never reach the upstream URL.
@@ -133,6 +151,7 @@ function matchRoute(pathname: string): Route | { invalid: string } | null {
     case 'programming': return { name: 'programming', methods: ['GET', 'POST'], channelId: match[1] };
     case 'lineup': return { name: 'lineup', methods: ['GET'], channelId: match[1] };
     case 'schedule': return { name: 'schedule', methods: ['GET'], channelId: match[1] };
+    case 'logo': return { name: 'logo', methods: ['GET'], channelId: match[1] };
     default: return { name: 'schedule-preview', methods: ['POST'], channelId: match[1] };
   }
 }
@@ -260,8 +279,8 @@ function notConfigured(config: ProxyConfig) {
     : { code: 'not_configured', message: 'TUNARR_URL is not set on the Lineup server.' };
 }
 
-/** Library, list and channel-settings routes (see content.ts). */
-async function handleContent(request: ProxyRequest, config: ProxyConfig, url: URL, method: string, route: ContentRoute): Promise<ProxyResponse> {
+/** Library, list and channel-settings routes (content.ts) and Tunarr setup routes (admin.ts). */
+async function handleContent(request: ProxyRequest, config: ProxyConfig, url: URL, method: string, route: ContentRoute | AdminRoute | LineupRoute, kind: 'content' | 'admin' | 'lineup'): Promise<ProxyResponse> {
   if (!route.methods.includes(method)) {
     return fail(405, 'method_not_allowed', `${method.slice(0, 10)} is not allowed on this route.`, {}, { allow: route.methods.join(', ') });
   }
@@ -282,7 +301,9 @@ async function handleContent(request: ProxyRequest, config: ProxyConfig, url: UR
     return fail(503, error.code, error.message);
   }
   try {
-    return await handleContentRoute(route, { config, target, method, body, withChannelLock });
+    const context = { config, target, method, body, withChannelLock };
+    if (kind === 'lineup') return await handleLineupRoute(route as LineupRoute, context);
+    return kind === 'admin' ? await handleAdminRoute(route as AdminRoute, context) : await handleContentRoute(route as ContentRoute, context);
   } catch (error) {
     if (!(error instanceof UpstreamError)) throw error;
     return fail(error.status, error.code, error.message, { tunarrHost: target.host });
@@ -294,9 +315,16 @@ export async function handleTunarrApi(request: ProxyRequest, config: ProxyConfig
     const url = new URL(request.url, 'http://companion.invalid');
     const method = request.method.toUpperCase();
     if (url.pathname.startsWith(`${API_PREFIX}/`)) {
-      const content = matchContentRoute(url.pathname.slice(API_PREFIX.length), CHANNEL_ID);
+      const subpath = url.pathname.slice(API_PREFIX.length);
+      const lineup = matchLineupRoute(subpath);
+      if (lineup && 'invalid' in lineup) return fail(400, 'invalid_parameter', lineup.invalid);
+      if (lineup) return await handleContent(request, config, url, method, lineup, 'lineup');
+      const admin = matchAdminRoute(subpath, CHANNEL_ID);
+      if (admin && 'invalid' in admin) return fail(400, 'invalid_parameter', admin.invalid);
+      if (admin) return await handleContent(request, config, url, method, admin, 'admin');
+      const content = matchContentRoute(subpath, CHANNEL_ID);
       if (content && 'invalid' in content) return fail(400, 'invalid_parameter', content.invalid);
-      if (content) return await handleContent(request, config, url, method, content);
+      if (content) return await handleContent(request, config, url, method, content, 'content');
     }
     const route = matchRoute(url.pathname);
 
@@ -312,6 +340,12 @@ export async function handleTunarrApi(request: ProxyRequest, config: ProxyConfig
       const checked = validateLineupRange(url.searchParams);
       if ('error' in checked) return fail(400, 'invalid_query', checked.error);
       range = checked;
+    } else if (route.name === 'logo') {
+      // Only a cache-busting version, so a changed logo shows up right away.
+      const keys = [...url.searchParams.keys()];
+      if (keys.some((key) => key !== 'v') || keys.length > 1 || !/^[a-z0-9]{0,16}$/i.test(url.searchParams.get('v') ?? '')) {
+        return fail(400, 'invalid_query', 'This route only accepts a "v" parameter.');
+      }
     } else if ([...url.searchParams.keys()].length) {
       return fail(400, 'invalid_query', 'This route does not accept query parameters.');
     }
@@ -408,6 +442,14 @@ export async function handleTunarrApi(request: ProxyRequest, config: ProxyConfig
         }
         case 'artwork':
           return await fetchArtwork(config, target, route.programId, route.artworkType);
+        case 'logo':
+          try {
+            return await channelLogo(config, target, route.channelId);
+          } catch (error) {
+            // No usable logo is normal; answer "nothing here" rather than an error.
+            if (error instanceof UpstreamError && error.status === 404) return { status: 204, headers: { 'cache-control': 'private, max-age=300', 'x-content-type-options': 'nosniff' }, body: '' };
+            throw error;
+          }
       }
     } catch (error) {
       if (!(error instanceof UpstreamError)) throw error;

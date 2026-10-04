@@ -15,7 +15,7 @@ import {
 } from '../../lib/library';
 import { tunarrApi } from '../../lib/tunarrClient';
 
-export type LibraryPick = { programs: ContentProgram[] } | { show: { id: string; title: string } };
+export type LibraryPick = { programs: ContentProgram[] } | { show: { id: string; title: string; mediaSourceId?: string; libraryId?: string } };
 
 type Props = {
   title: string;
@@ -166,7 +166,7 @@ export function LibraryBrowser({ title, mode, confirmLabel = 'Add', onPick, onCl
                 <span className="mini-art blue">{(item.title || '?').slice(0, 1)}</span>
                 <span><b>{itemLabel(item)}</b><small>{TYPE_LABELS[item.type] ?? item.type}{item.duration ? ` · ${durationTimecode(item.duration)}` : ''}{item.childCount ? ` · ${item.childCount} ${folderType ?? 'item'}s` : ''}</small></span>
                 <span className="candidate-actions">
-                  {mode === 'show' && item.type === 'show' && <button className="primary" aria-label={`Use ${itemLabel(item)}`} onClick={() => onPick({ show: { id: item.uuid, title: item.title } })}>Use this show</button>}
+                  {mode === 'show' && item.type === 'show' && <button className="primary" aria-label={`Use ${itemLabel(item)}`} onClick={() => onPick({ show: { id: item.uuid, title: item.title, mediaSourceId: sourceId, libraryId: libraryId || undefined } })}>Use this show</button>}
                   {folderType && mode !== 'show' && <button aria-label={`Open ${itemLabel(item)}`} onClick={() => open(item)}>Open</button>}
                   {folderType && mode !== 'show' && <button aria-label={`Add all of ${itemLabel(item)}`} disabled={adding === item.uuid} onClick={() => void addAll(item)}>{adding === item.uuid ? 'Adding…' : 'Add all'}</button>}
                   {playable && mode !== 'show' && <button aria-label={`${picked ? 'Added' : 'Add'} ${itemLabel(item)}`} disabled={picked} onClick={() => addPrograms([toContentProgram(item)])}>{picked ? 'Added' : 'Add'}</button>}

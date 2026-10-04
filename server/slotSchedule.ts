@@ -1,6 +1,7 @@
 // Validation and assembly of slot schedules (Tunarr "time" and "random"
 // schedules). Lineup can create, convert and fully edit a channel's schedule:
-// any source, schedule-wide settings, per-slot filler and mid-roll breaks.
+// any source, schedule-wide settings, per-slot filler and mid-roll breaks,
+// season filters and linked slots.
 // The companion checks shapes and ranges so mistakes get clear messages, and
 // Tunarr's own strict validation still runs on save and preview.
 
@@ -113,6 +114,62 @@ function validateSource(slot: Json, index: number): string | null {
   }
 }
 
+const seasonList = (value: unknown) => value === undefined || (Array.isArray(value) && value.length <= 500 && value.every((season) => Number.isInteger(season) && (season as number) >= 0 && (season as number) <= 10_000));
+
+/** Season filters (show slots) and link fields (any slot that plays a source in order). */
+function validateEpisodesAndLinks(slot: Json, index: number): string | null {
+  const label = `Slot ${index + 1}`;
+  if (slot.type === 'show') {
+    if (!seasonList(slot.seasonFilter) || !seasonList(slot.seasonExcludeFilter)) return `${label}: seasons must be a list of season numbers.`;
+  }
+  if (slot.iterationGroup !== undefined && (typeof slot.iterationGroup !== 'string' || !UUID.test(slot.iterationGroup))) return `${label} has an invalid link group.`;
+  if (slot.linkMode !== undefined && slot.linkMode !== 'continue' && slot.linkMode !== 'rerun') return `${label}: linked slots either continue or rerun.`;
+  if (slot.rerunOverflow !== undefined && slot.rerunOverflow !== 'flex' && slot.rerunOverflow !== 'continue') return `${label} has an invalid rerun setting.`;
+  return null;
+}
+
+/**
+ * Port of Tunarr's validateSlotGroups (server/src/services/scheduling/
+ * slotGroupValidator.ts): a group of one is unlinked, and every slot in a
+ * group must play the same source in the same order and direction.
+ */
+export function checkLinkGroups(slots: Json[], type: ScheduleType): string | null {
+  const groups = new Map<string, Json[]>();
+  for (const slot of slots) {
+    if (!LINKABLE.has(slot.type as string)) {
+      delete slot.iterationGroup;
+      delete slot.linkMode;
+      delete slot.rerunOverflow;
+      continue;
+    }
+    if (typeof slot.iterationGroup !== 'string') {
+      delete slot.linkMode;
+      delete slot.rerunOverflow;
+      continue;
+    }
+    groups.set(slot.iterationGroup, [...(groups.get(slot.iterationGroup) ?? []), slot]);
+  }
+  let number = 0;
+  for (const members of groups.values()) {
+    number += 1;
+    if (members.length < 2) {
+      for (const slot of members) {
+        delete slot.iterationGroup;
+        delete slot.linkMode;
+        delete slot.rerunOverflow;
+      }
+      continue;
+    }
+    const first = members[0];
+    const sameSource = members.every((slot) => slotSourceKey(slot) === slotSourceKey(first) && slot.order === first.order && (slot.direction ?? 'asc') === (first.direction ?? 'asc'));
+    if (!sameSource) return `Linked group ${number}: every linked slot must play the same source, in the same order and direction.`;
+    const modes = new Set(members.map((slot) => slot.linkMode ?? 'continue'));
+    if (modes.size > 1 && type === 'random') return `Linked group ${number}: in a random-slot schedule, every linked slot must continue or every one must rerun.`;
+    if (!modes.has('continue')) return `Linked group ${number}: rerun slots need a slot that continues, to play new episodes.`;
+  }
+  return null;
+}
+
 export type ScheduleEdit = { type?: unknown; settings?: unknown; slots: unknown; timeZoneOffset?: unknown };
 
 /**
@@ -153,7 +210,7 @@ export function buildSchedule(current: unknown, edit: unknown): { schedule: Json
       if (!ORDERS.has(raw.order as string)) return { error: `Slot ${index + 1} needs a play order.` };
       if (raw.direction !== undefined && raw.direction !== 'asc' && raw.direction !== 'desc') return { error: `Slot ${index + 1} has an invalid direction.` };
     }
-    const fillerProblem = validateFiller(raw.filler, index) ?? validateMidRoll(raw.midRoll, index);
+    const fillerProblem = validateFiller(raw.filler, index) ?? validateMidRoll(raw.midRoll, index) ?? validateEpisodesAndLinks(raw, index);
     if (fillerProblem) return { error: fillerProblem };
     if (!LINKABLE.has(raw.type) && (raw.filler !== undefined || raw.midRoll !== undefined)) return { error: `Slot ${index + 1} can't have commercials of its own.` };
     if (type === 'time') {
@@ -174,6 +231,10 @@ export function buildSchedule(current: unknown, edit: unknown): { schedule: Json
     }
     const slot: Json = { ...raw };
     for (const field of MATERIALIZED_KEYS) delete slot[field];
+    if (slot.type !== 'show') {
+      delete slot.seasonFilter;
+      delete slot.seasonExcludeFilter;
+    }
     if (type === 'time') {
       for (const field of ['weight', 'cooldownMs', 'durationSpec', 'index', 'periodMs']) delete slot[field];
     } else {
@@ -183,6 +244,9 @@ export function buildSchedule(current: unknown, edit: unknown): { schedule: Json
     }
     cleaned.push(slot);
   }
+
+  const linkProblem = checkLinkGroups(cleaned, type);
+  if (linkProblem) return { error: linkProblem };
 
   const offset = edit.timeZoneOffset;
   const timeZoneOffset = Number.isInteger(offset) && Math.abs(offset as number) <= 14 * 60 ? offset : base.timeZoneOffset ?? 0;

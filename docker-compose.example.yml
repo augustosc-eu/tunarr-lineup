@@ -41,6 +41,20 @@ services:
       # Optional: upstream timeouts in milliseconds.
       # - TUNARR_TIMEOUT_MS=10000
       # - TUNARR_SAVE_TIMEOUT_MS=30000
+      # - LINEUP_EXTERNAL_LOGOS=false   # only show logos Tunarr hosts itself
+      # Optional: AI programming assistant (Channel → Programming Templates → Ask AI).
+      # Anthropic:
+      # - LINEUP_AI_PROVIDER=anthropic
+      # - LINEUP_AI_API_KEY=sk-ant-...
+      # - LINEUP_AI_MODEL=claude-sonnet-5-5
+      # Or any OpenAI-compatible API, e.g. a local Ollama:
+      # - LINEUP_AI_PROVIDER=openai
+      # - LINEUP_AI_BASE_URL=http://ollama:11434/v1
+      # - LINEUP_AI_MODEL=llama3.1
+    volumes:
+      # Saved programming templates. A named volume, so the container's
+      # non-root user owns it.
+      - lineup-data:/data
     ports:
       # Lineup can rewrite channel programming. Use "127.0.0.1:3000:3000"
       # to keep it reachable from this machine only.
@@ -50,3 +64,6 @@ services:
 
 networks:
   tunarr:
+
+volumes:
+  lineup-data:

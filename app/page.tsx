@@ -2,12 +2,18 @@
 
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { ChannelSettingsDialog } from './components/ChannelSettingsDialog';
+import { EventDialog } from './components/EventDialog';
 import { InsertDialog } from './components/InsertDialog';
 import { LibraryBrowser, type LibraryPick } from './components/LibraryBrowser';
 import { ListsManager } from './components/ListsManager';
 import { MenuBar, type Menu } from './components/MenuBar';
+import { MediaSourcesDialog } from './components/MediaSourcesDialog';
 import { MoveDialog } from './components/MoveDialog';
+import { NewChannelDialog } from './components/NewChannelDialog';
 import { ScheduleEditor } from './components/ScheduleEditor';
+import { SmartCollectionsManager } from './components/SmartCollectionsManager';
+import { TemplatesDialog, type TemplateTarget } from './components/TemplatesDialog';
+import { TranscodeProfilesDialog } from './components/TranscodeProfilesDialog';
 import {
   changedPositions,
   clockTimecode,
@@ -44,9 +50,10 @@ import {
   type LineupItem,
   type Programming,
 } from '../lib/lineup';
-import { programArtwork, programDetail, programTitle } from '../lib/programInfo';
-import { lineupEntry, type ContentProgram } from '../lib/library';
-import { changeSlotSource, draftFromSchedule, newSlot, showOption, type SchedulePreview, type ScheduleDraftState, type SlotCatalog, type SlotSchedule } from '../lib/schedule';
+import { channelLogoUrl, programArtwork, programDetail, programTitle } from '../lib/programInfo';
+import type { EventPlacement } from '../lib/events';
+import { lineupEntry, seasonsFromEpisodes, type ContentProgram } from '../lib/library';
+import { changeSlotSource, draftFromSchedule, newSlot, showOption, type SchedulePreview, type ScheduleDraftState, type SeasonInfo, type Slot, type SlotCatalog, type SlotSchedule } from '../lib/schedule';
 import { programmingVersion } from '../server/lineupVersion';
 import { checkHealth, tunarrApi, TunarrApiError, type ConnectionState } from '../lib/tunarrClient';
 
@@ -127,6 +134,35 @@ function scheduleSummary(schedule: unknown) {
   return Array.isArray(slots) ? `its ${kind} (${slots.length} ${slots.length === 1 ? 'slot' : 'slots'})` : `its ${kind}`;
 }
 
+/** A show slot's seasons: searched in its library when known, otherwise counted from its episodes. */
+async function loadSeasons(slot: Slot): Promise<SeasonInfo[]> {
+  const showId = String(slot.showId ?? '');
+  const show = slot.show as { mediaSourceId?: string; libraryId?: string } | undefined;
+  if (show?.mediaSourceId) {
+    try {
+      const result = await tunarrApi.searchLibrary({ mediaSourceId: show.mediaSourceId, libraryId: show.libraryId, type: 'season', parentId: showId, limit: 100 });
+      const seasons = result.results.filter((item) => Number.isInteger(item.index)).map((item) => ({ number: item.index as number, title: item.title, episodes: item.childCount }));
+      if (seasons.length) return seasons.sort((a, b) => a.number - b.number);
+    } catch {
+      // Fall back to counting episodes below.
+    }
+  }
+  return seasonsFromEpisodes(await tunarrApi.descendants(showId));
+}
+
+/** The channel's logo, or its number when it has none (or it fails to load). */
+function ChannelLogo({ channel, live, className = 'channel-logo' }: { channel: Channel; live: boolean; className?: string }) {
+  const src = channelLogoUrl(channel, live);
+  const [failed, setFailed] = useState('');
+  if (!src || failed === src) return <span className={`${className} no-logo`} aria-hidden="true">{channel.number}</span>;
+  return (
+    <span className={className}>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src={src} alt="" loading="lazy" decoding="async" onError={() => setFailed(src)} />
+    </span>
+  );
+}
+
 const isTypingTarget = (target: EventTarget | null) => target instanceof HTMLElement && !!target.closest('input, textarea, select, [contenteditable="true"]');
 
 /** Art tile: Tunarr artwork when available, otherwise the coloured initial. */
@@ -184,6 +220,10 @@ export default function Home() {
   const [insertOpen, setInsertOpen] = useState(false);
   const [listsOpen, setListsOpen] = useState<'filler' | 'custom' | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [setupDialog, setSetupDialog] = useState<'sources' | 'transcode' | 'smart' | null>(null);
+  const [newChannel, setNewChannel] = useState<{ copyFrom: string } | null>(null);
+  const [templatesOpen, setTemplatesOpen] = useState(false);
+  const [eventOpen, setEventOpen] = useState(false);
   const [grab, setGrab] = useState<Grab | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [connectionOpen, setConnectionOpen] = useState(false);
@@ -730,6 +770,24 @@ export default function Home() {
       });
   };
 
+  /** Opens a template's schedule draft in the slot editor, on this channel or a new one. */
+  const applyTemplate = async (draft: ScheduleDraftState, target: TemplateTarget, template: { name: string }) => {
+    let channelId = activeChannelId;
+    let isNew = !hasGeneratedSchedule(programming);
+    if (target.kind === 'new') {
+      const created = await tunarrApi.createChannel({ name: target.name, number: target.number });
+      resetEditing();
+      await loadChannels(selectedDate, created.id);
+      channelId = created.id;
+      isNew = true;
+    }
+    if (grab) cancelGrab();
+    loadCatalog();
+    setTemplatesOpen(false);
+    setSlotEditor({ ...closedSlotEditor, channelId, open: true, isNew, loaded: true, draft, saved: null });
+    notify(`${template.name} template ready: preview it, then save`);
+  };
+
   const scheduleRequest = (draft: ScheduleDraftState) => ({ type: draft.type, settings: draft.settings, slots: draft.slots, extraPrograms: draft.extraMovies.map((movie) => movie.id) });
 
   const previewSlots = () => {
@@ -833,6 +891,15 @@ export default function Home() {
     setInsertOpen(false);
   };
 
+  /** Puts a date-specific event into the lineup and shows the day it airs. */
+  const placeEventEdit = (placement: EventPlacement, label: string, meta: Record<string, ContentProgram>, date: string) => {
+    if (Object.keys(meta).length) setProgramming((current) => ({ ...current, programs: { ...current.programs, ...meta } as Programming['programs'] }));
+    applyEdit(`Scheduled “${label}” for ${date}`, placement.lineup, { start: placement.index, end: placement.index + placement.count - 1 });
+    setEventOpen(false);
+    changeDate(date);
+    setCursorStart(placement.start);
+  };
+
   const removeSelection = () => {
     if (!selectedItem || grab) return;
     const result = removeBlock(lineup, block);
@@ -884,7 +951,7 @@ export default function Home() {
     if (hasGeneratedSchedule(programming)) {
       setConfirmDialog({
         title: 'Save over a generated schedule?',
-        body: `Tunarr builds this channel’s lineup from ${scheduleSummary(programming.schedule)}. Saving here stores it as a manual lineup, which can detach the channel from that schedule, and a later regeneration may overwrite these changes.`,
+        body: `Tunarr builds this channel’s lineup from ${scheduleSummary(programming.schedule)}. Saving replaces the generated lineup with your edited copy. Tunarr keeps the slot schedule, so your changes last until the lineup is regenerated (by saving the slot schedule or changing the channel’s start time).`,
         confirmLabel: 'Save manual lineup',
         onConfirm: () => void performSave(),
       });
@@ -957,7 +1024,7 @@ export default function Home() {
       const key = event.key;
       const back = key === 'Escape' || key === 'GoBack' || key === 'BrowserBack';
       const mod = event.metaKey || event.ctrlKey;
-      if (confirmDialog || arrangeOpen || connectionOpen || infoDialog || slotEditor.open || libraryPicker || insertOpen || settingsOpen || listsOpen) {
+      if (confirmDialog || arrangeOpen || connectionOpen || infoDialog || slotEditor.open || libraryPicker || insertOpen || settingsOpen || listsOpen || setupDialog || newChannel || templatesOpen || eventOpen) {
         if (!back) return;
         event.preventDefault();
         if (confirmDialog) setConfirmDialog(null);
@@ -965,6 +1032,10 @@ export default function Home() {
         else if (insertOpen) setInsertOpen(false);
         else if (settingsOpen) setSettingsOpen(false);
         else if (listsOpen) setListsOpen(null);
+        else if (setupDialog) setSetupDialog(null);
+        else if (newChannel) setNewChannel(null);
+        else if (templatesOpen) setTemplatesOpen(false);
+        else if (eventOpen) setEventOpen(false);
         else if (slotEditor.open) setSlotEditor((current) => ({ ...current, open: false }));
         else if (arrangeOpen) setArrangeOpen(false);
         else if (infoDialog) setInfoDialog(null);
@@ -1019,6 +1090,7 @@ export default function Home() {
           else if (!grab && key === 't') changeDate(inputDate(new Date()));
           else if (!grab && key === 'm' && selectedItem) setArrangeOpen(true);
           else if (!grab && key === 'i' && activeChannel) setInsertOpen(true);
+          else if (!grab && !slotPreview && key === 'e' && activeChannel && lineup.length) setEventOpen(true);
           else if (!grab && key === 'Delete' && selectedItem) { event.preventDefault(); removeSelection(); }
           else if (key === '?') setInfoDialog('shortcuts');
       }
@@ -1026,6 +1098,30 @@ export default function Home() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   });
+
+  const confirmDeleteChannel = () => {
+    const channel = activeChannel;
+    if (!channel) return;
+    setConfirmDialog({
+      title: `Delete CH ${channel.number} ${channel.name}?`,
+      body: `Tunarr removes the channel, its lineup and its schedule${dirty ? ', and your unsaved edits are lost' : ''}. Programs stay in your libraries. This can’t be undone.`,
+      confirmLabel: 'Delete channel',
+      onConfirm: () => {
+        setSaving(true);
+        tunarrApi.deleteChannel(channel.id)
+          .then(() => {
+            notify(`Deleted CH ${channel.number} ${channel.name}`);
+            resetEditing();
+            setSlotEditor(closedSlotEditor);
+            const index = channels.findIndex((item) => item.id === channel.id);
+            const neighbour = channels[index + 1] ?? channels[index - 1];
+            return loadChannels(selectedDate, neighbour?.id);
+          })
+          .catch((error) => { notify(errorMessage(error, 'The channel was not deleted.')); noteFailure(error); })
+          .finally(() => setSaving(false));
+      },
+    });
+  };
 
   const menus: Menu[] = [
     { title: 'File', items: [
@@ -1042,6 +1138,7 @@ export default function Home() {
       { label: 'Revert All Changes', disabled: !dirty || !!grab, onSelect: revertAll },
       'separator',
       { label: 'Insert…', shortcut: 'I', disabled: !activeChannel || !!grab || !!slotPreview, onSelect: () => setInsertOpen(true) },
+      { label: 'Schedule Event…', shortcut: 'E', disabled: !activeChannel || !lineup.length || !!grab || !!slotPreview, onSelect: () => setEventOpen(true) },
       { label: 'Remove', shortcut: 'Del', disabled: !selectedItem || !!grab || !!slotPreview, onSelect: removeSelection },
       { label: 'Move or Swap…', shortcut: 'M', disabled: !selectedItem || !!grab, onSelect: () => setArrangeOpen(true) },
       { label: grab ? 'Drop Here' : 'Pick Up to Slide', shortcut: 'OK', disabled: !selectedItem, onSelect: () => (grab ? drop() : pickUp()) },
@@ -1061,10 +1158,20 @@ export default function Home() {
       'separator',
       { label: hasGeneratedSchedule(programming) ? 'Edit Slot Schedule…' : 'Create Slot Schedule…', disabled: !live || !activeChannelId || !!grab, onSelect: openSlotEditor },
       { label: 'Channel Settings…', disabled: !live || !activeChannelId, onSelect: () => setSettingsOpen(true) },
+      { label: 'Programming Templates…', disabled: !live || !!grab, onSelect: () => { loadCatalog(); setTemplatesOpen(true); } },
+      'separator',
+      { label: 'New Channel…', disabled: !live || !!grab, onSelect: () => guardUnsaved(() => setNewChannel({ copyFrom: '' })) },
+      { label: 'Duplicate Channel…', disabled: !live || !activeChannelId || !!grab, onSelect: () => guardUnsaved(() => setNewChannel({ copyFrom: activeChannelId })) },
+      { label: 'Delete Channel…', disabled: !live || !activeChannel || !!grab, onSelect: confirmDeleteChannel },
     ] },
     { title: 'Lists', items: [
       { label: 'Filler Lists…', disabled: !live, onSelect: () => setListsOpen('filler') },
       { label: 'Custom Shows…', disabled: !live, onSelect: () => setListsOpen('custom') },
+      { label: 'Smart Collections…', disabled: !live, onSelect: () => setSetupDialog('smart') },
+    ] },
+    { title: 'Setup', items: [
+      { label: 'Media Sources…', disabled: !live, onSelect: () => setSetupDialog('sources') },
+      { label: 'Transcode Profiles…', disabled: !live, onSelect: () => setSetupDialog('transcode') },
     ] },
     { title: 'Help', items: [
       { label: 'Keyboard & Remote Shortcuts', shortcut: '?', onSelect: () => setInfoDialog('shortcuts') },
@@ -1137,8 +1244,8 @@ export default function Home() {
           <div className="rail-heading"><p className="eyebrow">{live ? 'CHANNELS' : 'DEMO CHANNELS'}</p><span>{channels.length}</span></div>
           {channels.map((channel) => (
             <button className={`channel ${channel.id === activeChannelId ? 'active' : ''}`} key={channel.id} onClick={() => loadChannel(channel)}>
-              <span className="channel-number">{channel.number}</span>
-              <span className="channel-copy"><b>{channel.name}</b><small>{channel.programCount ?? '—'} programs{live && draftMarks[channel.id] && <em className="unsaved-mark"> · unsaved</em>}</small></span>
+              <ChannelLogo channel={channel} live={live} />
+              <span className="channel-copy"><b>{channel.name}</b><small>CH {channel.number} · {channel.programCount ?? '—'} programs{live && draftMarks[channel.id] && <em className="unsaved-mark"> · unsaved</em>}</small></span>
             </button>
           ))}
           <div className="rail-note">
@@ -1148,11 +1255,14 @@ export default function Home() {
 
         <section className="schedule" aria-busy={busy}>
           <div className="schedule-head">
-            <div>
+            <div className="head-main">
+              {activeChannel && channelLogoUrl(activeChannel, live) && <ChannelLogo key={activeChannel.id} channel={activeChannel} live={live} className="head-logo" />}
+              <div>
               <p className="eyebrow">{activeChannel ? `${live ? '' : 'DEMO · '}${activeChannel.name.toUpperCase()} · CH ${activeChannel.number}${lineup.length ? ` · ${lineup.length.toLocaleString('en')} ITEMS · CYCLE ${durationTimecode(cycleDuration(lineup))}` : ''}` : live ? 'TUNARR' : 'DEMO'}</p>
               <h1>{dateLabel(selectedDate)}</h1>
               <p className="subtle">Seek by date, then drag, move, or swap anything already in this lineup. Press ? for remote shortcuts.</p>
               {sourceNote && <p className="subtle source-note">{sourceNote}</p>}
+              </div>
             </div>
             <div className="date-controls">
               <div className="stepper"><button aria-label="Previous day" onClick={() => shiftDay(-1)}>←</button><button onClick={() => changeDate(inputDate(new Date()))}>Today</button><button aria-label="Next day" onClick={() => shiftDay(1)}>→</button></div>
@@ -1343,6 +1453,8 @@ export default function Home() {
                 ['N', 'Go to what is on air now'],
                 ['T', 'Today'],
                 ['M', 'Move or swap…'],
+                ['I', 'Insert…'],
+                ['E', 'Schedule an event on a date…'],
                 ['⌘Z / Ctrl+Z', 'Undo'],
                 ['⇧⌘Z / Ctrl+Y', 'Redo'],
                 ['⌘S / Ctrl+S', 'Save lineup'],
@@ -1371,6 +1483,7 @@ export default function Home() {
         onChange={(draft) => setSlotEditor((current) => ({ ...current, draft, error: '' }))}
         onBrowseShow={(index) => setLibraryPicker({ purpose: 'slot-show', index })}
         onBrowseMovies={() => setLibraryPicker({ purpose: 'movies' })}
+        loadSeasons={loadSeasons}
         onPreview={previewSlots}
         onSave={saveSlots}
         onDetach={slotEditor.isNew ? undefined : detachToManual}
@@ -1404,6 +1517,24 @@ export default function Home() {
       />}
 
       {listsOpen && <ListsManager kind={listsOpen} onClose={() => setListsOpen(null)} onChanged={() => { if (slotEditor.open || catalog) loadCatalog(); }} />}
+
+      {eventOpen && activeChannel && <EventDialog channel={activeChannel} channels={channels} lineup={lineup} programs={programming.programs} date={selectedDate} generated={hasGeneratedSchedule(programming)} onClose={() => setEventOpen(false)} onPlace={placeEventEdit} />}
+      {templatesOpen && <TemplatesDialog channels={channels} activeChannel={activeChannel} activeHasSchedule={hasGeneratedSchedule(programming)} catalog={catalog} onClose={() => setTemplatesOpen(false)} onApply={applyTemplate} />}
+      {setupDialog === 'smart' && <SmartCollectionsManager onClose={() => setSetupDialog(null)} onChanged={() => { if (slotEditor.open || catalog) loadCatalog(); }} />}
+      {setupDialog === 'sources' && <MediaSourcesDialog onClose={() => setSetupDialog(null)} />}
+      {setupDialog === 'transcode' && <TranscodeProfilesDialog onClose={() => setSetupDialog(null)} />}
+      {newChannel && <NewChannelDialog
+        channels={channels}
+        copyFrom={newChannel.copyFrom}
+        onClose={() => setNewChannel(null)}
+        onCreated={(id) => {
+          setNewChannel(null);
+          notify('Channel created in Tunarr');
+          resetEditing();
+          setSlotEditor(closedSlotEditor);
+          void loadChannels(selectedDate, id);
+        }}
+      />}
 
       {settingsOpen && activeChannelId && <ChannelSettingsDialog
         channelId={activeChannelId}

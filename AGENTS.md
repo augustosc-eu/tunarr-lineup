@@ -11,9 +11,12 @@ Read this first; read the docs below before non-trivial changes.
 ## What this is
 
 A Mac OS 9–styled programming desk for [Tunarr](https://tunarr.com) channels:
-arrange, insert and remove programs, build and edit slot schedules, and manage
-commercials, filler lists, custom shows and programming-related channel settings. It ships as two targets built from one
-React page (`app/page.tsx`):
+arrange, insert and remove programs, build and edit slot schedules (season filters,
+linked slots), start channels from programming templates (general, network-inspired for
+Japan, Argentina, the US, Spain, the UK and Italy, the user's own, or AI-written), place
+events on dates, and manage commercials, filler lists, custom shows, smart collections,
+channels (create, duplicate, delete, logos, streaming), media sources and transcode
+profiles. It ships as two targets built from one React page (`app/page.tsx`):
 
 - **Local companion** (supported for real use): `server/` (dependency-free Node HTTP
   server plus a narrow `/api/tunarr/*` proxy) serving a Vite build of the page.
@@ -43,17 +46,28 @@ Chromium with `npx playwright install chromium`. CI runs all of them
 
 ## Invariants (do not break without explicit approval)
 
-1. **The browser never contacts Tunarr.** It calls only same-origin `/api/tunarr/*`.
-   Never put `TUNARR_URL` or any Tunarr address in client code. Only the `LINEUP_PUBLIC_`
-   env prefix is exposed to the client (`vite.local.config.ts`). Never add a
-   user-entered URL workflow, wildcard CORS, or a generic proxy.
+1. **The browser never contacts Tunarr (or any other server).** It calls only
+   same-origin `/api/tunarr/*`. Never put `TUNARR_URL` or any Tunarr address in client
+   code. Only the `LINEUP_PUBLIC_` env prefix is exposed to the client
+   (`vite.local.config.ts`). Never add a user-entered URL workflow for reaching Tunarr,
+   wildcard CORS, or a generic proxy. Channel logos come through
+   `/api/tunarr/channels/:id/logo` (`server/logos.ts`); public logo hosts are fetched
+   by the companion with the guards there (public addresses only, ports 80/443, image
+   types, size and redirect limits), never by the browser. The AI provider is likewise
+   configured and called only by the companion (`server/ai.ts`, `LINEUP_AI_*`); its key
+   and address never reach the browser, and its replies are validated as templates.
 2. **The proxy stays an allowlist.**
    - Channel routes live in `server/tunarrProxy.ts` (`matchRoute`). Library, list and
-     channel-settings routes live in `server/content.ts` (`matchContentRoute`). Every
-     route is explicit, IDs are validated, and no raw Tunarr request is accepted:
-     search filters are built server-side (`buildLibrarySearch`), channel settings are
-     an allowlist merged onto Tunarr's copy, and media sources are sanitized so server
-     addresses and accounts never reach the browser.
+     channel-settings routes live in `server/content.ts` (`matchContentRoute`). Setup
+     routes (channels, transcode profiles, media sources, smart collections) live in
+     `server/admin.ts` (`matchAdminRoute`). Lineup's own routes (saved templates, AI)
+     live in `server/lineupRoutes.ts` (`matchLineupRoute`); templates are always checked
+     with `validateTemplate` (`server/templateSchema.ts`). Every route is explicit, IDs are validated,
+     and no raw Tunarr request is accepted: search filters and smart-collection filters
+     are built server-side (`buildLibrarySearch`, `rulesToFilter`), channel settings and
+     transcode profiles are allowlists merged onto Tunarr's copy, and media sources are
+     sanitized so server addresses, tokens, accounts and folder paths never reach the
+     browser.
    - Slot schedules are validated in `server/slotSchedule.ts` (`buildSchedule`), and
      the program pool is computed server-side.
    - Adding a route means validating its params and body, adding tests, and documenting
@@ -68,7 +82,12 @@ Chromium with `npx playwright install chromium`. CI runs all of them
    - Lineup item objects are passed through untouched on save (`buildManualSave`);
      never rebuild them from a subset of fields.
    - Custom-show updates must keep their Plex sync settings.
-   - Don't add endpoints that create media, edit media sources, or change transcoding.
+   - Setting up Tunarr is allowed too (owner decision, 2026-10-03): creating,
+     duplicating and deleting channels; adding and removing media sources and enabling
+     or scanning their libraries; editing transcode profiles; creating smart
+     collections. Media-server addresses and tokens are write-only: they go to Tunarr
+     and are never returned. Don't add endpoints that create or upload media files,
+     edit Tunarr's global settings (FFmpeg paths, HDHomeRun, XMLTV), or reveal secrets.
 4. **Every save is conditional.**
    - The client sends `If-Match` with `programmingVersion(lineup, schedule)` of what it
      loaded (`server/lineupVersion.ts`, shared with the browser).
@@ -89,7 +108,9 @@ Chromium with `npx playwright install chromium`. CI runs all of them
    the user picks "Use demo data". Keep demo mode visibly labeled.
 7. **Server stays dependency-free.** The runtime Docker stage copies only `dist-server/`
    and `dist-local/`, with no `node_modules`. Use Node built-ins in `server/`, or update
-   the Dockerfile deliberately.
+   the Dockerfile deliberately. Its only stored state is saved templates in
+   `LINEUP_DATA_DIR/templates.json` (`server/templateStore.ts`): atomic writes, and a file
+   it can't parse is never overwritten.
 8. **Keep the desk TV/remote-operable.** Every action must be reachable without a
    mouse: arrow keys, Enter/OK, Escape/Back, PageUp/PageDown or CH±, the menus and
    the `?` shortcut list. Don't add hover-only or drag-only features.
@@ -100,6 +121,9 @@ Chromium with `npx playwright install chromium`. CI runs all of them
 
 ## Working rules
 
+- **Network templates describe a style, not an official schedule.** Name networks only in
+  `inspiredBy` text ("Inspired by …"), never with logos, and keep descriptions honest
+  approximations. Every built-in must pass `validateTemplate` and `buildSchedule` (tested).
 - **Treat any reachable Tunarr as real user data.** Read-only checks are fine. Never
   save programming to a real Tunarr unless the user asks. For write testing, use the
   test suite or a throwaway Tunarr container.
@@ -110,14 +134,21 @@ Chromium with `npx playwright install chromium`. CI runs all of them
 - **Put pure logic in `lib/`** (testable without React): `library.ts` for library types and helpers, `lineup.ts` for schedule math,
   `broadcast.ts` for block moves, timecode, totals and CSV, `history.ts` for
   undo/redo and rebasing, `draftStore.ts` for persistent drafts, `schedule.ts` for slot
-  editing, and `programInfo.ts` for titles and artwork.
+  editing (seasons, linked slots), `templates.ts` (presets, ad styles, `templateToDraft`,
+  `scheduleToTemplate`), `networkTemplates.ts` (the network catalog), `templateCatalog.ts`,
+  `events.ts` (placing events on dates), and `programInfo.ts` for titles, artwork and logo URLs.
 - **Put HTTP and validation logic in `server/`:** `tunarrProxy.ts` (framework-free),
-  `content.ts`, `upstream.ts`, `slotSchedule.ts`, `lineupVersion.ts`, `auth.ts` and
-  `app.ts`. `lib/` may import pure modules from `server/` (`lineupVersion`,
-  `slotSchedule`) but never Node APIs.
+  `content.ts`, `admin.ts`, `logos.ts`, `smartCollection.ts`, `templateSchema.ts`,
+  `templateStore.ts`, `lineupRoutes.ts`, `ai.ts`, `upstream.ts`,
+  `slotSchedule.ts`, `lineupVersion.ts`, `auth.ts` and `app.ts`. `lib/` and
+  `app/` may import pure modules from `server/` (`lineupVersion`, `slotSchedule`,
+  `smartCollection`, `templateSchema`) but never Node APIs (`logos.ts` and
+  `templateStore.ts` use Node built-ins).
 - **Keep `app/page.tsx` for UI state and rendering,** and `app/components/` for larger
   UI pieces: `MenuBar`, `MoveDialog`, `ScheduleEditor`, `InsertDialog`,
-  `LibraryBrowser`, `ListsManager`, `ChannelSettingsDialog`.
+  `LibraryBrowser`, `ListsManager`, `ChannelSettingsDialog`, `NewChannelDialog`,
+  `SmartCollectionsManager`, `MediaSourcesDialog`, `TranscodeProfilesDialog`,
+  `TemplatesDialog` (gallery, AI panel), `TemplateEditor`, `EventDialog`.
 - **Add or update tests** for any behavior change.
   - Unit and UI tests go in `tests/`. Proxy tests inject `fetchImpl`; UI tests mock
     `fetch` with a stateful fake companion (`tests/page.test.tsx`).

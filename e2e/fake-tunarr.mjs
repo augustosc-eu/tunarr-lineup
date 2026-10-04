@@ -25,6 +25,7 @@ const ids = {
   movieA: '4d4d4d4d-1a2b-4c3d-8e9f-000000000001',
   movieB: '4d4d4d4d-1a2b-4c3d-8e9f-000000000002',
   ads: '5e5e5e5e-1a2b-4c3d-8e9f-000000000001',
+  profile: '6f6f6f6f-1a2b-4c3d-8e9f-000000000001',
 };
 
 const libraryMovies = [
@@ -40,10 +41,14 @@ function initialState() {
   const startTime = Math.floor(Date.now() / HOUR) * HOUR - 2 * HOUR;
   return {
     channels: [
-      { id: ids.news, name: 'Desk News', number: 5, startTime, duration: 120 * MINUTE, programCount: 4 },
-      { id: ids.movies, name: 'Desk Movies', number: 9, startTime, duration: 120 * MINUTE, programCount: 4 },
-      { id: ids.rotation, name: 'Desk Rotation', number: 12, startTime, duration: 100 * MINUTE, programCount: 3 },
+      // Logos like real Tunarr stores them: an upload saved under another host name, none, and a site that can't be reached.
+      { id: ids.news, name: 'Desk News', number: 5, startTime, duration: 120 * MINUTE, programCount: 4, transcodeConfigId: ids.profile, icon: { path: 'http://host.docker.internal:8000/images/uploads/news.png', width: 0, duration: 0, position: 'bottom-right' } },
+      { id: ids.movies, name: 'Desk Movies', number: 9, startTime, duration: 120 * MINUTE, programCount: 4, transcodeConfigId: ids.profile, icon: { path: '', width: 0, duration: 0, position: 'bottom-right' } },
+      { id: ids.rotation, name: 'Desk Rotation', number: 12, startTime, duration: 100 * MINUTE, programCount: 3, transcodeConfigId: ids.profile, icon: { path: 'https://logos.example.invalid/rotation.png', width: 0, duration: 0, position: 'bottom-right' } },
     ],
+    transcodeConfigs: [{ id: ids.profile, name: 'Default', isDefault: true, vaapiDevice: '/dev/dri/renderD128', resolution: { widthPx: 1920, heightPx: 1080 }, videoFormat: 'h264', videoBitRate: 2000, videoBufferSize: 4000, hardwareAccelerationMode: 'none', audioFormat: 'aac', audioBitRate: 192, audioBufferSize: 384, audioChannels: 2, audioSampleRate: 48, audioVolumePercent: 100, audioLoudnormConfig: null, normalizeFrameRate: false, deinterlaceVideo: true, disableChannelOverlay: false, errorScreen: 'pic', errorScreenAudio: 'silent', threadCount: 0, videoBitDepth: 8 }],
+    smartCollections: [],
+    mediaSources: [{ id: ids.source, name: 'Fake Plex', type: 'plex', uri: 'http://10.9.9.9:32400', accessToken: 'secret-token', username: 'secret-owner', libraries: [{ id: ids.library, name: 'Movies', mediaType: 'movies', enabled: true }] }],
     schedules: {
       [ids.rotation]: {
         type: 'random', flexPreference: 'end', maxDays: 2, padMs: 0, padStyle: 'slot', randomDistribution: 'weighted', lockWeights: false, timeZoneOffset: 0,
@@ -130,19 +135,75 @@ http.createServer(async (req, res) => {
     state = initialState();
     return send(res, 200, { ok: true });
   }
-  if (path === '/__test/state') return send(res, 200, { lineups: state.lineups, saves: state.saves, schedules: state.schedules, lastScheduleSave: state.lastScheduleSave, fillerLists: state.fillerLists, channels: state.channels.map((channel) => ({ ...channel, ...state.channelExtras[channel.id] })) });
+  if (path === '/__test/state') return send(res, 200, { lineups: state.lineups, saves: state.saves, schedules: state.schedules, lastScheduleSave: state.lastScheduleSave, fillerLists: state.fillerLists, smartCollections: state.smartCollections, mediaSources: state.mediaSources, transcodeConfigs: state.transcodeConfigs, channels: state.channels.map((channel) => ({ ...channel, ...state.channelExtras[channel.id] })) });
+
+  // Tunarr setup: uploaded images, channels, transcode profiles, media sources, smart collections.
+  if (/^\/images\/uploads\/[^/]+$/.test(path)) return send(res, 200, PNG, 'image/png');
+  if (path === '/api/channels' && req.method === 'POST') {
+    const body = JSON.parse(await readBody(req));
+    const id = `5d0c1e8a-7b6a-4d4c-9e2f-${String(state.channels.length + 1).padStart(12, '0')}`;
+    const source = body.type === 'copy' ? state.channels.find((item) => item.id === body.channelId) : null;
+    if (body.type === 'copy' && !source) return send(res, 404, '', 'text/plain');
+    if (body.type === 'new' && !state.transcodeConfigs.some((item) => item.id === body.channel.transcodeConfigId)) return send(res, 400, { error: 'Transcode config not found' });
+    const channel = source ? { ...source, id, name: `${source.name} - Copy`, number: 999 } : { ...body.channel, id, programCount: 0 };
+    state.channels.push(channel);
+    state.lineups[id] = source ? [...state.lineups[source.id]] : [];
+    return send(res, 201, channel);
+  }
+  if (path === '/api/transcode_configs') return send(res, 200, state.transcodeConfigs);
+  const transcode = /^\/api\/transcode_configs\/([^/]+)$/.exec(path);
+  if (transcode) {
+    const config = state.transcodeConfigs.find((item) => item.id === transcode[1]);
+    if (!config) return send(res, 404, '', 'text/plain');
+    if (req.method === 'PUT') Object.assign(config, JSON.parse(await readBody(req)));
+    return send(res, 200, config);
+  }
+  if (path === '/api/media-sources' && req.method === 'POST') {
+    const body = JSON.parse(await readBody(req));
+    const id = `3c3c3c3c-1a2b-4c3d-8e9f-${String(state.mediaSources.length + 10).padStart(12, '0')}`;
+    state.mediaSources.push({ ...body, id, libraries: [] });
+    return send(res, 201, { id });
+  }
+  const sourceRefresh = /^\/api\/media-sources\/([^/]+)\/libraries\/refresh$/.exec(path);
+  if (sourceRefresh) {
+    const source = state.mediaSources.find((item) => item.id === sourceRefresh[1]);
+    if (source && !source.libraries.length) source.libraries.push({ id: `3c3c3c3c-1a2b-4c3d-8e9f-${String(state.mediaSources.length + 20).padStart(12, '0')}`, name: 'TV Shows', mediaType: 'shows', enabled: false });
+    return send(res, 200, '', 'text/plain');
+  }
+  const library = /^\/api\/media-sources\/([^/]+)\/libraries\/([^/]+)$/.exec(path);
+  if (library && req.method === 'PUT') {
+    const item = state.mediaSources.find((source) => source.id === library[1])?.libraries.find((entry) => entry.id === library[2]);
+    if (!item) return send(res, 404, '', 'text/plain');
+    item.enabled = JSON.parse(await readBody(req)).enabled;
+    return send(res, 200, item);
+  }
+  if (path === '/api/smart_collections' && req.method === 'POST') {
+    const body = JSON.parse(await readBody(req));
+    const collection = { uuid: `8a8a8a8a-1a2b-4c3d-8e9f-${String(state.smartCollections.length + 1).padStart(12, '0')}`, name: body.name, keywords: body.keywords ?? '', filter: body.filter };
+    state.smartCollections.push(collection);
+    return send(res, 200, collection);
+  }
+  if (path === '/api/smart_collections') return send(res, 200, state.smartCollections);
 
   // Library, lists and channel settings (the Tunarr endpoints Lineup's content routes call).
-  if (path === '/api/media-sources') return send(res, 200, [{ id: ids.source, name: 'Fake Plex', type: 'plex', uri: 'http://10.9.9.9:32400', username: 'secret-owner', libraries: [{ id: ids.library, name: 'Movies', mediaType: 'movies', enabled: true }] }]);
+  if (path === '/api/media-sources') return send(res, 200, state.mediaSources);
   if (path === '/api/programs/search' && req.method === 'POST') {
     const body = JSON.parse(await readBody(req));
+    const filters = body.query?.filter?.children ?? (body.query?.filter ? [body.query.filter] : []);
+    if (filters.some((node) => node.fieldSpec?.key === 'type' && node.fieldSpec.value?.[0] === 'show')) {
+      const shows = [{ uuid: ids.show, type: 'show', title: 'Rotation Show', year: 2001, genres: [{ name: 'Comedy' }], grandchildCount: 2, mediaSourceId: ids.source, libraryId: ids.library }];
+      return send(res, 200, { results: (body.page ?? 0) === 0 ? shows : [], page: body.page ?? 0, totalPages: 1, totalHits: shows.length });
+    }
+    if (filters.some((node) => node.fieldSpec?.key === 'type' && node.fieldSpec.value?.[0] === 'season')) {
+      const seasons = [1, 2, 3].map((index) => ({ uuid: `7b7b7b7b-1a2b-4c3d-8e9f-00000000000${index}`, type: 'season', title: `Season ${index}`, index, childCount: 4 }));
+      return send(res, 200, { results: seasons, page: 0, totalPages: 1, totalHits: seasons.length });
+    }
     const text = (body.query?.query ?? '').toLowerCase();
     const results = libraryMovies.filter((movie) => movie.title.toLowerCase().includes(text));
     return send(res, 200, { results, page: body.page ?? 0, totalPages: 1, totalHits: results.length });
   }
   if (/^\/api\/programs\/[^/]+\/descendants$/.test(path)) return send(res, 200, []);
   if (path === '/api/custom-shows') return send(res, 200, []);
-  if (path === '/api/smart_collections') return send(res, 200, []);
   if (path === '/api/filler-lists' && req.method === 'GET') return send(res, 200, state.fillerLists.map(({ id, name, programs }) => ({ id, name, contentCount: programs.length })));
   if (path === '/api/filler-lists' && req.method === 'POST') {
     const body = JSON.parse(await readBody(req));
@@ -164,13 +225,38 @@ http.createServer(async (req, res) => {
   if (channelDoc) {
     const channel = state.channels.find((item) => item.id === channelDoc[1]);
     if (!channel) return send(res, 404, { error: 'Channel Not Found' });
+    if (req.method === 'DELETE') {
+      state.channels = state.channels.filter((item) => item !== channel);
+      delete state.lineups[channel.id];
+      return send(res, 200, '', 'text/plain');
+    }
     if (req.method === 'PUT') {
       const body = JSON.parse(await readBody(req));
       if ('programCount' in body || 'sessions' in body) return send(res, 400, 'Unexpected read-only fields');
-      state.channelExtras[channel.id] = { ...state.channelExtras[channel.id], fillerCollections: body.fillerCollections, fillerRepeatCooldown: body.fillerRepeatCooldown };
-      Object.assign(channel, { name: body.name, number: body.number });
+      const { name, number, ...rest } = body;
+      delete rest.id;
+      state.channelExtras[channel.id] = { ...state.channelExtras[channel.id], ...rest };
+      Object.assign(channel, { name, number, icon: rest.icon ?? channel.icon });
     }
     return send(res, 200, { fillerCollections: [], fillerRepeatCooldown: 30000, disableFillerOverlay: false, guideMinimumDuration: 30000, guideFlexTitle: '', groupTitle: 'tunarr', transcodeConfigId: 'keep-me', ...channel, ...state.channelExtras[channel.id], sessions: [] });
+  }
+  // A stand-in for an OpenAI-compatible AI endpoint (LINEUP_AI_BASE_URL in the e2e setup).
+  if (path === '/v1/chat/completions' && req.method === 'POST') {
+    const body = JSON.parse(await readBody(req));
+    state.aiRequests = (state.aiRequests ?? 0) + 1;
+    const user = body.messages?.find((message) => message.role === 'user')?.content ?? '';
+    const proposal = {
+      name: 'AI comedy nights', description: 'Sitcoms in the evening, movies late.', notes: user.includes('Rotation Show') ? 'Built around Rotation Show.' : 'No shows found.',
+      padMinutes: 30, latenessMinutes: 15,
+      ads: { label: 'Short breaks', breakEveryMin: 10, breakMin: 2, maxBreaks: 2, commercialsAt: ['mid'], promosAt: [] },
+      roles: [
+        { id: 'comedy', label: 'Comedy', order: 'next', source: { kind: 'show', id: ids.show } },
+        { id: 'films', label: 'Films', order: 'shuffle', source: { kind: 'suggest' }, suggest: { match: 'all', rules: [{ field: 'type', op: 'is', values: ['movie'] }] } },
+      ],
+      days: { all: [{ start: '18:00', role: 'comedy' }, { start: '21:00', role: 'films', ads: 'none' }] },
+      lists: { commercialsListId: ids.ads },
+    };
+    return send(res, 200, { choices: [{ message: { role: 'assistant', tool_calls: [{ type: 'function', function: { name: 'propose_schedule', arguments: JSON.stringify(proposal) } }] } }] });
   }
   if (path === '/__test/edit-elsewhere' && req.method === 'POST') {
     const id = url.searchParams.get('channel');
@@ -203,7 +289,7 @@ http.createServer(async (req, res) => {
   if (match[2] === 'schedule') {
     const schedule = state.schedules[channel.id];
     if (!schedule) return send(res, 200, {});
-    return send(res, 200, { schedule: { ...schedule, slots: schedule.slots.map((slot) => (slot.type === 'show' ? { ...slot, show: { uuid: ids.show, title: 'Rotation Show' } } : slot)) } });
+    return send(res, 200, { schedule: { ...schedule, slots: schedule.slots.map((slot) => (slot.type === 'show' ? { ...slot, show: { uuid: ids.show, title: 'Rotation Show', mediaSourceId: ids.source, libraryId: ids.library } } : slot)) } });
   }
   if (match[2] === 'schedule-slots' || match[2] === 'schedule-time-slots') {
     const { schedule } = JSON.parse(await readBody(req));

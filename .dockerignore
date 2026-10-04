@@ -9,3 +9,5 @@ dist-server
 coverage
 .env*
 *.log
+
+data

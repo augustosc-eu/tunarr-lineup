@@ -55,3 +55,21 @@ export function programArtwork(item: LineupItem, programs: Programming['programs
   if (!getProgram(item, programs)) return undefined;
   return `/api/tunarr/programs/${item.id}/artwork/${kind}`;
 }
+
+const shortHash = (text: string) => {
+  let hash = 5381;
+  for (let index = 0; index < text.length; index += 1) hash = ((hash * 33) ^ text.charCodeAt(index)) >>> 0;
+  return hash.toString(36);
+};
+
+/**
+ * The channel's logo, served by the companion (which loads it from Tunarr or
+ * the public site it lives on). `v` changes with the stored logo so a new logo
+ * isn't hidden by the browser cache. Demo channels and channels without a logo
+ * have none.
+ */
+export function channelLogoUrl(channel: { id: string; icon?: { path?: string } }, live: boolean) {
+  const path = channel.icon?.path;
+  if (!live || typeof path !== 'string' || !path.trim()) return undefined;
+  return `/api/tunarr/channels/${encodeURIComponent(channel.id)}/logo?v=${shortHash(path)}`;
+}

@@ -115,7 +115,7 @@ describe('Tunarr proxy routes', () => {
 
   it.each([
     ['GET', '/api/tunarr/settings', 404],
-    ['GET', '/api/tunarr/channels/abc', 404],
+    ['GET', '/api/tunarr/channels/abc', 405], // only DELETE
     ['GET', '/api/tunarr/channels/abc/programs', 404],
     ['GET', '/api/tunarr/http://evil.example/api/channels', 404],
     ['GET', '/api/tunarr/channels/../../system/settings', 404],

@@ -7,8 +7,15 @@ import {
   changeSlotSource,
   clockToOffset,
   DAY_MS,
+  convertDraft,
+  draftFromSchedule,
   duplicateSlot,
+  linkCandidates,
+  linkGroups,
+  linkSlot,
   offsetToClock,
+  seasonSummary,
+  setSeasons,
   shiftTimeSlots,
   slotProblems,
   slotWeightShare,
@@ -35,7 +42,7 @@ const randomSchedule = () => ({
   lockWeights: false,
   timeZoneOffset: -120,
   slots: [
-    { id: 'a0000000-0000-4000-8000-000000000001', type: 'show', showId: SHOW_A, order: 'next', direction: 'asc', weight: 3, cooldownMs: 0, durationSpec: { type: 'dynamic', programCount: 1 }, seasonFilter: [], seasonExcludeFilter: [], iterationGroup: 'g1', linkMode: 'continue' },
+    { id: 'a0000000-0000-4000-8000-000000000001', type: 'show', showId: SHOW_A, order: 'next', direction: 'asc', weight: 3, cooldownMs: 0, durationSpec: { type: 'dynamic', programCount: 1 }, seasonFilter: [], seasonExcludeFilter: [], iterationGroup: '90000000-0000-4000-8000-0000000000a1', linkMode: 'continue' },
     { id: 'b0000000-0000-4000-8000-000000000002', type: 'custom-show', customShowId: CUSTOM, order: 'shuffle', direction: 'asc', weight: 1, cooldownMs: 8 * MINUTE, durationSpec: { type: 'dynamic', programCount: 2 } },
     { id: 'c0000000-0000-4000-8000-000000000003', type: 'movie', order: 'shuffle', direction: 'asc', weight: 1, cooldownMs: 0 },
   ],
@@ -337,5 +344,64 @@ describe('persistent drafts', () => {
     expect(programmingVersion(JSON.parse(JSON.stringify(base)), undefined)).toBe(a);
     expect(programmingVersion(moved, null)).not.toBe(a);
     expect(programmingVersion(base, { type: 'random' })).not.toBe(a);
+  });
+});
+
+describe('season filters and linked slots', () => {
+  const GROUP = '90000000-0000-4000-8000-0000000000b1';
+  const show = (id: string, extra: Record<string, unknown> = {}) => ({ id, type: 'show', showId: SHOW_A, order: 'next', direction: 'asc', weight: 1, cooldownMs: 0, ...extra });
+  const A = 'a1000000-0000-4000-8000-000000000001';
+  const B = 'b1000000-0000-4000-8000-000000000002';
+  const C = 'c1000000-0000-4000-8000-000000000003';
+
+  it('accepts season filters on show slots only', () => {
+    const ok = buildSchedule(null, { type: 'random', slots: [show(A, { seasonFilter: [1, 2] }), { id: B, type: 'movie', order: 'shuffle', weight: 1, cooldownMs: 0, seasonFilter: [3] }] });
+    if ('error' in ok) throw new Error(ok.error);
+    expect(ok.schedule.slots).toMatchObject([{ seasonFilter: [1, 2] }, { type: 'movie' }]);
+    expect('seasonFilter' in (ok.schedule.slots as Slot[])[1]).toBe(false);
+    expect(buildSchedule(null, { type: 'random', slots: [show(A, { seasonFilter: ['1'] })] })).toHaveProperty('error');
+    expect(buildSchedule(null, { type: 'random', slots: [show(A, { seasonExcludeFilter: [-1] })] })).toHaveProperty('error');
+  });
+
+  it('validates link groups like Tunarr', () => {
+    const linked = (extra: Record<string, unknown>[] = [{}, {}]) => [show(A, { iterationGroup: GROUP, ...extra[0] }), show(B, { iterationGroup: GROUP, ...extra[1] })];
+    const ok = buildSchedule(null, { type: 'random', slots: linked([{ linkMode: 'continue' }, { linkMode: 'continue' }]) });
+    expect(ok).not.toHaveProperty('error');
+    expect(buildSchedule(null, { type: 'random', slots: linked([{}, { order: 'shuffle' }]) })).toEqual({ error: expect.stringMatching(/same source, in the same order/) });
+    expect(buildSchedule(null, { type: 'random', slots: linked([{ linkMode: 'continue' }, { linkMode: 'rerun' }]) })).toEqual({ error: expect.stringMatching(/random-slot/) });
+    expect(buildSchedule(null, { type: 'time', slots: linked([{ linkMode: 'rerun', startTime: 0 }, { linkMode: 'rerun', startTime: 3_600_000 }]) })).toEqual({ error: expect.stringMatching(/rerun slots need/) });
+    // Time slots may mix: one slot plays new episodes, the other reruns them.
+    expect(buildSchedule(null, { type: 'time', slots: linked([{ linkMode: 'continue', startTime: 0 }, { linkMode: 'rerun', rerunOverflow: 'continue', startTime: 3_600_000 }]) })).not.toHaveProperty('error');
+    // A group of one is just unlinked.
+    const single = buildSchedule(null, { type: 'random', slots: [show(A, { iterationGroup: GROUP, linkMode: 'rerun' }), show(C)] });
+    if ('error' in single) throw new Error(single.error);
+    expect('iterationGroup' in (single.schedule.slots as Slot[])[0] || 'linkMode' in (single.schedule.slots as Slot[])[0]).toBe(false);
+    expect(buildSchedule(null, { type: 'random', slots: [show(A, { iterationGroup: 'g1' })] })).toHaveProperty('error');
+  });
+
+  it('links and unlinks slots in the editor', () => {
+    const slots = [show(A), show(B, { order: 'shuffle', direction: 'desc' }), { id: C, type: 'movie', order: 'shuffle', weight: 1, cooldownMs: 0 }] as Slot[];
+    expect(linkCandidates(slots, 0).map((item) => item.position)).toEqual([1]);
+    const linked = linkSlot(slots, 1, 0);
+    expect(linked[1]).toMatchObject({ iterationGroup: linked[0].iterationGroup, order: 'next', direction: 'asc', linkMode: 'continue' });
+    expect([...linkGroups(linked).values()]).toEqual([{ id: linked[0].iterationGroup, number: 1, members: [0, 1] }]);
+    expect(slotProblems({ type: 'random' }, linked)).toEqual([null, null, null]);
+    expect(slotProblems({ type: 'random' }, linked.map((slot, i) => (i === 1 ? { ...slot, order: 'shuffle' } : slot)))[0]).toMatch(/mixes sources/);
+    const unlinked = linkSlot(linked, 1, null);
+    expect('iterationGroup' in unlinked[1]).toBe(false);
+    expect(linkGroups(unlinked).size).toBe(0);
+  });
+
+  it('turns reruns into continues when converting to random slots', () => {
+    const draft = draftFromSchedule({ type: 'time', slots: [show(A, { startTime: 0, iterationGroup: GROUP, linkMode: 'continue' }), show(B, { startTime: 3_600_000, iterationGroup: GROUP, linkMode: 'rerun' })] as Slot[] });
+    expect(convertDraft(draft, 'random').slots.map((slot) => slot.linkMode)).toEqual(['continue', 'continue']);
+  });
+
+  it('summarizes and sets season filters', () => {
+    const slot = show(A) as Slot;
+    expect(seasonSummary(slot)).toBe('All seasons');
+    expect(seasonSummary(setSeasons(slot, 'only', [3, 1, 3]))).toBe('Seasons 1, 3');
+    expect(setSeasons(slot, 'except', [2])).toMatchObject({ seasonFilter: [], seasonExcludeFilter: [2] });
+    expect(seasonSummary(setSeasons(slot, 'except', [2]))).toBe('All but season 2');
   });
 });

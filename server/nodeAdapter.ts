@@ -26,6 +26,12 @@ function readBody(req: IncomingMessage, limit: number): Promise<string | null> {
 
 function send(res: ServerResponse, status: number, headers: Record<string, string>, body: string | Uint8Array) {
   const payload = typeof body === 'string' ? Buffer.from(body, 'utf8') : Buffer.from(body.buffer, body.byteOffset, body.byteLength);
+  // A 204 carries no body and no Content-Length.
+  if (status === 204) {
+    res.writeHead(status, headers);
+    res.end();
+    return;
+  }
   res.writeHead(status, { ...headers, 'content-length': String(payload.byteLength) });
   res.end(payload);
 }

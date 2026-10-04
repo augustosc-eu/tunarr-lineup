@@ -157,7 +157,94 @@ const listSummary = (list: Json) => ({
 // --------------------------------------------------------- channel settings
 
 /** Channel fields Lineup reads and may change. Everything else is left exactly as Tunarr has it. */
-export const CHANNEL_SETTING_FIELDS = ['name', 'number', 'groupTitle', 'startTime', 'guideFlexTitle', 'guideMinimumDuration', 'fillerCollections', 'fillerRepeatCooldown', 'disableFillerOverlay'] as const;
+export const CHANNEL_SETTING_FIELDS = [
+  'name', 'number', 'groupTitle', 'startTime', 'guideFlexTitle', 'guideMinimumDuration', 'fillerCollections', 'fillerRepeatCooldown', 'disableFillerOverlay',
+  'icon', 'watermark', 'offline', 'streamMode', 'transcodeConfigId', 'subtitlesEnabled', 'stealth', 'onDemand',
+] as const;
+export const STREAM_MODES = ['hls', 'hls_slower', 'mpegts', 'hls_direct', 'hls_direct_v2'] as const;
+const CORNERS = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
+
+/** An image URL Tunarr will load (http/https or one of its own /images paths), or empty. */
+function imageUrl(value: unknown) {
+  if (value === '') return true;
+  if (typeof value !== 'string' || value.length > 2000) return false;
+  if (value.startsWith('/images/')) return !value.includes('..');
+  try {
+    const url = new URL(value);
+    return (url.protocol === 'http:' || url.protocol === 'https:') && !url.username && !url.password;
+  } catch {
+    return false;
+  }
+}
+const percent = (value: unknown) => finite(value) && value >= 0 && value <= 100;
+
+function validateIcon(value: unknown, current: unknown): Json | string {
+  if (!isObject(value)) return 'Logo must be an object.';
+  const base = isObject(current) ? current : {};
+  const out: Json = { path: base.path ?? '', width: base.width ?? 0, duration: base.duration ?? 0, position: base.position ?? 'bottom-right', ...(base.useDefaultIconFallback !== undefined ? { useDefaultIconFallback: base.useDefaultIconFallback } : {}) };
+  if (value.path !== undefined) {
+    if (!imageUrl(value.path)) return 'Logo must be an http(s) image address.';
+    out.path = value.path;
+  }
+  if (value.width !== undefined) {
+    if (!finite(value.width) || value.width < 0 || value.width > 100) return 'Logo width must be 0–100.';
+    out.width = value.width;
+  }
+  if (value.position !== undefined) {
+    if (!CORNERS.includes(value.position as string)) return 'Logo position must be a corner.';
+    out.position = value.position;
+  }
+  return out;
+}
+
+function validateWatermark(value: unknown, current: unknown): Json | string {
+  if (!isObject(value)) return 'Watermark must be an object.';
+  const base: Json = isObject(current) ? { ...current } : { enabled: false, position: 'bottom-right', width: 10, verticalMargin: 1, horizontalMargin: 1, duration: 0, opacity: 100 };
+  for (const [key, field] of Object.entries(value)) {
+    switch (key) {
+      case 'enabled': case 'fixedSize': case 'animated':
+        if (typeof field !== 'boolean') return `Watermark "${key}" must be true or false.`;
+        break;
+      case 'url':
+        if (!imageUrl(field)) return 'Watermark image must be an http(s) address.';
+        break;
+      case 'position':
+        if (!CORNERS.includes(field as string)) return 'Watermark position must be a corner.';
+        break;
+      case 'width':
+        if (!finite(field) || field <= 0 || field > 100) return 'Watermark width must be 1–100%.';
+        break;
+      case 'verticalMargin': case 'horizontalMargin':
+        if (!percent(field)) return 'Watermark margins must be 0–100%.';
+        break;
+      case 'opacity':
+        if (!Number.isInteger(field) || !percent(field)) return 'Watermark opacity must be 0–100.';
+        break;
+      case 'duration':
+        if (!finite(field) || field < 0) return 'Watermark duration must be 0 or more.';
+        break;
+      default:
+        return `Watermark "${key.slice(0, 40)}" can't be changed here.`;
+    }
+    base[key] = field;
+  }
+  return base;
+}
+
+function validateOffline(value: unknown, current: unknown): Json | string {
+  if (!isObject(value)) return 'Offline screen must be an object.';
+  const base: Json = isObject(current) ? { ...current } : { mode: 'pic', picture: '', soundtrack: '' };
+  if (value.mode !== undefined) {
+    if (value.mode !== 'pic' && value.mode !== 'clip') return 'Offline mode must be "pic" or "clip".';
+    base.mode = value.mode;
+  }
+  for (const key of ['picture', 'soundtrack'] as const) {
+    if (value[key] === undefined) continue;
+    if (!imageUrl(value[key])) return `Offline ${key} must be an http(s) address.`;
+    base[key] = value[key];
+  }
+  return base;
+}
 // Read-only or response-only fields Tunarr's save schema does not accept.
 const NOT_SAVEABLE = ['programCount', 'sessions', 'fallback', 'transcoding'];
 
@@ -168,7 +255,7 @@ export function channelSettings(channel: unknown) {
   return out;
 }
 
-export function validateChannelSettings(body: unknown): { changes: Json } | { error: string } {
+export function validateChannelSettings(body: unknown, current: Json = {}): { changes: Json } | { error: string } {
   if (!isObject(body)) return { error: 'Send settings as a JSON object.' };
   const changes: Json = {};
   for (const [key, value] of Object.entries(body)) {
@@ -207,6 +294,31 @@ export function validateChannelSettings(body: unknown): { changes: Json } | { er
           collections.push({ id: item.id, weight: item.weight, cooldownSeconds: item.cooldownSeconds });
         }
         changes.fillerCollections = collections;
+        break;
+      }
+      case 'subtitlesEnabled':
+      case 'stealth':
+        if (typeof value !== 'boolean') return { error: `"${key}" must be true or false.` };
+        changes[key] = value;
+        break;
+      case 'onDemand':
+        if (!isObject(value) || typeof value.enabled !== 'boolean') return { error: 'On-demand must be { "enabled": true | false }.' };
+        changes.onDemand = { enabled: value.enabled };
+        break;
+      case 'streamMode':
+        if (!(STREAM_MODES as readonly unknown[]).includes(value)) return { error: 'Unknown stream mode.' };
+        changes.streamMode = value;
+        break;
+      case 'transcodeConfigId':
+        if (typeof value !== 'string' || !UUID.test(value)) return { error: 'Choose a transcode profile.' };
+        changes.transcodeConfigId = value;
+        break;
+      case 'icon':
+      case 'watermark':
+      case 'offline': {
+        const merged = key === 'icon' ? validateIcon(value, current.icon) : key === 'watermark' ? validateWatermark(value, current.watermark) : validateOffline(value, current.offline);
+        if (typeof merged === 'string') return { error: merged };
+        changes[key] = merged;
         break;
       }
     }
@@ -291,12 +403,14 @@ export async function handleContentRoute(route: ContentRoute, { config, target, 
     case 'channel-settings': {
       const path = `/api/channels/${route.channelId}`;
       if (method === 'GET') return json(200, channelSettings(await call('GET', path)));
-      const checked = validateChannelSettings(body);
-      if ('error' in checked) return invalid(checked.error);
+      const precheck = validateChannelSettings(body);
+      if ('error' in precheck) return invalid(precheck.error);
       return withChannelLock(route.channelId, async () => {
         // Merge onto Tunarr's current channel so fields Lineup doesn't manage are untouched.
         const current = await call('GET', path);
         if (!isObject(current)) throw new UpstreamError(502, 'tunarr_invalid_response', 'Tunarr returned an unexpected channel.');
+        const checked = validateChannelSettings(body, current);
+        if ('error' in checked) return invalid(checked.error);
         const next: Json = { ...current, ...checked.changes };
         for (const field of NOT_SAVEABLE) delete next[field];
         await call('PUT', path, next);

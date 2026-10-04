@@ -1,5 +1,5 @@
-// Slot-schedule editing helpers (Tunarr "time" and "random" schedules).
-// Edits only ever re-use sources the channel's schedule already has.
+// Slot-schedule editing helpers (Tunarr "time" and "random" schedules):
+// sources, settings, conversion, commercials, season filters and linked slots.
 import { slotSourceKey } from '../server/slotSchedule';
 import type { LineupItem, Programming } from './lineup';
 
@@ -32,6 +32,8 @@ export type SchedulePreview = {
 export type SourceOption = { key: string; label: string; template: Slot };
 
 export const DAY_MS = 86_400_000;
+/** Weekly time-slot schedules start on Sunday (day 0), as in Tunarr's own editor. */
+export const WEEKDAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 export const ORDER_LABELS: Record<string, string> = {
   next: 'In order',
   shuffle: 'Shuffle',
@@ -155,7 +157,10 @@ export function clockToOffset(clock: string) {
 /** Problems that would make Tunarr reject the schedule, per slot. */
 export function slotProblems(schedule: Pick<SlotSchedule, 'type' | 'period'>, slots: Slot[]): Array<string | null> {
   const seen = new Map<number, number>();
+  const links = linkGroups(slots);
   return slots.map((slot, index) => {
+    const linkProblem = groupProblem(slots, links, slot, schedule.type);
+    if (linkProblem) return linkProblem;
     if (schedule.type === 'time') {
       const start = Number(slot.startTime);
       if (!Number.isInteger(start) || start < 0 || start >= periodMs(schedule)) return 'Start time is outside the period.';
@@ -224,6 +229,8 @@ export function convertDraft(draft: ScheduleDraftState, type: 'time' | 'random')
     } else {
       for (const field of ['startTime', 'overflow', 'latenessMs']) delete next[field];
       Object.assign(next, { weight: 1, cooldownMs: 0, durationSpec: { type: 'dynamic', programCount: 1 } });
+      // Random-slot groups can't rerun, so linked slots all continue.
+      if (next.linkMode === 'rerun') next.linkMode = 'continue';
     }
     return next;
   });
@@ -256,10 +263,10 @@ export function catalogOptions(slots: Slot[], catalog: SlotCatalog, currentChann
 }
 
 /** The source option for a show picked from the library. */
-export const showOption = (show: { id: string; title: string }): SourceOption => ({
+export const showOption = (show: { id: string; title: string; mediaSourceId?: string; libraryId?: string }): SourceOption => ({
   key: `show:${show.id}`,
   label: show.title,
-  template: { type: 'show', showId: show.id, show: { title: show.title }, order: 'next', direction: 'asc', seasonFilter: [], seasonExcludeFilter: [] },
+  template: { type: 'show', showId: show.id, show: { title: show.title, mediaSourceId: show.mediaSourceId, libraryId: show.libraryId }, order: 'next', direction: 'asc', seasonFilter: [], seasonExcludeFilter: [] },
 });
 
 /** A new slot playing `option`, timed after the existing ones. */
@@ -289,4 +296,89 @@ export function commercialSummary(slot: Slot, fillerNames: Map<string, string>) 
   const mid = slot.midRoll as MidRoll | undefined;
   if (mid) parts.push(`breaks every ${Math.round((mid.breakRule?.intervalMs ?? mid.intervalMs ?? 0) / 60_000)} min`);
   return parts.join(' · ');
+}
+
+// ---------------------------------------------------------- linked slots
+
+export const slotCanLink = (slot: Slot) => ['movie', 'show', 'custom-show', 'smart-collection'].includes(slot.type);
+export const LINK_MODE_LABELS: Record<string, string> = { continue: 'Plays the next episodes', rerun: 'Reruns what the group played' };
+export const RERUN_OVERFLOW_LABELS: Record<string, string> = { flex: 'Then flex time', continue: 'Then new episodes' };
+
+export type LinkGroup = { id: string; number: number; members: number[] };
+
+/** Groups with two or more slots, numbered in slot order. Groups of one are ignored (Tunarr unlinks them). */
+export function linkGroups(slots: Slot[]): Map<string, LinkGroup> {
+  const members = new Map<string, number[]>();
+  slots.forEach((slot, index) => {
+    if (!slotCanLink(slot) || typeof slot.iterationGroup !== 'string') return;
+    members.set(slot.iterationGroup, [...(members.get(slot.iterationGroup) ?? []), index]);
+  });
+  const groups = new Map<string, LinkGroup>();
+  let number = 0;
+  for (const [id, indices] of members) if (indices.length > 1) groups.set(id, { id, number: (number += 1), members: indices });
+  return groups;
+}
+
+const sameRun = (a: Slot, b: Slot) => slotSourceKey(a) === slotSourceKey(b) && a.order === b.order && (a.direction ?? 'asc') === (b.direction ?? 'asc');
+
+function groupProblem(slots: Slot[], groups: Map<string, LinkGroup>, slot: Slot, type: 'time' | 'random'): string | null {
+  const group = typeof slot.iterationGroup === 'string' ? groups.get(slot.iterationGroup) : undefined;
+  if (!group) return null;
+  const first = slots[group.members[0]];
+  if (!group.members.every((index) => sameRun(slots[index], first))) return `Linked group ${group.number} mixes sources or play orders.`;
+  const modes = new Set(group.members.map((index) => (slots[index].linkMode as string | undefined) ?? 'continue'));
+  if (type === 'random' && modes.size > 1) return `Linked group ${group.number}: in random slots every member must continue, or every one rerun.`;
+  if (!modes.has('continue')) return `Linked group ${group.number} needs a slot that plays new episodes.`;
+  return null;
+}
+
+/** Slots that `index` could share episodes with: same source, linkable. */
+export function linkCandidates(slots: Slot[], index: number) {
+  const slot = slots[index];
+  if (!slotCanLink(slot)) return [];
+  return slots.map((other, position) => ({ other, position })).filter(({ other, position }) => position !== index && slotSourceKey(other) === slotSourceKey(slot));
+}
+
+const unlink = (slot: Slot): Slot => {
+  const next = { ...slot };
+  delete next.iterationGroup;
+  delete next.linkMode;
+  delete next.rerunOverflow;
+  return next;
+};
+
+/**
+ * Links slot `index` with slot `target` (joining its group, or starting a new
+ * group of the two), or unlinks it when `target` is null. Joining copies the
+ * group's play order and direction so the members stay compatible.
+ */
+export function linkSlot(slots: Slot[], index: number, target: number | null): Slot[] {
+  if (target === null) return slots.map((slot, position) => (position === index ? unlink(slot) : slot));
+  const anchor = slots[target];
+  const group = typeof anchor.iterationGroup === 'string' ? anchor.iterationGroup : newSlotId();
+  return slots.map((slot, position) => {
+    if (position === target) return { ...slot, iterationGroup: group, linkMode: slot.linkMode ?? 'continue' };
+    if (position === index) return { ...slot, iterationGroup: group, order: anchor.order, direction: anchor.direction ?? 'asc', linkMode: slot.linkMode ?? 'continue' };
+    return slot;
+  });
+}
+
+// --------------------------------------------------------- season filters
+
+export type SeasonInfo = { number: number; title: string; episodes?: number };
+
+/** "All seasons", "Seasons 1, 2", "All but season 3". */
+export function seasonSummary(slot: Slot) {
+  const only = Array.isArray(slot.seasonFilter) ? (slot.seasonFilter as number[]) : [];
+  const except = Array.isArray(slot.seasonExcludeFilter) ? (slot.seasonExcludeFilter as number[]) : [];
+  const list = (values: number[]) => [...values].sort((a, b) => a - b).join(', ');
+  if (only.length) return `${only.length === 1 ? 'Season' : 'Seasons'} ${list(only)}`;
+  if (except.length) return `All but ${except.length === 1 ? 'season' : 'seasons'} ${list(except)}`;
+  return 'All seasons';
+}
+
+/** Sets which seasons a show slot plays: everything, only some, or all except some. */
+export function setSeasons(slot: Slot, mode: 'all' | 'only' | 'except', seasons: number[]): Slot {
+  const sorted = [...new Set(seasons)].sort((a, b) => a - b);
+  return { ...slot, seasonFilter: mode === 'only' ? sorted : [], seasonExcludeFilter: mode === 'except' ? sorted : [] };
 }

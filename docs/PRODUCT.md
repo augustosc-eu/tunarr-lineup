@@ -118,7 +118,50 @@ Edits mark the lineup unsaved:
 ### 4b. Filler lists, custom shows and channel commercials
 
 - **Lists → Filler Lists… / Custom Shows…:** create, rename, delete, and add or remove programs (custom shows can also be reordered). Filler lists are where commercials, bumpers and station IDs live. A filler list needs at least one program. Custom shows synced from a Plex playlist keep their sync.
-- **Channel → Channel Settings…:** name, number, group, guide title for flex time, minimum guide entry length, lineup start time (shifts the whole schedule, with a warning), and **commercials during flex time** (filler lists with weight, share and cooldown; a repeat cooldown; and whether to hide the watermark during filler).
+- **Channel → Channel Settings…** (tabs):
+  - **General:** name, number, group, guide title for flex time, minimum guide entry length, lineup start time (shifts the whole schedule, with a warning), hidden channel, on demand.
+  - **Logo & watermark:** logo address and corner, on-screen watermark (image, corner, size, margins, opacity, duration), and the offline screen.
+  - **Streaming:** stream format, transcode profile, subtitles.
+  - **Commercials:** filler lists that play during flex time (weight, share and cooldown), a repeat cooldown, and whether to hide the watermark during filler.
+- **Lists → Smart Collections…:** saved searches built from rules (genre, type, rating, studio, people, tags, titles, audio language, year, length, season number, added or released in the last N days/weeks/months/years), match all or any, optional keywords, with a preview of how many programs match.
+
+### 4c. Channels and Tunarr setup
+
+- **Channel → New Channel… / Duplicate Channel…:** name, number (next free one by default), group, and the transcode profile (new) or the channel to copy (duplicate). Lineup switches to the new channel.
+- **Channel → Delete Channel…:** asks first, then removes the channel from Tunarr and moves to a neighbouring channel.
+- **Setup → Media Sources…:** add Plex (address and token), Jellyfin or Emby (address, user name and password; Tunarr signs in), or local folders; turn libraries on or off, refresh and scan them; remove sources. Addresses, tokens and folder paths are never shown back.
+- **Setup → Transcode Profiles…:** resolution, codecs, bit depth, bitrates and buffers, hardware acceleration, threads, audio channels, sample rate, volume and loudness, error screen and audio, frame-rate and deinterlace options; duplicate or delete profiles.
+- **Logos:** channel logos appear in the channel list and the schedule header. Channels without a usable logo show their number.
+
+### 4d. Start from a programming template
+
+**Channel → Programming Templates…** shows the gallery:
+
+- **General:** general entertainment, kids & cartoons, movie channel, music videos, 24-hour news.
+- **Inspired by mainstream networks:**
+  - **Japan:** NHK General, NHK E-tele, Nippon TV, TBS, Fuji TV, TV Asahi, TV Tokyo
+  - **Argentina:** Telefe, El Trece, TV Pública, América, El Nueve, TN
+  - **United States:** ABC, CBS, NBC, FOX, The CW, PBS, Univision, Telemundo, ESPN, CNN, HBO, Nickelodeon, Disney Channel, Cartoon Network, Discovery, MTV (classic), TCM
+  - **Spain:** La 1, La 2, Antena 3, Telecinco, Cuatro, laSexta
+  - **United Kingdom:** BBC One, BBC Two, ITV1, Channel 4, Channel 5
+  - **Italy:** Rai 1, Rai 2, Rai 3, Canale 5, Italia 1, Rete 4, La7
+- **My templates:** the user's saved ones, shared by every browser.
+
+It can be filtered by country or searched. Each template shows a day plan (Mon–Fri, any single weekday that differs, Saturday and Sunday) with each block's ad level, and its market's commercial style.
+
+1. Fill each role with a library show, movies, a custom show, an existing smart collection, or the suggested new smart collection (its match count is shown); or leave it out.
+2. Pick the commercials and promos filler lists (likely ones are preselected by name).
+3. Choose this channel or a new one. The schedule opens in the slot editor as a time-slot draft, to adjust, preview and save.
+
+Templates follow a network's style; they are not its official schedule, and carry no logos.
+
+**Your own templates:** **New template**, **Copy and edit…**, or **Save this channel's format** (a time-slot channel's schedule, with its sources pre-filled). The editor sets name and description, the day plan (every day; weekdays, Saturday and Sunday; or each day), blocks (start, role, ad level: none, light, standard, heavy), roles (name, hint, play order, a suggestion such as "TV episodes with show genre Drama"), the start-time grid, how late a block may start, and the commercial style (breaks inside programs, and where commercials and promos play).
+
+**Ask AI…:** describe the channel ("a 90s Saturday-morning cartoon channel", "program this like Rai 1"), optionally using the library, what the channel plays now, and a template to start from. The AI writes a template, fills roles with the library's shows and collections where they fit, suggests smart collections for the rest, picks commercial lists, and notes what's missing. The draft can be saved, edited or applied; nothing changes until preview and save. It needs an AI provider configured on the Lineup server.
+
+### 4e. Schedule an event on a date
+
+**Edit → Schedule Event…** (`E`): pick a date and time and what airs (programs from the library, a simulcast of another channel, or off-air time). If a program is still on at that time, the event starts when it ends (or in its place). **Replace** takes off what would have aired and adds flex so everything after keeps its time; **Push** moves everything later. The preview shows the exact start and end, what is taken off, and when the lineup repeats (the event repeats with it). It becomes an edit in the edit list and is saved like any other. On slot-scheduled channels, regenerating the schedule removes it.
 
 ### 5. Edit or create a slot schedule
 
@@ -133,11 +176,15 @@ channels use random slots), and for manual channels that should get one:
 3. Adjust the slots:
    - **Sources:** any slot can play a show (from the library), movies, a custom show, a filler list, a smart collection, a redirect, or flex. **Add a slot that plays…** adds one.
    - **Random slots:** weight (with share, or "equal"), cooldown, length (programs or minutes), order; reorder, copy or remove.
-   - **Time slots:** start time (and day, for weekly schedules), source, order, plus "shift every slot".
-   - **Ads** on a show, movie, custom-show or smart-collection slot: filler lists playing before or after each program, at the slot's start or end, as fallback, or as **mid-roll breaks** (every N minutes, break length, a maximum count, only in programs longer than N minutes).
+   - **Time slots:** start time (and weekday, Sunday to Saturday, for weekly schedules), source, order, plus "shift every slot".
+   - **More** on a show, movie, custom-show or smart-collection slot:
+     - **Seasons** (show slots): all, only some, or all but some, from the show's real seasons.
+     - **Direction:** first to last, or last to first.
+     - **Linked slots:** share one episode list with other slots playing the same source, so each picks up where the last stopped. In time-slot schedules a linked slot can rerun what the group played (then flex or new episodes when the reruns run out). Random-slot groups always continue, as Tunarr requires.
+     - **Commercials:** filler lists playing before or after each program, at the slot's start or end, as fallback, or as **mid-roll breaks** (every N minutes, break length, a maximum count, only in programs longer than N minutes).
    - **Movie pool:** movie slots draw from the channel's movies; **Add movies…** adds more from the library. They're used on save; Tunarr's preview only uses movies already on the channel.
 
-   Problems Tunarr would reject (overlapping start times, negative weights) are flagged per slot.
+   Problems Tunarr would reject (overlapping start times, negative weights, linked slots with different sources or orders) are flagged per slot.
 3. **Preview lineup** regenerates the lineup in Tunarr without saving and shows it in the timeline, with a pinned preview bar. Browse any day, then **Save schedule**, **Edit slots** or **Discard preview** (also Back).
 4. **Save schedule** uses the preview's random seed and reports whether Tunarr's saved result matches the preview. The lineup's edit list starts fresh, because the lineup was regenerated.
 
@@ -176,14 +223,14 @@ The menus can also be operated with the arrows, OK and Back.
 - **Live and demo never mix.** A failed live request never switches to demo data.
 - **What Tunarr returns is the source of truth.** After saving, the UI shows the re-fetched state, not the local copy.
 - **Times are honest.** When times are projected rather than taken from Tunarr's guide, the UI says so.
-- **Artwork comes through the companion** from Tunarr's artwork endpoint, never straight from Tunarr or the media server. Demo data uses coloured letter tiles.
+- **Artwork and logos come through the companion,** never straight from Tunarr, the media server or a logo's website. Demo data uses coloured letter tiles and channel numbers.
 - **Day boundaries use the browser's local time zone.**
 
 ## Constraints
 
 - **Network topology:** Tunarr usually runs on a private address over HTTP. The browser therefore can't call it from an HTTPS hosted page, and real use requires the companion running where it can reach Tunarr (`README.md`).
 - **Sign-in is optional:** without `LINEUP_PASSWORD`, anyone who can reach the companion's port can rewrite channel programming. With it, HTTP Basic sign-in protects everything but `/healthz`.
-- **Tunarr API compatibility:** Lineup depends on Tunarr's `/api/channels`, `/api/channels/:id/programming` (GET/POST), `/api/channels/:id/lineup` and `/api/programs/:id/artwork/:type` endpoints and their payload shapes. The code doesn't detect Tunarr versions.
+- **Tunarr API compatibility:** Lineup depends on Tunarr's channel, programming, lineup, schedule, artwork, search, filler-list, custom-show, smart-collection, transcode-config and media-source endpoints and their payload shapes (see `docs/ARCHITECTURE.md`). The code doesn't detect Tunarr versions.
 - **Generated schedules:** saving manually can detach a channel from its generated schedule. Tunarr may also regenerate over manual edits.
 - **TV readability and remote operation:** text must stay large and anti-aliased, and every action must work without a mouse. The UI scales with viewport width.
 - **Conflict check window:** the companion checks and writes under a per-channel lock, so two Lineup sessions can't overwrite each other. Tunarr's API has no conditional save, so an edit made in Tunarr's own UI in the milliseconds between check and write would still be overwritten.
@@ -192,8 +239,9 @@ The menus can also be operated with the arrows, OK and Back.
 ## Out of scope (as built)
 
 The code does not implement:
-- adding media sources, scanning libraries, or changing transcoding, streaming, watermarks or offline-screen settings
-- creating or deleting channels
-- per-season filters on show slots, time-slot per-slot padding/lateness overrides, slot iteration groups (existing ones are kept), and smart-collection authoring
+- uploading logo or media files (logos are set by address), Plex OAuth sign-in (a token is entered), and Tunarr's global settings (FFmpeg, HDHomeRun, XMLTV)
+- events that air once only (an event repeats with the lineup's cycle) or that cut into a program mid-way
+- AI-written lineups that bypass preview (the AI only writes templates)
+- time-slot per-slot padding/lateness overrides
 - user accounts or roles beyond the single optional password
 - syncing drafts between devices (drafts live in each browser), or persisting slot-schedule drafts across reloads

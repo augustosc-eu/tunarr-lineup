@@ -13,12 +13,16 @@ RUN npm run build:local
 FROM node:22-alpine AS runtime
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \
-    PORT=3000
+    PORT=3000 \
+    LINEUP_DATA_DIR=/data
 WORKDIR /app
 # The server has no runtime dependencies; only the built output is shipped.
 COPY --from=build /app/dist-server ./dist-server
 COPY --from=build /app/dist-local ./dist-local
-RUN printf '{"type":"module","private":true}\n' > package.json
+RUN printf '{"type":"module","private":true}\n' > package.json \
+ && mkdir -p /data && chown node:node /data
+# Saved programming templates live here; mount a volume to keep them.
+VOLUME ["/data"]
 USER node
 EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \

@@ -34,13 +34,20 @@ server implements those paths.
 
 | Path | Role |
 | --- | --- |
-| `app/page.tsx` | Main UI: state, data loading, editing commands, keyboard/remote handling, rendering, dialogs. `'use client'` component `Home` plus the local `ArtTile`. |
+| `app/page.tsx` | Main UI: state, data loading, editing commands, keyboard/remote handling, rendering, dialogs. `'use client'` component `Home` plus the local `ArtTile`, `ChannelLogo` and `LengthEditor`, and `loadSeasons`. |
 | `app/components/MenuBar.tsx` | Pull-down menu bar (`MenuBar`, types `Menu`, `MenuItem`) with mouse and keyboard handling. |
-| `app/components/ScheduleEditor.tsx` | Slot-schedule editor for random- and time-slot channels (source, weight, cooldown, length, order, start time; duplicate/remove/reorder/shift). Displays and edits a draft; the page owns the state. |
+| `app/components/ScheduleEditor.tsx` | Slot-schedule editor for random- and time-slot channels (source, weight, cooldown, length, order, start time; duplicate/remove/reorder/shift; per-slot seasons, direction, linked slots and commercials). Displays and edits a draft; the page owns the state. |
 | `app/components/LibraryBrowser.tsx` | Library browser (`LibraryBrowser`, `LibraryPick`): source/library pickers, search, show → season → episode navigation, **Add** / **Add all** into a basket. Modes: `programs`, `show`, `movies`. |
 | `app/components/InsertDialog.tsx` | Insert programs (via the browser), commercial break, flex or redirect, before or after the selection. |
 | `app/components/ListsManager.tsx` | Filler-list and custom-show manager (create, rename, delete, edit contents through `LibraryBrowser`). |
-| `app/components/ChannelSettingsDialog.tsx` | Channel settings: name, number, group, guide flex title, guide minimum, start time, filler collections, filler cooldown, filler overlay. |
+| `app/components/ChannelSettingsDialog.tsx` | Channel settings in tabs: General (name, number, group, guide flex title, guide minimum, start time, hidden, on demand), Logo & watermark (logo address and corner, watermark, offline screen), Streaming (stream mode, transcode profile, subtitles), Commercials (filler collections, cooldown, overlay). |
+| `app/components/NewChannelDialog.tsx` | New or duplicated channel: name, number (next free by default), group, transcode profile or channel to copy. |
+| `app/components/SmartCollectionsManager.tsx` | Smart collections: rule rows (`RULE_FIELDS`), match all/any, keywords, preview count and sample, create, edit, delete. |
+| `app/components/MediaSourcesDialog.tsx` | Media sources: libraries with on/off switches, refresh, scan, remove; add Plex, Jellyfin, Emby or local folders. |
+| `app/components/TranscodeProfilesDialog.tsx` | Transcode profiles: edit the allowlisted fields, duplicate, delete. |
+| `app/components/TemplatesDialog.tsx` | Programming templates: gallery (groups by country, search, My templates), the AI panel, day plan (`DayGrid`), role sources (defaults, suggested smart collections with match counts, library shows), commercials/promos lists, target channel, save/edit/delete/duplicate. |
+| `app/components/TemplateEditor.tsx` | Template editor: details, day plan mode, blocks (start, role, ad level), roles (label, hint, order, suggestion kind and genres), start-time grid, lateness, commercial style. |
+| `app/components/EventDialog.tsx` | Schedule an event on a date: programs, simulcast (redirect) or off-air; snap and replace/push; live placement preview. |
 | `app/components/MoveDialog.tsx` | The "Move or swap" dialog: move to time (with preview), move to position, and a searchable candidate list capped at `MAX_CANDIDATES` (200). |
 | `app/layout.tsx` | Hosted-only root layout: Geist fonts (`next/font/google`), metadata, OpenGraph. Not used by the companion build. |
 | `app/globals.css` | All styling (Mac OS 9 theme, rem-based scaling, responsive rules). Imports Tailwind. |
@@ -48,15 +55,26 @@ server implements those paths.
 | `lib/broadcast.ts` | Programming-desk helpers: timecode, block moves, move-to-position and move-to-time, change tracking, day totals, on-air lookup, CSV. |
 | `lib/history.ts` | Undo/redo stack of whole-lineup snapshots (`record`, `undo`, `redo`, `MAX_HISTORY` = 200), plus `itemIdentity` and `rebaseHistory` for carrying history across a save. |
 | `lib/draftStore.ts` | Persistent per-channel drafts: `encodeDraft` / `decodeDraft` (lineup states as index arrays into the loaded lineup), `createDraftStore` (IndexedDB `tunarr-lineup/drafts`, in-memory fallback, at most `MAX_DRAFTS` = 60), shared via `draftStore()`. |
-| `lib/schedule.ts` | Slot-editing helpers: `sourceOptions`, `slotLabel`, `changeSlotSource`, `duplicateSlot`, `newSlotId` (v4 via `getRandomValues`), `shiftTimeSlots`, `slotProblems`, clock conversions, and types `Slot`, `SlotSchedule`, `SchedulePreview`. |
-| `lib/library.ts` | Library types (`MediaSource`, `LibraryItem`, `ContentProgram`, `ListSummary`, `ChannelSettings`) and helpers (`topLevelType`, `childType`, `toContentProgram`, `lineupEntry`, `itemLabel`). |
-| `lib/programInfo.ts` | `getProgram`, `programTitle`, `programDetail`, `programArtwork`. |
+| `lib/schedule.ts` | Slot-editing helpers: `sourceOptions`, `slotLabel`, `changeSlotSource`, `duplicateSlot`, `newSlotId` (v4 via `getRandomValues`), `shiftTimeSlots`, `slotProblems` (including link-group checks), clock conversions, drafts and conversion, linked slots (`linkGroups`, `linkCandidates`, `linkSlot`), season filters (`seasonSummary`, `setSeasons`), and types `Slot`, `SlotSchedule`, `SchedulePreview`. |
+| `lib/library.ts` | Library and setup types (`MediaSource`, `LibraryItem`, `ContentProgram`, `ListSummary`, `ChannelSettings`, `TranscodeProfile`, `ManagedSource`, `NewMediaSource`, `SmartCollectionView`) and helpers (`topLevelType`, `childType`, `toContentProgram`, `lineupEntry`, `itemLabel`, `seasonsFromEpisodes`). |
+| `lib/templates.ts` | Template building blocks: role `preset`s, `AD_STYLES` by market, `GENERAL_TEMPLATES`, `templateToDraft` (with per-block ad levels via `midRollFor`), `weekGrid`/`dayRows` (Sunday is day 0; single-weekday overrides), `daySegments`, `roleUsage`, `scheduleToTemplate`, `blankTemplate`, `defaultSource`. |
+| `lib/networkTemplates.ts` | Network-inspired templates for Japan, Argentina, the United States, Spain, the United Kingdom and Italy (`NETWORK_TEMPLATES`, `REGIONS`). |
+| `lib/templateCatalog.ts` | `BUILT_IN_TEMPLATES`, gallery groups (`TEMPLATE_GROUPS`, `inGroup`) and search. |
+| `lib/events.ts` | `placeEvent` (snap to a program boundary; replace with flex padding, or push) and `repeatLabel`. |
+| `lib/programInfo.ts` | `getProgram`, `programTitle`, `programDetail`, `programArtwork`, `channelLogoUrl`. |
 | `lib/tunarrClient.ts` | Browser client for `/api/tunarr/*`: `checkHealth`, `tunarrApi`, `TunarrApiError`, `ConnectionState`. |
 | `lib/demoData.ts` | Demo channels and lineup (`demoChannels`, `demoProgramming()`, `demoDate`). |
 | `local/index.html`, `local/main.tsx` | Companion SPA entry: renders `<Home />` into `#root` under `StrictMode` and imports `app/globals.css`. |
 | `server/tunarrProxy.ts` | Framework-free proxy and validation: `handleTunarrApi`, `createProxyConfig`, `parseTunarrUrl`, validators, artwork passthrough. |
 | `server/nodeAdapter.ts` | Adapts Node `IncomingMessage`/`ServerResponse` to `handleTunarrApi` (`handleNodeApiRequest`, `isTunarrApiPath`). |
 | `server/slotSchedule.ts` | Slot-schedule rules: `buildSchedule` (create, convert or edit; per-type settings allowlist; slot, filler and mid-roll validation; materialized fields stripped), `defaultSchedule`, `programPool` (port of Tunarr's `lineupItemAppearsInSchedule`, plus extra programs), `validateExtraPrograms`, `slotSourceKey`, `validateSeed`. Pure, so `lib/` imports it too. |
+| `server/admin.ts` | Tunarr setup routes: `matchAdminRoute`, `handleAdminRoute`, `newChannel`, `validateChannelCreate`, `TRANSCODE_FIELDS`, `validateTranscodeChanges`, `manageableSources`, `validateMediaSourceAdd`, `validateSmartCollection`. |
+| `server/templateSchema.ts` | Template types and `validateTemplate` (ids, names, roles and suggestions, day plans, ad style, pad/lateness, role defaults reduced to plain source fields). Pure; the browser imports it. |
+| `server/templateStore.ts` | Saved templates in `LINEUP_DATA_DIR/templates.json`: serialized, atomic writes; unreadable files are reported, never overwritten. |
+| `server/lineupRoutes.ts` | Lineup's own routes: `/templates` and `/ai` (`matchLineupRoute`, `handleLineupRoute`). |
+| `server/ai.ts` | AI assistant: `createAiConfig` (`LINEUP_AI_*`), `gatherContext` (library, lists, channel summary from Tunarr), `SYSTEM_PROMPT`, `PROPOSAL_SCHEMA`, `callModel` (Anthropic Messages with a forced tool, or OpenAI-compatible function calling with a JSON-text fallback), `resolveProposal`. |
+| `server/smartCollection.ts` | Smart-collection rules ↔ Tunarr search filters: `RULE_FIELDS`, `rulesToFilter`, `filterToRules`, `describeRules`. Pure; the browser imports it. |
+| `server/logos.ts` | Channel logos: `channelLogo`, `logoSource`, `fetchPublicImage`, `isPublicAddress`, in-memory cache. Uses Node built-ins. |
 | `server/content.ts` | Library, list and channel-settings routes: `matchContentRoute`, `handleContentRoute`, `sanitizeMediaSources`, `buildLibrarySearch`, `validateFillerListBody`, `validateCustomShowBody`, `channelSettings`, `validateChannelSettings`. |
 | `server/upstream.ts` | Shared upstream plumbing: `fetchUpstream`, `callTunarr` (GET/POST/PUT/DELETE), `UpstreamError`, `json`, `fail`. |
 | `server/lineupVersion.ts` | `programmingVersion(lineup, schedule)`: a non-cryptographic fingerprint (two cyrb53 hashes plus length), shared by the browser and the proxy for `If-Match`. |
@@ -131,7 +149,8 @@ check to every request, including `/healthz`, before handling `/api/tunarr`.
 
 - **`TUNARR_URL`** is parsed by `parseTunarrUrl` into `origin`, `basePath`, `host` and an optional `authorization`. Userinfo becomes a Basic header and never appears in `host`. Missing → `target: null`; invalid → `configError` (fixed text, never echoing the value).
 - **`TUNARR_TIMEOUT_MS`** defaults to 10000 and **`TUNARR_SAVE_TIMEOUT_MS`** to 30000.
-- **`fetchImpl`** is an optional override for tests.
+- **`externalLogos`** comes from `LINEUP_EXTERNAL_LOGOS` (anything but `false` turns it on).
+- **`fetchImpl`** and **`fetchExternalImage`** are optional overrides for tests.
 
 ### Allowed routes (`matchRoute`)
 
@@ -144,6 +163,7 @@ check to every request, including `/healthz`, before handling `/api/tunarr`.
 | `/api/tunarr/channels/:id/schedule` | GET | `GET /api/channels/:id/schedule` (materialized: slots carry show, custom-show, channel and list names) |
 | `/api/tunarr/channels/:id/schedule-preview` | POST | `GET …/programming`, then `POST /api/channels/:id/schedule-slots` (random) or `/schedule-time-slots` (time) with the merged schedule. Generates only; saves nothing |
 | `/api/tunarr/programs/:id/artwork/:type` | GET | `GET /api/programs/:id/artwork/:type?fallbackArtworkTypes=<other types>` |
+| `/api/tunarr/channels/:id/logo` | GET | `GET /api/channels/:id`, then the logo (see *Channel logos* below). Only a `v` query parameter (cache buster, `[a-z0-9]{0,16}`) is accepted. `204` when there is no usable logo |
 
 ### Request pipeline (`handleTunarrApi`)
 
@@ -232,7 +252,64 @@ no-query rule and JSON body parsing, then `handleContentRoute`.
 | `/smart-collections` | GET | `GET /api/smart_collections` → `{ id, name }` |
 | `/channels/:id/settings` | GET, PUT | `GET /api/channels/:id` → `channelSettings` (only `CHANNEL_SETTING_FIELDS`). PUT validates with `validateChannelSettings`, then under `withChannelLock` re-reads the channel, merges only the allowed fields, drops read-only fields (`programCount`, `sessions`, `fallback`, `transcoding`), and `PUT`s the whole channel. |
 
-`nodeAdapter` reads request bodies for POST and PUT (up to 20 MiB).
+Channel settings fields (`CHANNEL_SETTING_FIELDS`) cover the programming fields
+plus `icon` (logo path, corner, width), `watermark`, `offline`, `streamMode`
+(`STREAM_MODES`), `transcodeConfigId`, `subtitlesEnabled`, `stealth` and
+`onDemand`. Object fields are merged onto Tunarr's current value, and image
+addresses must be `http(s)` URLs or Tunarr `/images/…` paths.
+
+`nodeAdapter` reads request bodies for POST and PUT (up to 20 MiB), and sends
+`204` responses without a body or `Content-Length`.
+
+### Tunarr setup (`server/admin.ts`)
+
+`handleTunarrApi` tries `matchAdminRoute` before `matchContentRoute`; admin
+routes go through the same `handleContent` pipeline (method allowlist, Origin
+check, no query, JSON bodies) and then `handleAdminRoute`.
+
+| Route | Methods | Upstream and rules |
+| --- | --- | --- |
+| `/channels/create` | POST | `validateChannelCreate` (`name`, optional `number`, `groupTitle`, `transcodeConfigId`, `copyFrom`). Refuses a number already in use (409). New channels are `POST /api/channels {type:'new', channel: newChannel(…)}` with Tunarr's web defaults (`web/src/helpers/constants.ts`) and the default transcode profile; copies are `{type:'copy', channelId}` followed, under the channel lock, by a `PUT` that applies the requested name and number. |
+| `/channels/:id` | DELETE | `DELETE /api/channels/:id` under the channel lock |
+| `/transcode-configs` | GET | `GET /api/transcode_configs` → `transcodeSummary` (the `TRANSCODE_FIELDS` allowlist; VAAPI device and driver are not sent) |
+| `/transcode-configs/:id` | PUT, DELETE | PUT validates with `validateTranscodeChanges`, re-reads the profile, merges, and `PUT`s it whole. DELETE refuses the default profile and profiles any channel uses (409). |
+| `/transcode-configs/:id/copy` | POST | `POST /api/transcode_configs/:id/copy` |
+| `/media-sources/manage` | GET | `manageableSources`: every library with `enabled`, `lastScannedAt`, `isLocked`; no `uri`, `accessToken`, `username`, `userId` or `paths` |
+| `/media-sources/add` | POST | `validateMediaSourceAdd`. Plex: `{name, uri, accessToken}`. Jellyfin/Emby: `{name, uri, username, password}` → `POST /api/{jellyfin,emby}/login` (Tunarr signs in; failures become 502 `media_server_login_failed` without upstream detail), then insert with the returned token. Local: `{name, mediaType, paths}` (absolute paths). Then `POST /api/media-sources` and, for remote servers, `…/libraries/refresh`. Returns only `{id}`. |
+| `/media-sources/:id` | DELETE | `DELETE /api/media-sources/:id` |
+| `/media-sources/:id/refresh` | POST | `POST /api/media-sources/:id/libraries/refresh` |
+| `/media-sources/:id/libraries/:libraryId` | PUT | `{enabled}` → `PUT /api/media-sources/:id/libraries/:libraryId` (Tunarr queues a scan when enabling) |
+| `/media-sources/:id/libraries/:libraryId/scan` | POST | `POST …/scan?forceScan=true` |
+| `/smart-collections/create` | POST | `validateSmartCollection` turns `{name, match, rules, keywords}` into Tunarr's filter tree with `rulesToFilter` (`server/smartCollection.ts`), then `POST /api/smart_collections` |
+| `/smart-collections/preview` | POST | Same rules → `POST /api/programs/search` (page 1 with keywords, 0 without; limit 12) → `{totalHits, sample}` |
+| `/smart-collections/:id` | GET, PUT, DELETE | GET returns `collectionView`: rules decoded by `filterToRules` (or `null` with Tunarr's `filterString` when the filter uses something the rule editor can't show). PUT refuses removing every rule, because Tunarr's update keeps the old filter when none is sent. |
+
+`server/smartCollection.ts` is pure and shared with the browser: `RULE_FIELDS`
+maps rule fields to Tunarr's search keys (`genres.name`, `studio.name`,
+`originalReleaseYear`, `duration` in ms for minutes, `addedAt` with a
+`relativeDate`…, from `shared/src/util/searchUtil.ts`).
+
+### Lineup's own routes (`server/lineupRoutes.ts`)
+
+`handleTunarrApi` tries `matchLineupRoute` first. These routes use the same
+pipeline as the content routes but answer from the companion.
+
+| Route | Methods | Behaviour |
+| --- | --- | --- |
+| `/templates` | GET, POST | List saved templates; create one (the server assigns a `my-…` id, so a saved template can't shadow a built-in one) after `validateTemplate` |
+| `/templates/:id` | PUT, DELETE | Replace or delete a saved template |
+| `/ai` | GET | `{ enabled, provider, model }`, or `{ enabled: false, message }` saying what to set |
+| `/ai/template` | POST | `{ prompt (≤ 2000 chars), channelId?, includeLibrary, baseTemplate? }`. `gatherContext` reads smart collections, custom shows and filler lists, and optionally the library (shows and movies via `POST /api/programs/search`, up to 600 and 300) and the channel's programming (a most-aired summary). `callModel` sends `SYSTEM_PROMPT` plus `buildUserMessage`; the model must call `propose_schedule` (`PROPOSAL_SCHEMA`). `resolveProposal` converts blocks, keeps role sources only when the id is in the catalog, drops suggestions `rulesToFilter` rejects, picks lists only from known ids, and validates the result with an `ai-…` id. Provider errors become `ai_auth`, `ai_rate_limited`, `ai_timeout`, `ai_unreachable` or `ai_invalid`. |
+
+### Channel logos (`server/logos.ts`)
+
+`channelLogo` reads the channel's `icon.path` and `logoSource` classifies it:
+
+- **Tunarr-hosted:** a `/images/…` path, or an absolute URL on `TUNARR_URL`'s host, or any URL whose path is `/images/uploads/…`. Tunarr stores uploads under whatever host was used at upload time (`localhost`, `host.docker.internal`, a tailnet name), so the path is fetched from `TUNARR_URL` through `fetchUpstream`. Paths are limited to safe characters and refuse encoded dots and slashes. If Tunarr has no such file and the URL was on another host, that host is tried as a public logo.
+- **Public:** any other `http(s)` URL, fetched by `fetchPublicImage` (`node:http(s)`): ports 80/443 only; IP literals and every DNS answer must be public (`isPublicAddress`, a `BlockList` of loopback, private, CGNAT, link-local, documentation, multicast and IPv6 local ranges; IPv4-mapped addresses are unwrapped); the lookup is pinned to the connection; up to 3 redirects, each re-checked; image content types only; 4 MB; 8 s. Off when `externalLogos` is false.
+- **Nothing usable** (empty path, other schemes, Tunarr-host paths outside `/images`) → `404 no_logo` inside the module, which the route turns into `204`, so the browser shows the channel number without logging an error.
+
+Results (and misses) are cached in memory per source (1 h, misses 5 min, 400 entries). Responses carry `cache-control: private, max-age=3600`, `nosniff` and a sandbox CSP.
 
 ## 7. Client data flow (`app/page.tsx`)
 
@@ -350,13 +427,29 @@ still be undone after a save.
 1. **Open.** `openSlotEditor` (Channel menu, or the generated-schedule warning) loads `catalog`. For a channel with a schedule, it loads `tunarrApi.schedule(id)` into `slotEditor.draft` via `draftFromSchedule` (a `ScheduleDraftState`: type, settings, slots, extra movies). For a manual channel, it starts a new draft (`isNew`). `ScheduleEditor` edits the draft:
    - type conversion with `convertDraft`
    - settings and slots, with sources from `catalogOptions` and `showOption` (library shows)
-   - per-slot commercials (`SlotCommercials`)
+   - per-slot options behind **More**: seasons for show slots (`SlotSeasons`, which loads seasons with a season search scoped to the show's media source and library, or counts them from `descendants`), direction, linked slots (`SlotLinking`, using `linkCandidates`, `linkSlot` and `linkGroups`), and commercials (`SlotCommercials`)
    - extra movies
    - **Detach to manual lineup** (`detachToManual`), which saves the current base lineup as a manual lineup
 2. **Preview.** `previewSlots` calls `tunarrApi.previewSchedule(id, draft)` and switches to preview mode.
    - The timeline renders `scheduleForDay(null, preview.lineup, preview.startTime, date)` with `viewPrograms` (the programs merged with the preview's).
    - Rows are read-only, a sticky `.preview-bar` and the inspector offer save, edit and discard, and keyboard edits are disabled (Back discards).
 3. **Save.** `saveSlots` is enabled only when `previewOf` matches the current draft, and confirms first if the lineup has unsaved edits. It calls `tunarrApi.saveSchedule(id, type, draft, preview, base.version)` and then compares Tunarr's returned lineup with the preview (by `itemIdentity`) to report whether they match. Afterwards it deletes the draft and reloads with a fresh edit list, because the lineup was regenerated.
+
+### Programming templates
+
+0. **Catalog.** `BUILT_IN_TEMPLATES` = `GENERAL_TEMPLATES` + `NETWORK_TEMPLATES`; saved templates come from `/templates` and AI drafts live in the dialog until saved. Built-in templates share role presets and market ad styles; blocks are `[start, role, adLevel?]` and weekly plans may override single weekdays.
+1. **Choose.** `TemplatesDialog` lists `TEMPLATES` and draws the day plan. For each role with a suggestion it calls `tunarrApi.previewSmartCollection` once and shows the match count; roles with matches default to "new smart collection", the rest to "leave out".
+2. **Apply.** Suggested collections are created (`createSmartCollection`, named "<template> · <role>", reusing one of that name if it exists). `templateToDraft` builds a time-slot draft: one slot per block (blocks with no source are left out so the previous block runs on), each block's day offset in a weekly period with Sunday as day 0 (Tunarr's `startOf('week')`), the role's play order, the template's pad, lateness (generous, because Tunarr turns a block into flex when the previous program runs past its start by more than the lateness), `flexPreference: 'end'`, and the ad style (`filler` for the commercials and promos lists; `midRoll` only when a commercials list is chosen and the style has breaks).
+3. **Open.** `applyTemplate` (page) creates a channel first when asked, then opens the slot editor with the draft (`saved: null`). Nothing reaches the channel until the user previews and saves.
+4. **Role defaults.** Saved and AI templates can carry `defaults` (a role's source). `defaultSource` turns one back into a source option, and the dialog preselects it.
+5. **Saving a format.** `scheduleToTemplate` turns a time-slot schedule into a template: one role per source (flex left out), blocks per weekday (Mon–Fri collapses to `weekdays` when equal), the ad style from the first slot with mid-roll/filler, and `none` on blocks without commercials.
+6. **Ad levels.** `midRollFor(style, level)`: light = interval ×1.6, length ×0.75, two fewer breaks; heavy = interval ×0.75, length ×1.25, one more break; none = no commercials list and no mid-roll (promos stay).
+
+### Events on a date
+
+`EventDialog` builds the event items (`lineupEntry` for library programs, `makeRedirect`, `makeFlex`) and calls `placeEvent(lineup, channel.startTime, at, items, mode, snap)`: it finds the pass and item airing at `at`, snaps to its end (`after`) or start (`before`), and either replaces items until the event's length is covered and pads with flex (`replace`, cycle unchanged) or inserts (`push`). The page's `placeEventEdit` applies it as one edit (`applyEdit`), merges program metadata, and jumps to the event's day. The preview states the drift from the requested time, what is taken off, and the new cycle (the event repeats every cycle).
+
+Suggestions always include a playable type, and TV suggestions match `show_genre`: Tunarr indexes genres on shows, not episodes (on the owner's server "Type is episode and Genre is Drama" matched 0, "… Show genre is Drama" 3,683), and smart collections play raw search results.
 
 ### Program log export
 
@@ -376,13 +469,15 @@ position) and downloads it via a `Blob` object URL. The filename gets an
 
 ## 8. External integrations
 
-- **Tunarr HTTP API** is the only integration. The proxy uses four channel endpoints plus `/api/programs/:id/artwork/:type`. On a real server, the artwork route returned `image/jpeg` for program UUIDs; the raw `artwork[].path` values in programming pointed at Plex on `127.0.0.1:32400`. There is no version negotiation.
+- **Tunarr HTTP API** is the main integration. The proxy uses the channel endpoints, `/api/programs/:id/artwork/:type`, and the content and setup endpoints listed in section 6.
+- **Public image hosts** (for channel logos that link outside Tunarr, such as YouTube or TMDB images) are fetched by the companion only, through `fetchPublicImage`.
+- **An AI provider** (Anthropic, or an OpenAI-compatible API such as OpenAI or Ollama), only when configured, called by `server/ai.ts`. On a real server, the artwork route returned `image/jpeg` for program UUIDs; the raw `artwork[].path` values in programming pointed at Plex on `127.0.0.1:32400`. There is no version negotiation.
 - **OpenAI Sites** hosts the preview. Only the build plugin and metadata are in the repo; the deploy pipeline is not.
 - **Google Fonts** (Geist via `next/font/google`) are used by the hosted build only.
 
 ## 9. Persistence
 
-- **Tunarr** holds all channel data. The companion server is stateless, apart from in-flight channel locks.
+- **Tunarr** holds all channel data. The companion's only stored state is saved templates (`LINEUP_DATA_DIR/templates.json`); in memory it keeps channel locks and the logo cache.
 - **The browser** keeps per-channel drafts (unsaved order and edit list) in IndexedDB (database `tunarr-lineup`, store `drafts`, key `channelId`). Each draft is tied to the programming version it was made against and is dropped once that version is gone.
   - If IndexedDB is unavailable or fails, an in-memory store is used and `draftStore().persistent` is false.
   - Drafts are per browser; they are not shared between devices.
@@ -407,6 +502,9 @@ userinfo.
 | --- | --- | --- |
 | `TUNARR_URL` | `createProxyConfig` (via `server/main.ts`, `vite.local.config.ts`) | Upstream Tunarr base URL (server-side only) |
 | `TUNARR_TIMEOUT_MS`, `TUNARR_SAVE_TIMEOUT_MS` | `createProxyConfig` | Upstream timeouts |
+| `LINEUP_EXTERNAL_LOGOS` | `createProxyConfig` | `false` stops fetching channel logos from public sites |
+| `LINEUP_DATA_DIR` | `createProxyConfig` → `createTemplateStore` | Saved templates folder (default `./data`, `/data` in Docker) |
+| `LINEUP_AI_PROVIDER`, `LINEUP_AI_API_KEY` (or `ANTHROPIC_API_KEY`/`OPENAI_API_KEY`), `LINEUP_AI_MODEL`, `LINEUP_AI_BASE_URL`, `LINEUP_AI_TIMEOUT_MS` | `createAiConfig` | AI assistant provider (off when unset) |
 | `LINEUP_PASSWORD`, `LINEUP_USERNAME` | `createAuthConfig` | Optional sign-in |
 | `PORT` (3000), `HOST` (`0.0.0.0`), `STATIC_DIR` | `server/main.ts` | Listen address and UI directory |
 | `NEXT_PUBLIC_SITE_URL` | `app/layout.tsx` | Hosted `metadataBase` |

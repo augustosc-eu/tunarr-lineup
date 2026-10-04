@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   catalogOptions,
   changeSlotSource,
@@ -13,20 +13,31 @@ import {
   FILLER_ORDER_LABELS,
   FILLER_POSITIONS,
   LATENESS_OPTIONS,
+  LINK_MODE_LABELS,
+  linkCandidates,
+  linkGroups,
+  linkSlot,
   newSlot,
   offsetToClock,
   ORDER_LABELS,
   PAD_OPTIONS,
   periodMs,
+  RERUN_OVERFLOW_LABELS,
+  seasonSummary,
+  setSeasons,
   shiftTimeSlots,
   slotCanHaveCommercials,
+  slotCanLink,
   slotLabel,
   slotProblems,
   slotSourceKey,
   slotWeightShare,
   sortTimeSlots,
+  WEEKDAY_NAMES,
+  type LinkGroup,
   type MidRoll,
   type ScheduleDraftState,
+  type SeasonInfo,
   type Slot,
   type SlotCatalog,
   type SlotFiller,
@@ -46,6 +57,8 @@ type Props = {
   /** Opens the library to pick a show, for slot `index` or a new slot (null). */
   onBrowseShow: (index: number | null) => void;
   onBrowseMovies: () => void;
+  /** Seasons of a show slot's show, for the season filter. */
+  loadSeasons: (slot: Slot) => Promise<SeasonInfo[]>;
   onPreview: () => void;
   onSave: () => void;
   onDetach?: () => void;
@@ -109,6 +122,85 @@ function SlotCommercials({ slot, fillerLists, onChange }: { slot: Slot; fillerLi
   );
 }
 
+function SlotSeasons({ slot, loadSeasons, onChange }: { slot: Slot; loadSeasons: Props['loadSeasons']; onChange: (slot: Slot) => void }) {
+  const [seasons, setSeasonList] = useState<SeasonInfo[] | null>(null);
+  const [error, setError] = useState('');
+  const showId = String(slot.showId ?? '');
+  useEffect(() => {
+    let cancelled = false;
+    loadSeasons(slot)
+      .then((items) => { if (!cancelled) setSeasonList(items); })
+      .catch((reason) => { if (!cancelled) { setSeasonList([]); setError(reason instanceof Error ? reason.message : 'Couldn’t load seasons.'); } });
+    return () => { cancelled = true; };
+    // Reload only when the slot plays a different show.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showId]);
+  const only = Array.isArray(slot.seasonFilter) ? (slot.seasonFilter as number[]) : [];
+  const except = Array.isArray(slot.seasonExcludeFilter) ? (slot.seasonExcludeFilter as number[]) : [];
+  // Kept as state so "Only these seasons" stays chosen while nothing is ticked yet.
+  const [mode, setMode] = useState<'all' | 'only' | 'except'>(only.length ? 'only' : except.length ? 'except' : 'all');
+  const chosen = mode === 'only' ? only : mode === 'except' ? except : [];
+  const numbers = [...new Set([...(seasons ?? []).map((season) => season.number), ...chosen])].sort((a, b) => a - b);
+  return (
+    <div className="slot-section">
+      <b>Seasons</b>
+      <select aria-label="Which seasons" value={mode} onChange={(event) => {
+        const next = event.target.value as 'all' | 'only' | 'except';
+        setMode(next);
+        onChange(setSeasons(slot, next, next === 'all' ? [] : [...only, ...except]));
+      }}>
+        <option value="all">All seasons</option><option value="only">Only these seasons</option><option value="except">All except these seasons</option>
+      </select>
+      {mode !== 'all' && <span className="checklist inline" role="group" aria-label="Seasons">
+        {seasons === null && <small className="subtle">Loading seasons…</small>}
+        {numbers.map((number) => {
+          const info = seasons?.find((season) => season.number === number);
+          return <label key={number}><input type="checkbox" checked={chosen.includes(number)} onChange={(event) => onChange(setSeasons(slot, mode, event.target.checked ? [...chosen, number] : chosen.filter((value) => value !== number)))} /> {number === 0 ? 'Specials' : `Season ${number}`}{info?.episodes ? <small> ({info.episodes})</small> : null}</label>;
+        })}
+      </span>}
+      {error && <small className="slot-problem">{error}</small>}
+      {mode !== 'all' && !chosen.length && <small className="slot-problem">Tick at least one season.</small>}
+    </div>
+  );
+}
+
+function SlotLinking({ slots, index, groups, time, onChange }: { slots: Slot[]; index: number; groups: Map<string, LinkGroup>; time: boolean; onChange: (slots: Slot[]) => void }) {
+  const slot = slots[index];
+  const candidates = linkCandidates(slots, index);
+  const group = typeof slot.iterationGroup === 'string' ? groups.get(slot.iterationGroup) : undefined;
+  const linkedTo = group ? group.members.find((member) => member !== index) ?? null : null;
+  const update = (patch: Partial<Slot>) => onChange(slots.map((item, position) => (position === index ? { ...item, ...patch } : item)));
+  return (
+    <div className="slot-section">
+      <b>Linked slots</b>
+      <select aria-label={`Slot ${index + 1} shares episodes with`} value={linkedTo === null ? '' : String(linkedTo)} disabled={!candidates.length && !group} onChange={(event) => onChange(linkSlot(slots, index, event.target.value === '' ? null : Number(event.target.value)))}>
+        <option value="">{candidates.length ? 'Not linked (own episode order)' : 'No other slot plays this'}</option>
+        {candidates.map(({ position }) => <option key={position} value={position}>Share episodes with slot {position + 1}{slots[position].iterationGroup && groups.get(String(slots[position].iterationGroup)) ? ` (group ${groups.get(String(slots[position].iterationGroup))!.number})` : ''}</option>)}
+      </select>
+      {group && <>
+        {/* Tunarr only allows reruns in time-slot schedules (random groups must all continue). */}
+        {time && <select aria-label={`Slot ${index + 1} link mode`} value={String(slot.linkMode ?? 'continue')} onChange={(event) => update({ linkMode: event.target.value })}>
+          {Object.entries(LINK_MODE_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+        </select>}
+        {time && slot.linkMode === 'rerun' && <select aria-label={`Slot ${index + 1} after reruns`} value={String(slot.rerunOverflow ?? 'flex')} onChange={(event) => update({ rerunOverflow: event.target.value })}>
+          {Object.entries(RERUN_OVERFLOW_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+        </select>}
+        <small className="subtle">Group {group.number}: slots {group.members.map((member) => member + 1).join(', ')} move through one episode list together.</small>
+      </>}
+    </div>
+  );
+}
+
+function slotNote(slot: Slot, groups: Map<string, LinkGroup>, commercials: string) {
+  const parts: string[] = [];
+  if (slot.type === 'show' && seasonSummary(slot) !== 'All seasons') parts.push(seasonSummary(slot));
+  const group = typeof slot.iterationGroup === 'string' ? groups.get(slot.iterationGroup) : undefined;
+  if (group) parts.push(`Linked group ${group.number}${slot.linkMode === 'rerun' ? ', reruns' : ''}`);
+  if (slot.direction === 'desc') parts.push('last to first');
+  if (commercials) parts.push(`Ads: ${commercials}`);
+  return parts.join(' · ');
+}
+
 function summary(draft: ScheduleDraftState) {
   const parts = [draft.type === 'time' ? `Time slots, repeating every ${draft.settings.period === 'week' ? 'week' : 'day'}` : `Random slots (${draft.settings.randomDistribution === 'none' ? 'in order' : draft.settings.randomDistribution ?? 'uniform'})`];
   parts.push(`${draft.slots.length} ${draft.slots.length === 1 ? 'slot' : 'slots'}`);
@@ -117,7 +209,7 @@ function summary(draft: ScheduleDraftState) {
 }
 
 export function ScheduleEditor(props: Props) {
-  const { channelLabel, isNew, draft, changed, catalog, currentChannelId, busy, error, previewReady, onChange, onBrowseShow, onBrowseMovies, onPreview, onSave, onDetach, onRevert, onClose } = props;
+  const { channelLabel, isNew, draft, changed, catalog, currentChannelId, busy, error, previewReady, onChange, onBrowseShow, onBrowseMovies, loadSeasons, onPreview, onSave, onDetach, onRevert, onClose } = props;
   const [expanded, setExpanded] = useState<number | null>(null);
   const [adding, setAdding] = useState('');
   const options = useMemo(() => catalogOptions(draft.slots, catalog ?? { customShows: [], fillerLists: [], smartCollections: [], channels: [] }, currentChannelId), [catalog, currentChannelId, draft.slots]);
@@ -129,6 +221,7 @@ export function ScheduleEditor(props: Props) {
   const period = periodMs({ type: draft.type, period: draft.settings.period as 'day' | 'week' });
   const weighted = draft.settings.randomDistribution === 'weighted';
   const hasMovieSlot = draft.slots.some((slot) => slot.type === 'movie');
+  const groups = linkGroups(draft.slots);
 
   const setSlots = (slots: Slot[]) => onChange({ ...draft, slots: time ? sortTimeSlots(slots) : slots });
   const setSetting = (key: string, value: unknown) => onChange({ ...draft, settings: { ...draft.settings, [key]: value } });
@@ -224,12 +317,16 @@ export function ScheduleEditor(props: Props) {
               </select>
             );
             const orderSelect = hasOrder
-              ? <select aria-label={`Slot ${index + 1} order`} value={String(slot.order)} disabled={busy} onChange={(event) => update(index, { order: event.target.value })}>{Object.entries(ORDER_LABELS).map(([value, text]) => <option key={value} value={value}>{text}</option>)}</select>
+              ? <select aria-label={`Slot ${index + 1} order`} value={String(slot.order)} disabled={busy} onChange={(event) => {
+                // Linked slots share one episode list, so they change play order together.
+                const group = groups.get(String(slot.iterationGroup));
+                setSlots(draft.slots.map((item, position) => (position === index || group?.members.includes(position) ? { ...item, order: event.target.value } : item)));
+              }}>{Object.entries(ORDER_LABELS).map(([value, text]) => <option key={value} value={value}>{text}</option>)}</select>
               : <span className="subtle">—</span>;
             const actions = (
               <span className="slot-actions">
                 {!time && <><button aria-label={`Move slot ${index + 1} up`} disabled={busy || index === 0} onClick={() => move(index, -1)}>↑</button><button aria-label={`Move slot ${index + 1} down`} disabled={busy || index === draft.slots.length - 1} onClick={() => move(index, 1)}>↓</button></>}
-                {slotCanHaveCommercials(slot) && <button aria-expanded={expanded === index} aria-label={`Commercials for slot ${index + 1}`} onClick={() => setExpanded(expanded === index ? null : index)}>Ads{Array.isArray(slot.filler) || slot.midRoll ? ' ●' : ''}</button>}
+                {slotCanHaveCommercials(slot) && <button aria-expanded={expanded === index} aria-label={`Options for slot ${index + 1}`} onClick={() => setExpanded(expanded === index ? null : index)}>More{Array.isArray(slot.filler) || slot.midRoll || slot.iterationGroup || (slot.type === 'show' && seasonSummary(slot) !== 'All seasons') ? ' ●' : ''}</button>}
                 <button aria-label={`Duplicate slot ${index + 1}`} disabled={busy} onClick={() => duplicate(index)}>Copy</button>
                 <button aria-label={`Remove slot ${index + 1}`} disabled={busy} onClick={() => remove(index)}>Remove</button>
               </span>
@@ -239,7 +336,7 @@ export function ScheduleEditor(props: Props) {
                 {time ? <>
                   <span className="slot-start">
                     {week && <select aria-label={`Slot ${index + 1} day`} value={Math.floor(Number(slot.startTime) / DAY_MS)} disabled={busy} onChange={(event) => update(index, { startTime: Number(event.target.value) * DAY_MS + (Number(slot.startTime) % DAY_MS) })}>
-                      {Array.from({ length: 7 }, (_, day) => <option key={day} value={day}>Day {day + 1}</option>)}
+                      {WEEKDAY_NAMES.map((name, day) => <option key={day} value={day}>{name}</option>)}
                     </select>}
                     <input type="time" step="1" aria-label={`Slot ${index + 1} start`} value={offsetToClock(Number(slot.startTime))} disabled={busy} onChange={(event) => {
                       const offset = clockToOffset(event.target.value);
@@ -262,9 +359,17 @@ export function ScheduleEditor(props: Props) {
                   </span>
                   {orderSelect}{actions}
                 </>}
-                {commercials && expanded !== index && <small className="slot-note">Ads: {commercials}</small>}
+                {expanded !== index && slotNote(slot, groups, commercials) && <small className="slot-note">{slotNote(slot, groups, commercials)}</small>}
                 {problems[index] && <small className="slot-problem" role="alert">{problems[index]}</small>}
-                {expanded === index && <SlotCommercials slot={slot} fillerLists={catalog?.fillerLists ?? []} onChange={(updated) => update(index, () => updated)} />}
+                {expanded === index && <div className="slot-details">
+                  {slot.type === 'show' && <SlotSeasons slot={slot} loadSeasons={loadSeasons} onChange={(updated) => update(index, () => updated)} />}
+                  {hasOrder && <div className="slot-section"><b>Direction</b><select aria-label={`Slot ${index + 1} direction`} value={String(slot.direction ?? 'asc')} onChange={(event) => {
+                    const group = groups.get(String(slot.iterationGroup));
+                    setSlots(draft.slots.map((item, position) => (position === index || group?.members.includes(position) ? { ...item, direction: event.target.value } : item)));
+                  }}><option value="asc">First to last</option><option value="desc">Last to first</option></select></div>}
+                  {slotCanLink(slot) && <SlotLinking slots={draft.slots} index={index} groups={groups} time={time} onChange={setSlots} />}
+                  <div className="slot-section column"><b>Commercials</b><SlotCommercials slot={slot} fillerLists={catalog?.fillerLists ?? []} onChange={(updated) => update(index, () => updated)} /></div>
+                </div>}
               </div>
             );
           })}

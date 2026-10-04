@@ -1,3 +1,5 @@
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { defineConfig, devices } from '@playwright/test';
 
 // End-to-end suite: the built companion (npm run build:local) in front of a
@@ -5,6 +7,8 @@ import { defineConfig, devices } from '@playwright/test';
 // locally installed Chrome instead of Playwright's bundled Chromium.
 const FAKE_TUNARR_PORT = 18000;
 const APP_PORT = 13000;
+// Saved templates go to a fresh folder each run.
+const DATA_DIR = path.join(tmpdir(), `lineup-e2e-${process.pid}-${Date.now()}`);
 
 export default defineConfig({
   testDir: 'e2e',
@@ -28,7 +32,11 @@ export default defineConfig({
     {
       command: 'node dist-server/main.js',
       url: `http://127.0.0.1:${APP_PORT}/healthz`,
-      env: { PORT: String(APP_PORT), HOST: '127.0.0.1', TUNARR_URL: `http://127.0.0.1:${FAKE_TUNARR_PORT}` },
+      env: {
+        PORT: String(APP_PORT), HOST: '127.0.0.1', TUNARR_URL: `http://127.0.0.1:${FAKE_TUNARR_PORT}`, LINEUP_DATA_DIR: DATA_DIR,
+        // The fake Tunarr also answers as an OpenAI-compatible AI endpoint.
+        LINEUP_AI_PROVIDER: 'openai', LINEUP_AI_BASE_URL: `http://127.0.0.1:${FAKE_TUNARR_PORT}/v1`, LINEUP_AI_MODEL: 'fake-model',
+      },
       reuseExistingServer: false,
     },
   ],
