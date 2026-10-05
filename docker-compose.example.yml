@@ -38,6 +38,9 @@ services:
       # Lineup is reachable by anyone other than you.
       # - LINEUP_PASSWORD=change-me
       # - LINEUP_USERNAME=lineup
+      # Without sign-in, Lineup answers only to IP addresses and localhost.
+      # Add the names you open it by (e.g. nas.local or your proxy's domain):
+      # - LINEUP_ALLOWED_HOSTS=nas.local,lineup.home.example
       # Optional: upstream timeouts in milliseconds.
       # - TUNARR_TIMEOUT_MS=10000
       # - TUNARR_SAVE_TIMEOUT_MS=30000

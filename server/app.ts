@@ -5,6 +5,7 @@ import { stat } from 'node:fs/promises';
 import http from 'node:http';
 import path from 'node:path';
 import { AUTH_CHALLENGE, isAuthorized, type AuthConfig } from './auth.js';
+import { hostRefusal, isAllowedHost, type HostPolicy } from './hosts.js';
 import { handleNodeApiRequest, isTunarrApiPath } from './nodeAdapter.js';
 import type { ProxyConfig } from './tunarrProxy.js';
 
@@ -55,7 +56,7 @@ function sendFile(res: http.ServerResponse, filePath: string, method: string, im
   else createReadStream(filePath).pipe(res);
 }
 
-export function createLineupServer({ config, auth, staticRoot }: { config: ProxyConfig; auth: AuthConfig; staticRoot: string }) {
+export function createLineupServer({ config, auth, staticRoot, hosts = { any: false, names: [] } }: { config: ProxyConfig; auth: AuthConfig; staticRoot: string; hosts?: HostPolicy }) {
     return http.createServer(async (req, res) => {
     try {
       const method = req.method ?? 'GET';
@@ -64,6 +65,12 @@ export function createLineupServer({ config, auth, staticRoot }: { config: Proxy
       if (pathname === '/healthz') {
         res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
         res.end(JSON.stringify({ status: 'ok' }));
+        return;
+      }
+      // Without sign-in, refuse unknown host names (DNS rebinding; see hosts.ts).
+      if (!auth && !isAllowedHost(req.headers.host, hosts)) {
+        res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
+        res.end(hostRefusal(req.headers.host ?? ''));
         return;
       }
       if (!isAuthorized(req.headers.authorization, auth)) {

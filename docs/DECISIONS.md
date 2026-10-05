@@ -124,7 +124,7 @@ on the `broadcast-programming` branch.
 
 ## D16. Hosted target scaffolded by OpenAI Sites on Vinext with a Workers-style runtime
 
-- **Status:** Evidenced (`vite.config.ts` plugins `vinext()`, `sites()`, `cloudflare()`; `.openai/hosting.json`; commit author; `metadataBase` default `*.chatgpt.site`; `package.json` name `sites-project`).
+- **Status:** Evidenced (`vite.config.ts` plugins `vinext()`, `sites()`, `cloudflare()`; `.openai/hosting.json`; commit author; `metadataBase` default `*.chatgpt.site`; `package.json` name `sites-project`, renamed `tunarr-lineup` on 2026-10-05).
 - **Decision:**
   - The hosted app is a Next App Router app run by Vinext.
   - It is packaged for OpenAI Sites, with no D1 or R2 bindings.
@@ -348,9 +348,17 @@ on the `broadcast-programming` branch.
 
 - **Status:** Explicit: the owner asked for "scheduling sports or events by date" (2026-10-04). Evidenced: `lib/events.ts`, `EventDialog`.
 - **Decision:** Tunarr's schedules have no dated items and Tunarr can't cut a program short, so an event is placed into the lineup at a program boundary: replacing what would have aired (padding with flex to keep later programs on time) or pushing everything later. It is an ordinary edit: undoable, drafted, saved with the conditional save.
-- **Consequences, shown in the dialog:** the start may move to the nearest boundary; the event repeats every lineup cycle (a 30-day generated lineup airs it again 30 days later); on slot-scheduled channels, regenerating the schedule removes it.
+- **Consequences, shown in the dialog:** the start may move to the nearest boundary; a replacing event that runs past the end of the lineup makes the lineup longer (the cycle can't wrap), so later repeats move; the event repeats every lineup cycle (a 30-day generated lineup airs it again 30 days later); on slot-scheduled channels, regenerating the schedule removes it.
 
 ## D41. Network templates cover mainstream and music channels in seven countries
 
 - **Status:** Explicit: the owner asked for "all mainstream Japanese, Argentine, US, Spain, UK, and Italian channels" and later for MTV Japan, Space Shower TV, MUSIC ON! TV, Music Japan TV, MTV, VH1, MuchMusic and other music channels (2026-10-04). Evidenced: `lib/networkTemplates.ts`, `tests/templates.test.ts`.
 - **Decision:** The catalog has templates for 11 Japanese, 6 Argentine, 20 US broadcast and cable, 1 Canadian, 6 Spanish, 7 British and 7 Italian networks. The music additions include four Japanese formats, classic MTV/VH1/MuchMusic styles, country, hip-hop/R&B, UK request-pop and UK rock. They use shared role presets, music-video rules and market ad styles. Each is a simplified daypart plan in the network's style, not an official current schedule; the new music templates keep network names only in "Inspired by …" metadata and use no logos.
+
+## D42. Answer only to known host names when sign-in is off
+
+- **Status:** Explicit: the owner asked to fix the issues found in the pre-release review (2026-10-05). Evidenced: `server/hosts.ts`, `tests/hardening.test.ts`.
+- **Decision:** Without `LINEUP_PASSWORD`, the companion refuses requests whose `Host` isn't an IP address, `localhost`, or a name in `LINEUP_ALLOWED_HOSTS`. This closes DNS rebinding, which the Origin check alone can't detect. With sign-in on, any name is accepted, because a rebound page has no credentials and gets `401`.
+- **Alternatives considered:** checking only when sign-in is on as well was rejected, because it would break people who open a password-protected Lineup by a host name, for no added protection. Trusting `x-forwarded-host` was rejected, because a same-origin page can set it.
+- **Consequence:** people who open Lineup without a password by a name such as `nas.local` must add it to `LINEUP_ALLOWED_HOSTS`. The 403 page says so.
+

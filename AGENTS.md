@@ -140,7 +140,7 @@ Chromium with `npx playwright install chromium`. CI runs all of them
 - **Put HTTP and validation logic in `server/`:** `tunarrProxy.ts` (framework-free),
   `content.ts`, `admin.ts`, `logos.ts`, `smartCollection.ts`, `templateSchema.ts`,
   `templateStore.ts`, `lineupRoutes.ts`, `ai.ts`, `upstream.ts`,
-  `slotSchedule.ts`, `lineupVersion.ts`, `auth.ts` and `app.ts`. `lib/` and
+  `slotSchedule.ts`, `lineupVersion.ts`, `auth.ts`, `hosts.ts` and `app.ts`. `lib/` and
   `app/` may import pure modules from `server/` (`lineupVersion`, `slotSchedule`,
   `smartCollection`, `templateSchema`) but never Node APIs (`logos.ts` and
   `templateStore.ts` use Node built-ins).
@@ -160,3 +160,25 @@ Chromium with `npx playwright install chromium`. CI runs all of them
 - **Keep docs current.** When behavior, routes, env vars or commands change, update
   `README.md` and the relevant file in `docs/`.
 - Commit or push only when asked.
+
+
+## vexp - Context-Aware AI Coding <!-- vexp v3.3.2 -->
+
+### Context strategy: call run_pipeline ONCE at task start
+If the task already names the files/symbols to touch, SKIP vexp. Otherwise one
+`run_pipeline({ "task": "..." })` returns ranked pivot files with line ranges and
+blast radius. Do NOT open files one by one to find your way around - every extra
+tool call costs a turn. Call it again ONLY when the task moves to a new area.
+`get_skeleton` for files to understand, not edit. `verify_done` before calling a
+multi-file task complete, then RUN the tests it names.
+
+### Query shape (do this)
+Anchor the task on real identifiers (ClassName, functionName) or file paths:
+`run_pipeline({ "task": "fix JWT expiry in AuthService.validateToken" })`
+
+vexp runs entirely on this machine, index in `.vexp/`;
+`run_pipeline` transmits nothing to any external service.
+On `status: "degraded"` or 0 pivots the index is still building - use your own tools.
+For literal string sweeps use your native search - do NOT route text sweeps through vexp.
+Repo SOURCE only: logs, dist/, node_modules/ and files outside the repo are NOT indexed.
+<!-- /vexp -->

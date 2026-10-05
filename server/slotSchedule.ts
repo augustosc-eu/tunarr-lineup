@@ -191,7 +191,7 @@ export function buildSchedule(current: unknown, edit: unknown): { schedule: Json
   if (edit.settings !== undefined) {
     if (!isObject(edit.settings)) return { error: '"settings" must be an object.' };
     for (const [key, value] of Object.entries(edit.settings)) {
-      const check = SETTINGS[type][key];
+      const check = Object.hasOwn(SETTINGS[type], key) ? SETTINGS[type][key] : undefined;
       if (!check) return { error: `"${key.slice(0, 40)}" isn't a ${type === 'time' ? 'time-slot' : 'random-slot'} setting.` };
       if (!check(value)) return { error: `"${key}" has an invalid value.` };
       base[key] = value;

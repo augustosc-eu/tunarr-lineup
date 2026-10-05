@@ -28,7 +28,8 @@ type Json = Record<string, unknown>;
 const isObject = (value: unknown): value is Json => !!value && typeof value === 'object' && !Array.isArray(value);
 const CHANNEL_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 
-type Context = { config: ProxyConfig; target: TunarrTarget; method: string; body: unknown };
+/** `target` is null when TUNARR_URL isn't set; only the AI route needs it (the proxy checks). */
+type Context = { config: ProxyConfig; target: TunarrTarget | null; method: string; body: unknown };
 
 export async function handleLineupRoute(route: LineupRoute, { config, target, method, body }: Context): Promise<ProxyResponse> {
   const store = config.templates as TemplateStore | undefined;
@@ -57,6 +58,7 @@ export async function handleLineupRoute(route: LineupRoute, { config, target, me
       }
       case 'ai-template': {
         const ai = config.ai;
+        if (!target) return fail(503, 'not_configured', 'TUNARR_URL is not set on the Lineup server.');
         if (!ai || 'off' in ai) return fail(503, 'ai_off', ai && 'off' in ai ? ai.off : 'AI is not set up on this server.');
         if (!isObject(body)) return fail(400, 'invalid_request', 'Send { "prompt", "channelId"?, "includeLibrary"?, "baseTemplate"? }.');
         const prompt = typeof body.prompt === 'string' ? body.prompt.trim() : '';

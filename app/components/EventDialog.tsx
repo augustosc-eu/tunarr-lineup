@@ -99,6 +99,7 @@ export function EventDialog({ channel, channels, lineup, programs, date, generat
           <b>{title}: {when(placement.start)} – {when(placement.end)}</b>
           {placement.drift !== 0 && <span>Starts {durationTimecode(Math.abs(placement.drift))} {placement.drift > 0 ? 'after' : 'before'} {time}, when {placement.drift > 0 ? 'the program on air ends' : 'the program on air starts'}. Tunarr can’t cut a program short.</span>}
           {mode === 'replace' && <span>Takes off: {removedTitles.length ? `${removedTitles.slice(0, 6).join(', ')}${removedTitles.length > 6 ? ` and ${removedTitles.length - 6} more` : ''}` : 'nothing'}{placement.pad ? `; then ${durationTimecode(placement.pad)} of flex so everything after stays on time` : ''}.</span>}
+          {mode === 'replace' && placement.overrun > 0 && <span>It runs {durationTimecode(placement.overrun)} past the end of the lineup, so the lineup gets that much longer and later repeats air that much later.</span>}
           {mode === 'push' && <span>Everything after it moves {durationTimecode(placement.end - placement.start)} later.</span>}
           <span>This lineup repeats {repeatLabel(placement.cycle)}, so the event also airs on {inputDate(placement.start + placement.cycle)}{placement.cycle < 14 * 86_400_000 ? ' and every repeat after that' : ''}.</span>
           {generated && <span>Saving the slot schedule (or changing the start time) regenerates the lineup and removes the event.</span>}

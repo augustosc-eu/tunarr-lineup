@@ -208,6 +208,7 @@ describe('events on a date', () => {
     expect(placed.drift).toBe(20 * MIN);
     expect(placed.removed.map((entry) => entry.id)).toEqual(['c', 'd']);
     expect(placed.pad).toBe(50 * MIN);
+    expect(placed.overrun).toBe(0);
     expect(placed.lineup.map((entry) => entry.id ?? entry.type)).toEqual(['a', 'b', 'match', 'flex']);
     expect(placed.cycle).toBe(4 * HOUR);
     expect(repeatLabel(placed.cycle)).toBe('every 4 hours');
@@ -224,5 +225,18 @@ describe('events on a date', () => {
     expect(pushed.cycle).toBe(4 * HOUR + 100 * MIN);
     expect(placeEvent([], start, at, event, 'replace')).toBeNull();
     expect(placeEvent(lineup, start, start + 60 * MIN, event, 'replace')!.drift).toBe(0);
+  });
+
+  it('says when a replacing event runs past the end of the lineup', () => {
+    // 03:10 is inside "d" (03:00–04:00), so the event starts at the end of the cycle with nothing left to replace.
+    const placed = placeEvent(lineup, start, start + 190 * MIN, event, 'replace')!;
+    expect(placed.removed).toEqual([]);
+    expect(placed.overrun).toBe(100 * MIN);
+    expect(placed.cycle).toBe(4 * HOUR + 100 * MIN);
+    // Starting in "d"'s place replaces its 60 minutes and still overruns by 40.
+    const early = placeEvent(lineup, start, start + 190 * MIN, event, 'replace', 'before')!;
+    expect(early.removed.map((entry) => entry.id)).toEqual(['d']);
+    expect(early.overrun).toBe(40 * MIN);
+    expect(placeEvent(lineup, start, start + 190 * MIN, event, 'push')!.overrun).toBe(0);
   });
 });

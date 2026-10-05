@@ -157,7 +157,7 @@ const ADS = '5e5e5e5e-1a2b-4c3d-8e9f-000000000001';
 type FullState = FakeState & {
   fillerLists: Array<{ id: string; name: string; programs: unknown[] }>;
   schedules: Record<string, { type: string; slots: Array<Record<string, unknown>> }>;
-  channels: Array<{ id: string; name: string; number: number; fillerCollections?: unknown[]; transcodeConfigId?: string; streamMode?: string; watermark?: Record<string, unknown> }>;
+  channels: Array<{ id: string; name: string; number: number; startTime: number; fillerCollections?: unknown[]; transcodeConfigId?: string; streamMode?: string; watermark?: Record<string, unknown> }>;
   smartCollections: Array<{ name: string; filter: unknown }>;
   mediaSources: Array<{ name: string; type: string; uri?: string; accessToken?: string; libraries: Array<{ name: string; enabled: boolean }> }>;
   transcodeConfigs: Array<{ id: string; videoBitRate: number; vaapiDevice: string }>;
@@ -439,7 +439,13 @@ test('asks the AI for a schedule, saves it as a template and applies it', async 
 test('schedules a movie as an event on a date and keeps the rest on time', async ({ page }) => {
   await page.keyboard.press('e');
   const dialog = page.getByRole('dialog', { name: 'Schedule an event' });
-  await dialog.getByLabel('Event time').fill('03:00');
+  // The fake's 2-hour lineup starts on the hour, two hours ago. Placing the event
+  // exactly there means the 90-minute movie fits before the cycle ends whatever
+  // time the suite runs (a fixed time overran the cycle at odd hours).
+  const start = new Date((await fullState(page)).channels.find((channel) => channel.id === NEWS)!.startTime);
+  const pad = (value: number) => String(value).padStart(2, '0');
+  await dialog.getByLabel('Event date').fill(`${start.getFullYear()}-${pad(start.getMonth() + 1)}-${pad(start.getDate())}`);
+  await dialog.getByLabel('Event time').fill(`${pad(start.getHours())}:00`);
   await dialog.getByRole('button', { name: 'Choose programs…' }).click();
   const library = page.getByRole('dialog', { name: 'Programs for the event' });
   await library.getByRole('button', { name: 'Add Zulu Dawn (1979)' }).click();

@@ -231,6 +231,7 @@ The menus can also be operated with the arrows, OK and Back.
 
 - **Network topology:** Tunarr usually runs on a private address over HTTP. The browser therefore can't call it from an HTTPS hosted page, and real use requires the companion running where it can reach Tunarr (`README.md`).
 - **Sign-in is optional:** without `LINEUP_PASSWORD`, anyone who can reach the companion's port can rewrite channel programming. With it, HTTP Basic sign-in protects everything but `/healthz`.
+- **Host names:** without sign-in, Lineup answers only to IP addresses, `localhost` and the names in `LINEUP_ALLOWED_HOSTS`, so other websites can't reach it through DNS rebinding.
 - **Tunarr API compatibility:** Lineup depends on Tunarr's channel, programming, lineup, schedule, artwork, search, filler-list, custom-show, smart-collection, transcode-config and media-source endpoints and their payload shapes (see `docs/ARCHITECTURE.md`). The code doesn't detect Tunarr versions.
 - **Generated schedules:** saving manually can detach a channel from its generated schedule. Tunarr may also regenerate over manual edits.
 - **TV readability and remote operation:** text must stay large and anti-aliased, and every action must work without a mouse. The UI scales with viewport width.

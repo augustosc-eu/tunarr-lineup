@@ -177,6 +177,17 @@ default `lineup`) to require HTTP Basic sign-in for everything except
 `/healthz`. Basic auth sends the password with every request, so use it on a
 trusted network or behind HTTPS.
 
+### Host names
+
+Without sign-in, the companion only answers when it's opened by IP address
+(`http://192.168.1.20:3000`) or as `localhost`. This stops a web page on another
+site from pointing its own host name at your machine and editing your channels
+through your browser (DNS rebinding). To open Lineup by a name such as
+`http://nas.local:3000` or a reverse-proxy domain, list it in
+`LINEUP_ALLOWED_HOSTS` (comma-separated; `.example.com` also allows its
+subdomains). With `LINEUP_PASSWORD` set, any name works, because the browser
+only sends the password to the address you signed in on.
+
 ## Run with Docker Compose (recommended)
 
 ```sh
@@ -238,6 +249,7 @@ Server environment variables:
 | `LINEUP_AI_TIMEOUT_MS` | `180000` | How long to wait for the AI |
 | `LINEUP_PASSWORD` | (none) | Turns on HTTP Basic sign-in |
 | `LINEUP_USERNAME` | `lineup` | Sign-in user name |
+| `LINEUP_ALLOWED_HOSTS` | (none) | Extra host names Lineup answers to without sign-in, e.g. `nas.local,.home.example` (`*` for any); IP addresses and `localhost` always work |
 | `STATIC_DIR` | `dist-local` | Directory holding the built interface |
 
 ## AI setup
@@ -295,6 +307,12 @@ Tests live in `tests/`:
 
 - `tunarrProxy.test.ts`: routing, SSRF guards, timeouts, unreachable Tunarr, error normalization, the artwork route, and header stripping over real HTTP.
 - `server.test.ts`: static serving, path-traversal guards, CSP, and optional sign-in.
+- `hardening.test.ts`: host-name checks (DNS rebinding), own-key validation, saved-template size limits, and templates without `TUNARR_URL`.
 - `lineup.test.ts`, `broadcast.test.ts`: reorder, block moves, move-to-time, timecode, day totals, CSV, undo history, artwork URLs, and save payload preservation for every lineup item type.
 - `page.test.tsx`: live loading, date navigation, reorder → save → re-fetch, conflict detection, remote-key slide, block moves, menus, log export, and no silent demo fallback.
 - `e2e/desk.spec.ts`: the real browser flow at 1920×1080 and phone width.
+
+## License
+
+[MIT](LICENSE). Tunarr Lineup is an independent companion for
+[Tunarr](https://tunarr.com) and isn't affiliated with the Tunarr project.

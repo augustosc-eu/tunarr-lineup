@@ -66,6 +66,10 @@ type Json = Record<string, unknown>;
 const isObject = (value: unknown): value is Json => !!value && typeof value === 'object' && !Array.isArray(value);
 const text = (value: unknown, max: number) => (typeof value === 'string' && value.trim().length <= max ? value.trim() : null);
 const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
+const RULE_KEYS = ['field', 'op', 'values', 'value', 'value2', 'amount', 'unit'] as const;
+/** A role-default field value worth keeping: short text, a number, or a short list of whole numbers (seasons). */
+const plainValue = (value: unknown) => (typeof value === 'string' && value.length <= 200) || finite(value)
+  || (Array.isArray(value) && value.length <= 500 && value.every((item) => Number.isInteger(item)));
 
 function checkBlocks(value: unknown, roles: Set<string>, label: string): Block[] | string {
   if (!Array.isArray(value) || value.length > MAX_BLOCKS_PER_DAY) return `${label}: blocks must be a list.`;
@@ -78,7 +82,7 @@ function checkBlocks(value: unknown, roles: Set<string>, label: string): Block[]
     if (seen.has(at)) return `${label}: two blocks start at ${at}.`;
     seen.add(at);
     if (typeof role !== 'string' || !roles.has(role)) return `${label}: block at ${at} uses an unknown role.`;
-    if (level !== undefined && !(level in AD_LEVELS)) return `${label}: unknown ad level at ${at}.`;
+    if (level !== undefined && !(typeof level === 'string' && Object.hasOwn(AD_LEVELS, level))) return `${label}: unknown ad level at ${at}.`;
     blocks.push(level === undefined || level === 'standard' ? [at, role] : [at, role, level as AdLevel]);
   }
   return blocks.sort((a, b) => a[0].localeCompare(b[0]));
@@ -111,7 +115,9 @@ export function validateTemplate(input: unknown): { template: Template } | { err
       const checked = rulesToFilter(suggest);
       if ('error' in checked) return { error: `Role "${label}": ${checked.error}` };
       if (!checked.filter) return { error: `Role "${label}": the suggestion needs at least one rule.` };
-      role.suggest = { match: suggest.match, rules: suggest.rules.map((rule) => ({ ...rule })).filter((rule) => rule.field in RULE_FIELDS) };
+      // rulesToFilter checked every rule; keep only the rule fields, so a template can't carry anything else.
+      const rules = suggest.rules.map((rule) => Object.fromEntries(RULE_KEYS.filter((key) => rule[key] !== undefined).map((key) => [key, rule[key]])) as RuleSet['rules'][number]);
+      role.suggest = { match: suggest.match, rules: rules.filter((rule) => Object.hasOwn(RULE_FIELDS, rule.field)) };
     }
     roles.push(role);
   }
@@ -167,7 +173,7 @@ export function validateTemplate(input: unknown): { template: Template } | { err
       // Only plain source fields are kept; Tunarr validates the rest on preview.
       const kept: RoleDefault['template'] = { type };
       for (const field of ['showId', 'customShowId', 'fillerListId', 'smartCollectionId', 'channelId', 'channelName', 'order', 'direction', 'seasonFilter', 'seasonExcludeFilter', 'durationWeighting', 'decayFactor', 'recoveryFactor']) {
-        if (raw.template[field] !== undefined) kept[field] = raw.template[field];
+        if (plainValue(raw.template[field])) kept[field] = raw.template[field];
       }
       for (const field of ['show', 'customShow', 'fillerList', 'smartCollection', 'channel']) {
         const value = raw.template[field];

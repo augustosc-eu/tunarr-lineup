@@ -2,7 +2,7 @@
 // (LINEUP_DATA_DIR/templates.json) so they're shared by every browser that
 // uses this Lineup: the TV, a laptop, a phone. This is the companion's only
 // stored state; Tunarr still holds all channel data.
-import { randomBytes } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { validateTemplate, type Template } from './templateSchema.js';
@@ -56,7 +56,7 @@ export function createTemplateStore(dir: string): TemplateStore {
   async function write(templates: Template[]) {
     try {
       await mkdir(dir, { recursive: true });
-      const tmp = `${file}.${randomBytes(4).toString('hex')}.tmp`;
+      const tmp = `${file}.${randomUUID()}.tmp`;
       await writeFile(tmp, `${JSON.stringify({ version: 1, templates }, null, 2)}\n`, 'utf8');
       await rename(tmp, file);
     } catch {
@@ -88,4 +88,5 @@ export function createTemplateStore(dir: string): TemplateStore {
 }
 
 /** A fresh id for a saved template ("my-…"), distinct from built-in ids. */
-export const newTemplateId = (prefix = 'my') => `${prefix}-${randomBytes(5).toString('hex')}`;
+// Hex digits from a random UUID (the first 10 are all random), without Buffer typings.
+export const newTemplateId = (prefix = 'my') => `${prefix}-${randomUUID().replaceAll('-', '').slice(0, 10)}`;

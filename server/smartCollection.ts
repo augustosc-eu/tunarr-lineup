@@ -50,15 +50,19 @@ type Json = Record<string, unknown>;
 const isObject = (value: unknown): value is Json => !!value && typeof value === 'object' && !Array.isArray(value);
 const finite = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
 const UNIT_MS: Record<string, number> = { day: 86_400_000, week: 7 * 86_400_000, month: 30 * 86_400_000, year: 365 * 86_400_000 };
+/** Own keys only, so "toString" or "constructor" never pass as a field or operator. */
+const has = (table: object, key: unknown): key is string => typeof key === 'string' && Object.hasOwn(table, key);
+const fieldOf = (name: unknown) => (has(RULE_FIELDS, name) ? RULE_FIELDS[name] : undefined);
+const STRING_OP_NAMES: Record<string, string> = { '=': 'is', in: 'is', '!=': 'is not', 'not in': 'is not', contains: 'contains', 'not contains': 'not contains' };
 
 function ruleToNode(rule: Rule, now: number): Json | string {
-  const spec = RULE_FIELDS[rule.field];
+  const spec = fieldOf(rule.field);
   if (!spec) return `Unknown field "${String(rule.field).slice(0, 40)}".`;
   const label = spec.label;
   if (spec.kind === 'string') {
     const values = (rule.values ?? []).map((value) => (typeof value === 'string' ? value.trim() : '')).filter(Boolean);
     if (!values.length || values.length > 50 || values.some((value) => value.length > 200)) return `${label}: enter a value.`;
-    if (!(rule.op in STRING_OPS)) return `${label}: unsupported comparison.`;
+    if (!has(STRING_OPS, rule.op)) return `${label}: unsupported comparison.`;
     let op: string;
     if (rule.op === 'is') op = values.length > 1 ? 'in' : '=';
     else if (rule.op === 'is not') op = values.length > 1 ? 'not in' : '!=';
@@ -67,7 +71,7 @@ function ruleToNode(rule: Rule, now: number): Json | string {
     return { type: 'value', fieldSpec: { key: spec.key, name: rule.field, op, type: spec.facet ? 'faceted_string' : 'string', value: values } };
   }
   if (spec.kind === 'numeric') {
-    if (!(rule.op in NUMERIC_OPS)) return `${label}: unsupported comparison.`;
+    if (!has(NUMERIC_OPS, rule.op)) return `${label}: unsupported comparison.`;
     const scale = spec.scale ?? 1;
     if (!finite(rule.value) || rule.value < 0) return `${label}: enter a number.`;
     if (rule.op === 'between') {
@@ -76,7 +80,7 @@ function ruleToNode(rule: Rule, now: number): Json | string {
     }
     return { type: 'value', fieldSpec: { key: spec.key, name: rule.field, op: rule.op, type: 'numeric', value: rule.value * scale } };
   }
-  if (!(rule.op in DATE_OPS)) return `${label}: unsupported comparison.`;
+  if (!has(DATE_OPS, rule.op)) return `${label}: unsupported comparison.`;
   if (!Number.isInteger(rule.amount) || (rule.amount as number) < 1 || (rule.amount as number) > 1000) return `${label}: enter how many.`;
   if (!(DATE_UNITS as readonly unknown[]).includes(rule.unit)) return `${label}: choose days, weeks, months or years.`;
   // Tunarr stores the relative expression and resolves it again on every read.
@@ -113,16 +117,16 @@ function nodeToRule(node: unknown): Rule | null {
   const meta = RULE_FIELDS[field];
   if (meta.kind === 'string') {
     if (!Array.isArray(spec.value)) return null;
-    const op = { '=': 'is', in: 'is', '!=': 'is not', 'not in': 'is not', contains: 'contains', 'not contains': 'not contains' }[String(spec.op)];
+    const op = has(STRING_OP_NAMES, spec.op) ? STRING_OP_NAMES[spec.op] : undefined;
     return op ? { field, op, values: spec.value.map(String) } : null;
   }
   if (meta.kind === 'numeric') {
     const scale = meta.scale ?? 1;
     if (spec.op === 'to' && Array.isArray(spec.value) && spec.value.length === 2) return { field, op: 'between', value: Number(spec.value[0]) / scale, value2: Number(spec.value[1]) / scale };
-    return typeof spec.op === 'string' && spec.op in NUMERIC_OPS && finite(spec.value) ? { field, op: spec.op, value: spec.value / scale } : null;
+    return has(NUMERIC_OPS, spec.op) && finite(spec.value) ? { field, op: spec.op, value: spec.value / scale } : null;
   }
   const relative = spec.relativeDate;
-  if (isObject(relative) && typeof relative.op === 'string' && relative.op in DATE_OPS) return { field, op: relative.op, amount: Number(relative.amount), unit: String(relative.unit) };
+  if (isObject(relative) && has(DATE_OPS, relative.op)) return { field, op: relative.op, amount: Number(relative.amount), unit: String(relative.unit) };
   return null;
 }
 
@@ -147,7 +151,7 @@ export function filterToRules(filter: unknown): RuleSet | null {
 /** One-line description, e.g. "Genre is Comedy and Year ≥ 1990". */
 export function describeRules(set: RuleSet) {
   const parts = set.rules.map((rule) => {
-    const field = RULE_FIELDS[rule.field];
+    const field = fieldOf(rule.field);
     if (!field) return rule.field;
     if (field.kind === 'string') return `${field.label} ${STRING_OPS[rule.op] ?? rule.op} ${(rule.values ?? []).join(' or ')}`;
     if (field.kind === 'numeric') return rule.op === 'between' ? `${field.label} ${rule.value}–${rule.value2}` : `${field.label} ${NUMERIC_OPS[rule.op] ?? rule.op} ${rule.value}`;

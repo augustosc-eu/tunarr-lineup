@@ -50,3 +50,12 @@ next-env.d.ts
 
 # Local Tunarr runtime state (databases, logs, guide data and search indexes)
 /tunarr-data/
+
+# Your own compose file (copied from docker-compose.example.yml)
+/docker-compose.yml
+
+# Local AI-assistant and indexing tooling (machine-specific hooks and paths)
+/.claude/
+/.codex/
+/.vexp/
+/.github/copilot-instructions.md

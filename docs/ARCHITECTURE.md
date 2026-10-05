@@ -79,7 +79,8 @@ server implements those paths.
 | `server/upstream.ts` | Shared upstream plumbing: `fetchUpstream`, `callTunarr` (GET/POST/PUT/DELETE), `UpstreamError`, `json`, `fail`. |
 | `server/lineupVersion.ts` | `programmingVersion(lineup, schedule)`: a non-cryptographic fingerprint (two cyrb53 hashes plus length), shared by the browser and the proxy for `If-Match`. |
 | `server/auth.ts` | Optional HTTP Basic sign-in: `createAuthConfig`, `isAuthorized`, `AUTH_CHALLENGE`. |
-| `server/app.ts` | `createLineupServer({ config, auth, staticRoot })`: request routing, static files, SPA fallback, security headers. |
+| `server/app.ts` | `createLineupServer({ config, auth, staticRoot, hosts })`: request routing, static files, SPA fallback, security headers. |
+| `server/hosts.ts` | Host-name check against DNS rebinding: `createHostPolicy` (`LINEUP_ALLOWED_HOSTS`), `isAllowedHost`, `hostRefusal`. |
 | `server/main.ts` | Process entry: reads env, creates the server, listens, logs, handles SIGTERM/SIGINT. |
 | `server/tsconfig.json` | Compiles `server/*.ts` (excluding tests) to `dist-server/` (NodeNext ESM). |
 | `vite.config.ts` | Hosted build/dev: `vinext()`, `sites()` (OpenAI Sites), `cloudflare()` plugins. |
@@ -97,7 +98,7 @@ server implements those paths.
 From `package.json` (Node `>=22.13.0`, `"type": "module"`):
 
 - **React 19** is the only UI library. There is no state library and no router.
-- **Next 16 / Vinext 1.0.0-beta.3** are used only for the hosted target. The companion bundle uses no Next APIs.
+- **Next 16 / Vinext 1** are used only for the hosted target. The companion bundle uses no Next APIs.
 - **Vite 8** runs both builds. **`@vitejs/plugin-react`** is used by the companion build and the tests.
 - **`@cloudflare/vite-plugin`, `wrangler` and `@cloudflare/workers-types`** support the hosted build's Workers-style runtime.
 - **`@openai/sites-vite-plugin`** (`sites()`) copies `.openai/hosting.json` into `dist/.openai/`.
@@ -129,17 +130,20 @@ production on OpenAI Sites was not verified.
 **Companion server** (`createLineupServer` in `server/app.ts`) evaluates each request in this order:
 
 1. **`/healthz`** → `200 {"status":"ok"}`. Liveness only; it doesn't check Tunarr. Always unauthenticated, for the Docker `HEALTHCHECK`.
-2. **`isAuthorized(req.headers.authorization, auth)`** fails → `401` with `WWW-Authenticate: Basic`. This applies only when `LINEUP_PASSWORD` is set.
-3. **`isTunarrApiPath`** → `handleNodeApiRequest`.
-4. **Methods other than GET/HEAD** → `405`.
-5. **An existing file** under `staticRoot` → served. `resolveStatic` rejects path traversal. `/assets/*` is cached `immutable`; everything else is `no-cache`.
-6. **A missing path with a file extension** → `404`. **Anything else** → `index.html` (SPA fallback).
+2. **Without sign-in, `isAllowedHost(req.headers.host, hosts)`** fails → `403` (plain text naming `LINEUP_ALLOWED_HOSTS`). IP addresses, `localhost` and `*.localhost` always pass. See §10.
+3. **`isAuthorized(req.headers.authorization, auth)`** fails → `401` with `WWW-Authenticate: Basic`. This applies only when `LINEUP_PASSWORD` is set.
+4. **`isTunarrApiPath`** → `handleNodeApiRequest`.
+5. **Methods other than GET/HEAD** → `405`.
+6. **An existing file** under `staticRoot` → served. `resolveStatic` rejects path traversal. `/assets/*` is cached `immutable`; everything else is `no-cache`.
+7. **A missing path with a file extension** → `404`. **Anything else** → `index.html` (SPA fallback).
 
 Static responses carry `securityHeaders`, including CSP `default-src 'self'`,
 `connect-src 'self'`, `img-src 'self' data:` and `frame-ancestors 'none'`.
 
-The Vite dev middleware in `vite.local.config.ts` applies the same sign-in
-check to every request, including `/healthz`, before handling `/api/tunarr`.
+The Vite dev middleware in `vite.local.config.ts` applies the same host and
+sign-in checks to every request, including `/healthz`, before handling
+`/api/tunarr` (plugin middleware runs before Vite's own `allowedHosts` check,
+which is set to the same rule for the page itself).
 
 ## 6. The Tunarr proxy (`server/tunarrProxy.ts`)
 
@@ -493,7 +497,16 @@ listening on a non-loopback host.
 
 Cross-site writes are refused independently of sign-in: by the Origin check,
 and by the JSON content type, which forces a CORS preflight the server never
-approves. Optional basic auth to Tunarr itself comes from `TUNARR_URL`
+approves.
+
+**DNS rebinding.** The Origin check alone can't stop a page whose own host name
+was re-pointed at the companion: Origin and Host then both carry the attacker's
+name. Without sign-in, `server/hosts.ts` therefore answers only to IP
+addresses, `localhost` and the names in `LINEUP_ALLOWED_HOSTS` (`.domain`
+matches subdomains, `*` turns the check off). With sign-in the check is
+skipped: the browser has no credentials for the rebound name, so it gets `401`.
+`x-forwarded-host` is never used for this check, since a same-origin page can
+set it. Optional basic auth to Tunarr itself comes from `TUNARR_URL`
 userinfo.
 
 ## 11. Environment configuration
@@ -506,6 +519,7 @@ userinfo.
 | `LINEUP_DATA_DIR` | `createProxyConfig` → `createTemplateStore` | Saved templates folder (default `./data`, `/data` in Docker) |
 | `LINEUP_AI_PROVIDER`, `LINEUP_AI_API_KEY` (or `ANTHROPIC_API_KEY`/`OPENAI_API_KEY`), `LINEUP_AI_MODEL`, `LINEUP_AI_BASE_URL`, `LINEUP_AI_TIMEOUT_MS` | `createAiConfig` | AI assistant provider (off when unset) |
 | `LINEUP_PASSWORD`, `LINEUP_USERNAME` | `createAuthConfig` | Optional sign-in |
+| `LINEUP_ALLOWED_HOSTS` | `createHostPolicy` | Host names answered without sign-in, besides IPs and `localhost` |
 | `PORT` (3000), `HOST` (`0.0.0.0`), `STATIC_DIR` | `server/main.ts` | Listen address and UI directory |
 | `NEXT_PUBLIC_SITE_URL` | `app/layout.tsx` | Hosted `metadataBase` |
 | `CODEX_SANDBOX`, `WRANGLER_*`, `MINIFLARE_REGISTRY_PATH` | `vite.config.ts` | Hosted dev tooling |

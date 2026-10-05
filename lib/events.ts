@@ -23,6 +23,11 @@ export type EventPlacement = {
   removed: LineupItem[];
   /** Flex added after the event to keep later programs on time (replace mode). */
   pad: number;
+  /**
+   * How far a replace-mode event runs past the end of the lineup (ms). The
+   * cycle can't wrap, so the lineup grows by this much and later repeats move.
+   */
+  overrun: number;
   /** How often the new lineup repeats (ms), so the event repeats too. */
   cycle: number;
 };
@@ -55,6 +60,7 @@ export function placeEvent(lineup: LineupItem[], channelStart: number, at: numbe
   const start = passStart + cursor;
   let removed: LineupItem[] = [];
   let pad = 0;
+  let overrun = 0;
   let next: LineupItem[];
   if (mode === 'replace') {
     let end = index;
@@ -65,11 +71,12 @@ export function placeEvent(lineup: LineupItem[], channelStart: number, at: numbe
     }
     removed = lineup.slice(index, end);
     pad = Math.max(0, taken - length);
+    overrun = Math.max(0, length - taken);
     next = [...lineup.slice(0, index), ...event, ...(pad > 0 ? [makeFlex(pad)] : []), ...lineup.slice(end)];
   } else {
     next = [...lineup.slice(0, index), ...event, ...lineup.slice(index)];
   }
-  return { lineup: next, index, count: event.length, start, end: start + length, drift: start - at, removed, pad, cycle: total(next) };
+  return { lineup: next, index, count: event.length, start, end: start + length, drift: start - at, removed, pad, overrun, cycle: total(next) };
 }
 
 /** "every 30 days", "every 6 hours" — how often a lineup of this length repeats. */

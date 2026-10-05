@@ -147,7 +147,7 @@ export function validateTranscodeChanges(body: unknown): { changes: Json } | { e
   if (!isObject(body)) return { error: 'Send profile changes as a JSON object.' };
   const changes: Json = {};
   for (const [key, value] of Object.entries(body)) {
-    const check = TRANSCODE_FIELDS[key];
+    const check = Object.hasOwn(TRANSCODE_FIELDS, key) ? TRANSCODE_FIELDS[key] : undefined;
     if (!check) return { error: `"${key.slice(0, 40)}" can't be changed here.` };
     if (!check(value)) return { error: `"${key}" has an invalid value.` };
     changes[key] = key === 'name' ? (value as string).trim() : value;

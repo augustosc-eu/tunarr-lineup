@@ -296,17 +296,19 @@ async function handleContent(request: ProxyRequest, config: ProxyConfig, url: UR
     }
   }
   const target = config.target;
-  if (!target) {
+  // Saved templates and the AI status are Lineup's own; everything else reads Tunarr.
+  const needsTunarr = kind !== 'lineup' || route.name === 'ai-template';
+  if (!target && needsTunarr) {
     const error = notConfigured(config);
     return fail(503, error.code, error.message);
   }
   try {
-    const context = { config, target, method, body, withChannelLock };
-    if (kind === 'lineup') return await handleLineupRoute(route as LineupRoute, context);
+    if (kind === 'lineup') return await handleLineupRoute(route as LineupRoute, { config, target, method, body });
+    const context = { config, target: target!, method, body, withChannelLock };
     return kind === 'admin' ? await handleAdminRoute(route as AdminRoute, context) : await handleContentRoute(route as ContentRoute, context);
   } catch (error) {
     if (!(error instanceof UpstreamError)) throw error;
-    return fail(error.status, error.code, error.message, { tunarrHost: target.host });
+    return fail(error.status, error.code, error.message, target ? { tunarrHost: target.host } : {});
   }
 }
 

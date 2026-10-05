@@ -11,3 +11,15 @@ coverage
 *.log
 
 data
+
+# Never send local state or tooling to the build context. tunarr-data holds
+# Tunarr's database (media-server tokens) when following docker-compose.example.yml.
+tunarr-data
+test-results
+playwright-report
+.vexp
+.claude
+.codex
+.vscode
+*.tsbuildinfo
+docker-compose.yml
