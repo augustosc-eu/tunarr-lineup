@@ -13,10 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  metadataBase: new URL(
-    process.env.NEXT_PUBLIC_SITE_URL ||
-      'https://tunarr-lineup.acroix.chatgpt.site',
-  ),
+  // Set NEXT_PUBLIC_SITE_URL to the deployed address so social previews get absolute URLs.
+  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000'),
   title: 'Tunarr Lineup',
   description: 'Your Tunarr schedule, the classic Mac way.',
   openGraph: {

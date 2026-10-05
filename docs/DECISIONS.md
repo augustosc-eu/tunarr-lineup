@@ -130,6 +130,7 @@ on the `broadcast-programming` branch.
   - It is packaged for OpenAI Sites, with no D1 or R2 bindings.
   - It uses a polling watcher under Codex's seatbelt sandbox (explicit comment in `vite.config.ts`).
 - **Not recorded:** why this stack was chosen. The deployment pipeline is outside the repo.
+- **Superseded in part (2026-10-05, owner request "remove openai sites"):** the `sites()` plugin, `@openai/sites-vite-plugin`, `.openai/hosting.json`, its placeholder D1/R2 bindings, the Codex sandbox polling and the `*.chatgpt.site` `metadataBase` default were removed. The Vinext build for a Cloudflare Workers runtime stays as a demo-only target that anyone can deploy.
 
 ## D17. Tailwind present but effectively unused
 

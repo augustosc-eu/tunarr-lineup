@@ -46,7 +46,7 @@ companion app can edit every channel's programming (see Constraints).
 | **Live mode** | Reading and writing a real Tunarr through the companion. |
 | **Demo mode** | Built-in sample channels (`lib/demoData.ts`). Never touches Tunarr. |
 | **Companion** | The local Node app (UI + proxy) that runs beside Tunarr. |
-| **Hosted preview** | The Vinext/OpenAI Sites deployment. Demo-only. |
+| **Hosted preview** | The Vinext build for a Cloudflare Workers runtime. Demo-only. |
 
 ## Core user journeys
 

@@ -82,7 +82,7 @@ The same React interface (`app/page.tsx`) ships in two ways:
 | Target | What it is | Talks to Tunarr? |
 | --- | --- | --- |
 | **Local companion** (`server/`, `vite.local.config.ts`, `Dockerfile`) | A small Node server that serves the interface **and** a narrow same-origin proxy at `/api/tunarr/*`. Run it next to Tunarr. | Yes. This is the supported way to edit real channels. |
-| **Hosted preview** (Vinext on OpenAI Sites, `vite.config.ts`) | The original hosted site. | No. It runs as a demo/preview only. |
+| **Hosted preview** (Vinext on a Cloudflare Workers runtime, `vite.config.ts`) | A static demo you can deploy anywhere Workers run. | No. It runs as a demo/preview only. |
 
 Why two targets: a page served over HTTPS from the internet cannot call a
 private Tunarr address such as `http://localhost:8000`,

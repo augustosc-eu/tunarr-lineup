@@ -18,7 +18,7 @@ repository, it says so.
                                                                                                              /api/channels/:id/lineup
                                                                                                              /api/channels/:id/schedule
                                                                                                              /api/channels/:id/schedule-slots | schedule-time-slots
-                          ┌──────────────── Hosted preview (OpenAI Sites, demo-only) ─────────────────┐     /api/programs/:id/artwork/:type
+                          ┌───────────── Hosted preview (Cloudflare Workers, demo-only) ──────────────┐     /api/programs/:id/artwork/:type
  Browser ───────────────▶ │ Vinext app router: app/layout.tsx + app/page.tsx                           │
                           │ No /api/tunarr routes, so /api/tunarr/health → 404 HTML → "unavailable"     │
                           └────────────────────────────────────────────────────────────────────────────┘
@@ -83,13 +83,12 @@ server implements those paths.
 | `server/hosts.ts` | Host-name check against DNS rebinding: `createHostPolicy` (`LINEUP_ALLOWED_HOSTS`), `isAllowedHost`, `hostRefusal`. |
 | `server/main.ts` | Process entry: reads env, creates the server, listens, logs, handles SIGTERM/SIGINT. |
 | `server/tsconfig.json` | Compiles `server/*.ts` (excluding tests) to `dist-server/` (NodeNext ESM). |
-| `vite.config.ts` | Hosted build/dev: `vinext()`, `sites()` (OpenAI Sites), `cloudflare()` plugins. |
+| `vite.config.ts` | Hosted build/dev: `vinext()` and `cloudflare()` plugins. |
 | `vite.local.config.ts` | Companion build/dev: React plugin, Tailwind PostCSS, and dev middleware for sign-in and `/api/tunarr`. |
 | `vitest.config.ts` | Unit/UI tests (`tests/**/*.test.{ts,tsx}`, default env `node`). |
 | `playwright.config.ts`, `e2e/` | End-to-end suite: `e2e/desk.spec.ts` against the built companion and `e2e/fake-tunarr.mjs`. |
 | `.github/workflows/ci.yml` | CI: lint, typecheck, unit tests, both builds, e2e, Docker build plus healthcheck. |
 | `Dockerfile`, `.dockerignore`, `docker-compose.example.yml` | Companion container and an example stack alongside Tunarr. |
-| `.openai/hosting.json` | OpenAI Sites project metadata (`project_id`; `d1` and `r2` both `null`). |
 | `public/` | `favicon.svg`, `og.png`. Served by both targets. |
 | Generated (do not edit) | `dist/`, `dist-local/`, `dist-server/`, `.next/types/`, `.vinext/`, `.wrangler/`, `next-env.d.ts`, `test-results/`, `playwright-report/`. |
 
@@ -101,7 +100,6 @@ From `package.json` (Node `>=22.13.0`, `"type": "module"`):
 - **Next 16 / Vinext 1** are used only for the hosted target. The companion bundle uses no Next APIs.
 - **Vite 8** runs both builds. **`@vitejs/plugin-react`** is used by the companion build and the tests.
 - **`@cloudflare/vite-plugin`, `wrangler` and `@cloudflare/workers-types`** support the hosted build's Workers-style runtime.
-- **`@openai/sites-vite-plugin`** (`sites()`) copies `.openai/hosting.json` into `dist/.openai/`.
 - **Tailwind CSS 4** is imported, but only the `antialiased` utility is used.
 - **Testing:** `vitest` 4, `jsdom`, `@testing-library/react` / `dom`, and `@playwright/test` for end-to-end tests.
 - **Lint:** `eslint` 9 with `eslint-config-next`, which includes the React Compiler hook rules.
@@ -125,7 +123,7 @@ confirm, move, shortcuts and about dialogs are conditional overlays.
 
 **Hosted (Vinext):** only the `/` route exists, with no route handlers.
 `/api/tunarr/health` returns a 404 HTML page. This was verified with `vinext dev`;
-production on OpenAI Sites was not verified.
+a deployed Worker was not verified.
 
 **Companion server** (`createLineupServer` in `server/app.ts`) evaluates each request in this order:
 
@@ -476,7 +474,7 @@ position) and downloads it via a `Blob` object URL. The filename gets an
 - **Tunarr HTTP API** is the main integration. The proxy uses the channel endpoints, `/api/programs/:id/artwork/:type`, and the content and setup endpoints listed in section 6.
 - **Public image hosts** (for channel logos that link outside Tunarr, such as YouTube or TMDB images) are fetched by the companion only, through `fetchPublicImage`.
 - **An AI provider** (Anthropic, or an OpenAI-compatible API such as OpenAI or Ollama), only when configured, called by `server/ai.ts`. On a real server, the artwork route returned `image/jpeg` for program UUIDs; the raw `artwork[].path` values in programming pointed at Plex on `127.0.0.1:32400`. There is no version negotiation.
-- **OpenAI Sites** hosts the preview. Only the build plugin and metadata are in the repo; the deploy pipeline is not.
+- **Hosting the preview** is up to whoever deploys it (for example `wrangler deploy` on the `dist/` build). No deploy pipeline is in the repo.
 - **Google Fonts** (Geist via `next/font/google`) are used by the hosted build only.
 
 ## 9. Persistence
@@ -521,8 +519,8 @@ userinfo.
 | `LINEUP_PASSWORD`, `LINEUP_USERNAME` | `createAuthConfig` | Optional sign-in |
 | `LINEUP_ALLOWED_HOSTS` | `createHostPolicy` | Host names answered without sign-in, besides IPs and `localhost` |
 | `PORT` (3000), `HOST` (`0.0.0.0`), `STATIC_DIR` | `server/main.ts` | Listen address and UI directory |
-| `NEXT_PUBLIC_SITE_URL` | `app/layout.tsx` | Hosted `metadataBase` |
-| `CODEX_SANDBOX`, `WRANGLER_*`, `MINIFLARE_REGISTRY_PATH` | `vite.config.ts` | Hosted dev tooling |
+| `NEXT_PUBLIC_SITE_URL` | `app/layout.tsx` | Hosted `metadataBase` (default `http://localhost:3000`) |
+| `WRANGLER_*`, `MINIFLARE_REGISTRY_PATH` | `vite.config.ts` | Hosted dev tooling |
 | `PLAYWRIGHT_CHANNEL`, `CI` | `playwright.config.ts` | Browser choice and retries/reporting for e2e |
 
 Only `LINEUP_PUBLIC_`-prefixed variables can reach the companion client
@@ -537,7 +535,7 @@ bundle (`envPrefix`); none are used.
 
   No `TUNARR_URL` or password is baked in.
 - **`docker-compose.example.yml`:** Tunarr plus Lineup on a shared network, with `TUNARR_URL=http://tunarr:8000`. Commented options cover `LINEUP_PASSWORD` and timeouts, the amd64-only Tunarr image, and binding to `127.0.0.1`.
-- **Hosted:** `vinext build` with the `cloudflare()` and `sites()` plugins → `dist/`.
+- **Hosted:** `vinext build` with the `cloudflare()` plugin → `dist/`.
 - **CI** (`.github/workflows/ci.yml`):
   - **`checks` job:** `npm ci`, lint, typecheck, `npm test`, both builds, `playwright install chromium`, `test:e2e`, and the report as an artifact on failure.
   - **`docker` job:** image build, then curls `/healthz` until the container answers.
