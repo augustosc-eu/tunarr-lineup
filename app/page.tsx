@@ -238,6 +238,8 @@ export default function Home() {
   const [now, setNow] = useState(() => Date.now());
   const [connectionOpen, setConnectionOpen] = useState(false);
   const [arrangeOpen, setArrangeOpen] = useState(false);
+  // On narrow screens Program Info is a sheet over the lineup; this expands it.
+  const [infoExpanded, setInfoExpanded] = useState(false);
   const [infoDialog, setInfoDialog] = useState<'shortcuts' | 'about' | null>(null);
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialog | null>(null);
   const [loading, setLoading] = useState(false);
@@ -1085,6 +1087,11 @@ export default function Home() {
     select(row.lineupIndex, row.start, extend);
   };
 
+  // On phones the channel rail is a horizontal strip; keep the active channel in view.
+  useEffect(() => {
+    document.querySelector('.channel-rail .channel.active')?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+  }, [activeChannelId]);
+
   // Keyboard and TV-remote control. Arrow keys map to a remote's D-pad,
   // Enter to OK, Escape/Back to Back, PageUp/PageDown to CH+/CH−.
   useEffect(() => {
@@ -1299,7 +1306,7 @@ export default function Home() {
   return (
     <main className={`app-shell ${grab ? 'grabbing' : ''}`}>
       <header className="topbar">
-        <div className="brand"><span className="brand-mark"></span><span>Tunarr Lineup</span><MenuBar menus={menus} /></div>
+        <div className="brand"><span className="brand-mark"></span><span className="brand-name">Tunarr Lineup</span><MenuBar menus={menus} /></div>
         <div className="top-actions">
           {canUndo && <button className="quiet" onClick={undo}>Undo</button>}
           <button className={`connection ${connectionClass}`} onClick={() => setConnectionOpen(true)} aria-label={connectionLabel(mode, connection)}><span className="status-dot" /><span className="connection-label">{connectionLabel(mode, connection)}</span></button>
@@ -1406,7 +1413,8 @@ export default function Home() {
           </div>
         </section>
 
-        <aside className="inspector">
+        <aside className={`inspector ${infoExpanded ? 'expanded' : ''}`}>
+          <button className="sheet-toggle" aria-expanded={infoExpanded} aria-label={infoExpanded ? 'Hide details' : 'Show details'} onClick={() => setInfoExpanded((open) => !open)}>{slotPreview ? 'Schedule Preview' : 'Program Info'}<span aria-hidden="true">{infoExpanded ? '▾' : '▴'}</span></button>
           <p className="eyebrow">{slotPreview ? 'SCHEDULE PREVIEW' : blockSize > 1 ? 'SELECTED BLOCK' : 'SELECTED PROGRAM'}</p>
           {slotPreview ? <>
             <span className="type-chip">{slotEditor.draft.type === 'time' ? 'time slots' : 'random slots'}</span>
@@ -1415,9 +1423,11 @@ export default function Home() {
             <div className="info-row"><span>Lineup items</span><b>{slotPreview.lineup.length.toLocaleString('en')}</b></div>
             <div className="info-row"><span>Cycle</span><b>{durationTimecode(cycleDuration(slotPreview.lineup))}</b></div>
             <div className="info-row"><span>Slots</span><b>{slotEditor.draft.slots.length}</b></div>
-            <button className="wide primary" disabled={slotEditor.busy || saving} onClick={saveSlots}>Save schedule</button>
-            <button className="wide" onClick={() => setSlotEditor((current) => ({ ...current, open: true, showingPreview: false }))}>Edit slots</button>
-            <button className="wide" onClick={discardSlotPreview}>Discard preview</button>
+            <div className="primary-actions">
+              <button className="wide primary" disabled={slotEditor.busy || saving} onClick={saveSlots}>Save schedule</button>
+              <button className="wide" onClick={() => setSlotEditor((current) => ({ ...current, open: true, showingPreview: false }))}>Edit slots</button>
+              <button className="wide" onClick={discardSlotPreview}>Discard preview</button>
+            </div>
             <p className="hint">Back closes the preview. The edited slots are kept until you leave this channel.</p>
           </> : selectedItem ? <>
             <ArtTile className="poster" tone={artTone(selectedIndex)} title={selectedTitle} src={selectedArt} />
@@ -1428,12 +1438,14 @@ export default function Home() {
             <div className="info-row"><span>Ends</span><b>{lastRowOfBlock ? clockTimecode(lastRowOfBlock.stop) : '—'}</b></div>
             <div className="info-row"><span>Position</span><b>#{block.start + 1}{blockSize > 1 ? `–${block.end + 1}` : ''} of {lineup.length}</b></div>
             {selectedInstance && cursorPosition === onAir && <div className="info-row on-air-row"><span>On air</span><b>{durationTimecode(selectedInstance.stop - now)} left</b></div>}
-            <div className="nudge-row"><button disabled={block.start === 0 || !!grab} onClick={() => nudge(-1)}>↑ Earlier</button><button disabled={block.end >= lineup.length - 1 || !!grab} onClick={() => nudge(1)}>↓ Later</button></div>
-            <button className="wide primary" disabled={!!grab} onClick={() => setArrangeOpen(true)}>Move or swap…</button>
-            <div className="nudge-row"><button disabled={!!grab || !!slotPreview} onClick={() => setInsertOpen(true)}>Insert…</button><button disabled={!!grab} onClick={removeSelection}>Remove</button></div>
+            <div className="nudge-row order-row"><button disabled={block.start === 0 || !!grab} onClick={() => nudge(-1)}>↑ Earlier</button><button disabled={block.end >= lineup.length - 1 || !!grab} onClick={() => nudge(1)}>↓ Later</button></div>
+            <div className="primary-actions">
+              <button className="wide primary" disabled={!!grab} onClick={() => setArrangeOpen(true)}>Move or swap…</button>
+              <div className="nudge-row action-row"><button disabled={!!grab || !!slotPreview} onClick={() => setInsertOpen(true)}>Insert…</button><button disabled={!!grab} onClick={removeSelection}>Remove</button></div>
+            </div>
             {blockSize === 1 && hasAdjustableLength(selectedItem) && <LengthEditor key={`${selectedIndex}-${selectedItem.duration}`} duration={selectedItem.duration} disabled={!!grab} onApply={changeLength} />}
-            <button className="wide" onClick={() => (grab ? drop() : pickUp())}>{grab ? 'Drop here' : 'Pick up to slide'}</button>
-            <p className="hint">{grab ? 'Use ↑ ↓ to slide, OK to drop, Back to cancel.' : 'Tip: drag a row, Shift-click to select a block, or press OK on a row to pick it up.'}</p>
+            <button className="wide pickup" onClick={() => (grab ? drop() : pickUp())}>{grab ? 'Drop here' : 'Pick up to slide'}</button>
+            <p className="hint">{grab ? 'Use ↑ ↓ to slide, OK to drop, Back to cancel.' : <><span className="pointer-only">Tip: drag a row, Shift-click to select a block, or press OK on a row to pick it up.</span><span className="touch-only">Tip: Earlier and Later move it one place; Move or swap… sends it anywhere.</span></>}</p>
             {hasGeneratedSchedule(programming) && <div className="warning"><b>Generated schedule</b><span>Tunarr builds this lineup from {scheduleSummary(programming.schedule)} and may regenerate over manual changes. Edit the slots to change it at the source.</span>{live && <button className="wide" disabled={!!grab} onClick={openSlotEditor}>Edit slot schedule…</button>}</div>}
             {(history.past.length > 0 || history.future.length > 0 || dirty) && <div className="edit-list">
               <p className="eyebrow">EDIT LIST{history.past.length ? ` (${history.past.length})` : ''}</p>

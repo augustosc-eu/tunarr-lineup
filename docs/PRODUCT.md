@@ -239,7 +239,7 @@ The menus can also be operated with the arrows, OK and Back.
 - **Host names:** without sign-in, Lineup answers only to IP addresses, `localhost` and the names in `LINEUP_ALLOWED_HOSTS`, so other websites can't reach it through DNS rebinding.
 - **Tunarr API compatibility:** Lineup depends on Tunarr's channel, programming, lineup, schedule, artwork, search, filler-list, custom-show, smart-collection, transcode-config and media-source endpoints and their payload shapes (see `docs/ARCHITECTURE.md`). The code doesn't detect Tunarr versions.
 - **Generated schedules:** saving manually can detach a channel from its generated schedule. Tunarr may also regenerate over manual edits.
-- **TV readability and remote operation:** text must stay large and anti-aliased, and every action must work without a mouse. The UI scales with viewport width.
+- **TV readability and remote operation:** text must stay large and anti-aliased, and every action must work without a mouse. The UI scales with the viewport (width, capped by height), and phones and tablets get a compact layout with a Menu sheet and a collapsible Program Info sheet.
 - **Conflict check window:** the companion checks and writes under a per-channel lock, so two Lineup sessions can't overwrite each other. Tunarr's API has no conditional save, so an edit made in Tunarr's own UI in the milliseconds between check and write would still be overwritten.
 - **Drafts are per browser:** unsaved work on the TV isn't visible from a laptop, and vice versa.
 

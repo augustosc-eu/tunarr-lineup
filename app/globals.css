@@ -12,12 +12,18 @@
   --selection-light:#5863b8;
   --focus:#3b47a0;
   --yellow:#fff2b2;
+  /* Menu bar height; taller on touch screens. */
+  --bar:2.125rem;
+  /* The visible viewport height (dvh follows mobile browser toolbars). */
+  --vh:100vh;
 }
+@supports (height:100dvh) { :root { --vh:100dvh; } }
 
 * { box-sizing:border-box; }
 /* Everything is sized in rem, so the whole interface scales with the screen:
-   16px on laptops, about 24px on a 1080p TV viewed from the couch. */
-html { font-size:clamp(16px,1.25vw,32px); }
+   16px on laptops and phones, about 24px on a 1080p TV viewed from the couch.
+   The height term keeps short, wide windows (ultrawide monitors) from getting TV-size text. */
+html { font-size:clamp(16px,min(1.25vw,2.2223vh),32px); }
 html { background:var(--desktop); }
 body {
   margin:0;
@@ -47,14 +53,14 @@ button:active:not(:disabled) { background:#aaa; box-shadow:inset 1px 1px #555,in
 button:disabled { color:#5e5e5e; text-shadow:1px 1px #fff; cursor:not-allowed; }
 button:focus-visible,input:focus-visible { outline:0.125rem solid var(--focus); outline-offset:0.125rem; }
 
-.app-shell { min-height:100vh; padding-top:2.125rem; }
+.app-shell { min-height:var(--vh); padding-top:var(--bar); }
 .topbar {
   position:fixed;
   z-index:40;
   top:0;
   left:0;
   right:0;
-  height:2.125rem;
+  height:var(--bar);
   padding:0 0.75rem;
   display:flex;
   align-items:center;
@@ -68,10 +74,10 @@ button:focus-visible,input:focus-visible { outline:0.125rem solid var(--focus); 
 .brand-mark { width:auto; height:auto; display:block; padding:0 1px; background:transparent; color:#111; border:0; border-radius:0; font-family:Georgia,serif; font-size:1.375rem; line-height:1; }
 .menu-items { display:flex; gap:0.25rem; font-weight:400; }
 .menu { position:relative; }
-.menu-title { min-height:0; height:2.125rem; padding:0 0.5rem; background:transparent; border:0; border-radius:0; box-shadow:none; font-weight:400; }
+.menu-title { min-height:0; height:var(--bar); padding:0 0.5rem; background:transparent; border:0; border-radius:0; box-shadow:none; font-weight:400; }
 .menu-title:hover:not(:disabled),.menu-title.open,.menu-title:focus-visible { color:#fff; background:var(--selection); outline:0; }
 .menu-title:active:not(:disabled) { transform:none; background:var(--selection); box-shadow:none; }
-.menu-dropdown { position:absolute; z-index:70; top:2.125rem; left:0; min-width:17rem; padding:0.25rem 0; display:grid; background:#fff; border:1px solid #111; box-shadow:0.1875rem 0.1875rem 0 rgba(0,0,0,.35); }
+.menu-dropdown { position:absolute; z-index:70; top:var(--bar); left:0; min-width:17rem; padding:0.25rem 0; display:grid; background:#fff; border:1px solid #111; box-shadow:0.1875rem 0.1875rem 0 rgba(0,0,0,.35); }
 .menu-dropdown button { min-height:1.875rem; padding:0.25rem 1rem; display:flex; justify-content:space-between; gap:2rem; text-align:left; white-space:nowrap; background:transparent; border:0; border-radius:0; box-shadow:none; font-weight:400; }
 .menu-dropdown button:hover:not(:disabled),.menu-dropdown button:focus-visible { color:#fff; background:var(--selection); outline:0; }
 .menu-dropdown button:active:not(:disabled) { transform:none; box-shadow:none; }
@@ -99,7 +105,7 @@ button:focus-visible,input:focus-visible { outline:0.125rem solid var(--focus); 
 
 .workspace {
   position:relative;
-  min-height:calc(100vh - 4.875rem);
+  min-height:calc(var(--vh) - var(--bar) - 2.75rem);
   margin:1.25rem;
   padding-top:1.625rem;
   display:grid;
@@ -134,8 +140,8 @@ button:focus-visible,input:focus-visible { outline:0.125rem solid var(--focus); 
 .channel-rail,.inspector { background:var(--platinum); }
 .channel-rail {
   position:sticky;
-  top:3.75rem;
-  height:calc(100vh - 6.25rem);
+  top:calc(var(--bar) + 1.625rem);
+  height:calc(var(--vh) - var(--bar) - 4.125rem);
   overflow-y:auto;
   overscroll-behavior:contain;
   padding:0.625rem 0.5rem;
@@ -146,8 +152,8 @@ button:focus-visible,input:focus-visible { outline:0.125rem solid var(--focus); 
 }
 .inspector {
   position:sticky;
-  top:3.75rem;
-  height:calc(100vh - 6.25rem);
+  top:calc(var(--bar) + 1.625rem);
+  height:calc(var(--vh) - var(--bar) - 4.125rem);
   overflow:auto;
   overscroll-behavior:contain;
   padding:0.75rem;
@@ -282,8 +288,8 @@ h1 { margin:0; font-size:1.5rem; line-height:1.2; letter-spacing:0; }
 .hint,.fine-print { margin:0.4375rem 0; text-align:center; color:#555; font-size:0.8125rem; line-height:1.4; }
 .warning { margin-top:0.5625rem; padding:0.4375rem; display:grid; gap:0.1875rem; color:#111; background:var(--yellow); border:1px solid #8b7632; font-size:0.8125rem; line-height:1.4; }.warning span { color:#4e441e; }
 
-.overlay { position:fixed; z-index:60; inset:2.125rem 0 0; padding:1.25rem; display:grid; place-items:center; background:rgba(34,53,83,.58); }
-.modal { position:relative; width:min(35rem,100%); max-height:min(47.5rem,90vh); overflow:auto; padding:2.25rem 1rem 1rem; background:var(--platinum); border:1px solid #111; border-radius:0; outline:1px solid #fff; box-shadow:0.3125rem 0.3125rem 0 rgba(0,0,0,.35); }
+.overlay { position:fixed; z-index:60; inset:var(--bar) 0 0; padding:1.25rem; display:grid; place-items:center; background:rgba(34,53,83,.58); }
+.modal { position:relative; width:min(35rem,100%); max-height:min(47.5rem,calc(var(--vh) * 0.9)); overflow:auto; padding:2.25rem 1rem 1rem; background:var(--platinum); border:1px solid #111; border-radius:0; outline:1px solid #fff; box-shadow:0.3125rem 0.3125rem 0 rgba(0,0,0,.35); }
 .modal:before { content:'Dialog'; position:absolute; top:0; left:0; right:0; height:1.5rem; display:grid; place-items:center; background:repeating-linear-gradient(0deg,#aaa 0,#aaa 1px,#eee 1px,#eee 0.1875rem); border-bottom:1px solid #111; box-shadow:inset 0 1px #fff; font-size:0.875rem; font-weight:700; text-shadow:1px 1px #fff; }
 .modal-close { position:absolute; z-index:2; top:0.25rem; left:0.375rem; right:auto; width:1rem; height:1rem; min-height:1rem; padding:0; display:grid; place-items:center; overflow:hidden; color:transparent; background:#eee; border:1px solid #111; border-radius:0; box-shadow:none; }
 .modal-close:after { content:'×'; color:#111; font-size:0.875rem; line-height:1; }
@@ -334,7 +340,7 @@ h1 { margin:0; font-size:1.5rem; line-height:1.2; letter-spacing:0; }
 .unsaved-mark { color:#9a6a00; font-style:normal; font-weight:700; }
 .channel.active .unsaved-mark { color:var(--yellow); }
 .warning .wide { margin-top:0.375rem; }
-.preview-bar { position:sticky; z-index:6; top:2.5rem; margin:0 0 0.625rem; padding:0.5rem 0.625rem; display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:0.5rem; background:var(--yellow); border:1px solid #8b7632; box-shadow:inset 1px 1px #fff; }
+.preview-bar { position:sticky; z-index:6; top:calc(var(--bar) + 0.375rem); margin:0 0 0.625rem; padding:0.5rem 0.625rem; display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:0.5rem; background:var(--yellow); border:1px solid #8b7632; box-shadow:inset 1px 1px #fff; }
 .preview-bar b { margin-right:0.375rem; }
 .preview-actions { display:flex; gap:0.375rem; }
 .program.previewing { cursor:default; }
@@ -510,27 +516,93 @@ input[type=checkbox] { width:1.25rem; height:1.25rem; margin:0; accent-color:var
 .event-preview { margin:0.5rem 0; padding:0.5rem 0.625rem; display:grid; gap:0.25rem; background:#fff; border:1px solid #888; font-size:0.875rem; }
 @keyframes toast-in { from { opacity:0; transform:translate(-50%,0.25rem); } to { opacity:1; transform:translate(-50%,0); } }
 
+/* Responsive layout. Desktop and TV get three columns. Up to 1180px, Program Info
+   becomes a sheet over the lineup: collapsed it shows the program and its everyday
+   actions, and its title bar expands it to the full details. Up to 760px (phones), the
+   menus fold into one Menu sheet and the channels become a strip of chips. */
+.menu.compact,.sheet-toggle,.touch-only { display:none; }
+
 @media (max-width:1180px) {
   .workspace { grid-template-columns:13.75rem 1fr; }
-  .inspector { position:fixed; z-index:25; right:1.4375rem; bottom:1.4375rem; top:auto; width:20rem; height:auto; max-height:66vh; border:1px solid #111; outline:1px solid #fff; box-shadow:0.25rem 0.25rem 0 rgba(0,0,0,.32); }
-  .inspector:before { content:'Program Info'; display:block; margin:-0.75rem -0.75rem 0.625rem; height:1.5rem; padding-top:0.125rem; text-align:center; background:repeating-linear-gradient(0deg,#aaa 0,#aaa 1px,#eee 1px,#eee 0.1875rem); border-bottom:1px solid #111; font-weight:700; }
-  .schedule { padding-bottom:14.375rem; }
+  .inspector { position:fixed; z-index:25; right:1.4375rem; bottom:calc(1.4375rem + env(safe-area-inset-bottom)); top:auto; width:22rem; height:auto; max-height:calc(var(--vh) - var(--bar) - 3rem); padding:0 0.75rem 0.75rem; border:1px solid #111; outline:1px solid #fff; box-shadow:0.25rem 0.25rem 0 rgba(0,0,0,.32); }
+  .inspector>.sheet-toggle { position:sticky; z-index:2; top:0; width:auto; min-height:0; width:calc(100% + 1.5rem); height:1.75rem; margin:0 -0.75rem 0.625rem; padding:0 0.5rem; display:flex; align-items:center; justify-content:center; gap:0.5rem; color:#111; background:repeating-linear-gradient(0deg,#aaa 0,#aaa 1px,#eee 1px,#eee 0.1875rem); border:0; border-bottom:1px solid #111; border-radius:0; box-shadow:inset 0 1px #fff; font-size:0.9375rem; font-weight:700; text-shadow:1px 1px #fff; }
+  .sheet-toggle span { min-width:1.125rem; padding:0 0.125rem; background:#eee; border:1px solid #111; font-size:0.75rem; line-height:1.1; text-shadow:none; }
+  .inspector>.sheet-toggle:hover:not(:disabled) { background:repeating-linear-gradient(0deg,#999 0,#999 1px,#e2e2e2 1px,#e2e2e2 0.1875rem); }
+  .inspector>.sheet-toggle:active:not(:disabled) { transform:none; background:#aaa; box-shadow:inset 1px 1px #555; }
+  .inspector>.sheet-toggle:focus-visible { outline-offset:-0.25rem; }
+  .schedule { padding-bottom:12rem; }
   .poster { display:none; }
+  /* Collapsed: one line for the program, one for its actions. */
+  .inspector:not(.expanded) { display:flex; flex-wrap:wrap; align-items:center; gap:0.375rem; }
+  .inspector:not(.expanded)>.sheet-toggle { flex:1 1 100%; margin-bottom:0.125rem; }
+  .inspector:not(.expanded)>:is(.eyebrow,.inspector-detail,.info-row,.length-editor,.pickup,.hint,.warning,.edit-list) { display:none; }
+  .inspector:not(.expanded) .type-chip { margin:0; }
+  .inspector:not(.expanded) h2 { flex:1 1 0; min-width:0; margin:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:1rem; }
+  .inspector:not(.expanded)>.subtle,.inspector:not(.expanded)>.wide,.inspector:not(.expanded) .primary-actions { flex:1 1 100%; margin:0; }
+  .inspector:not(.expanded) .primary-actions { display:flex; gap:0.3125rem; }
+  .inspector:not(.expanded) .primary-actions .wide,.inspector:not(.expanded) .action-row button { flex:1 1 0; min-width:0; margin:0; padding-inline:0.25rem; }
+  .inspector:not(.expanded) .primary-actions .primary { flex-grow:1.6; white-space:nowrap; }
+  .inspector:not(.expanded) .action-row { display:contents; }
+  .inspector:not(.expanded) .order-row { margin:0; display:flex; gap:0.25rem; }
+  .inspector:not(.expanded) .order-row button { width:2.375rem; padding:0; font-size:0; }
+  .inspector:not(.expanded) .order-row button:first-child:after { content:'↑'; font-size:1rem; }
+  .inspector:not(.expanded) .order-row button:last-child:after { content:'↓'; font-size:1rem; }
+}
+
+/* Between phone and desktop the menu titles fit only without the status text. */
+@media (max-width:960px) {
+  .connection-label,.top-actions .quiet { display:none; }
+  .top-actions .connection { padding:0 0.5rem; }
 }
 
 @media (max-width:760px) {
-  .menu-items { display:none; }
-  .topbar { padding:0 0.3125rem; }.top-actions { gap:0.1875rem; }.quiet { display:none; }.connection-label { display:none; }
-  .slot-row.time,.slot-row.random { grid-template-columns:1fr 1fr; }.library-pickers,.lists-layout { grid-template-columns:1fr; }.slot-head { display:none; }.slot-actions { grid-column:1 / -1; }.connection { padding:0 0.5rem!important; }
+  .menu.full { display:none; }
+  .menu.compact { display:block; }
+  .menu-sheet { position:fixed; top:var(--bar); left:0; right:0; min-width:0; max-height:calc(var(--vh) - var(--bar)); overflow-y:auto; overscroll-behavior:contain; padding:0.25rem 0 calc(0.5rem + env(safe-area-inset-bottom)); border-inline:0; box-shadow:0 0.25rem 0 rgba(0,0,0,.35); }
+  .menu-section .eyebrow { margin:0.5rem 0.5rem 0.125rem; }
+  .menu-sheet button { width:100%; min-height:2.5rem; }
+  .brand { gap:0.5rem; }
+  .topbar { padding:0 0.3125rem; }.top-actions { gap:0.1875rem; }
+  .slot-row.time,.slot-row.random { grid-template-columns:1fr 1fr; }.library-pickers,.lists-layout,.templates-modal .lists-layout { grid-template-columns:1fr; }.slot-head { display:none; }.slot-actions { grid-column:1 / -1; }
   .day-totals { display:none; }.move-targets { grid-template-columns:1fr; }.save { min-width:4.0625rem; }
-  .workspace { margin:0.5625rem; min-height:calc(100vh - 3.4375rem); padding-top:1.5625rem; display:block; }
-  .channel-rail { position:sticky; z-index:10; top:2.125rem; width:100%; height:auto; padding:0.3125rem; display:flex; flex-direction:row; gap:0.1875rem; overflow:auto; border-right:0; border-bottom:1px solid #555; box-shadow:inset 0 -1px #fff; }
-  .rail-heading,.rail-note { display:none; }.channel { min-width:11.25rem; margin:0; }
-  .schedule { padding:0 0.4375rem 15rem; }.schedule-head { margin:0 -0.4375rem; padding:0.5rem; display:block; }.schedule-head .subtle { display:none; }
+  .workspace { margin:0.5625rem; min-height:calc(var(--vh) - var(--bar) - 1.3125rem); padding-top:1.5625rem; display:block; }
+  .channel-rail { position:sticky; z-index:10; top:var(--bar); width:100%; height:auto; padding:0.3125rem; display:flex; flex-direction:row; gap:0.25rem; overflow-x:auto; overflow-y:hidden; scroll-snap-type:x proximity; border-right:0; border-bottom:1px solid #555; box-shadow:inset 0 -1px #fff; }
+  .rail-heading,.rail-note { display:none; }
+  .channel { width:auto; min-width:0; max-width:15rem; min-height:2.875rem; margin:0; padding:0.25rem 0.5rem 0.25rem 0.25rem; scroll-snap-align:start; border-color:#999; background:#eee; }
+  .channel-logo { width:2.75rem; height:1.875rem; font-size:0.8125rem; }
+  .schedule { padding:0 0.4375rem 10rem; }.schedule-head { margin:0 -0.4375rem; padding:0.5rem; display:block; }.schedule-head .subtle:not(.source-note) { display:none; }
   .date-controls { margin-top:0.5rem; justify-content:flex-start; }.schedule-tools { margin:0.4375rem 0; }.search { width:72%; }
   .program { grid-template-columns:4.75rem 2.5rem minmax(0,1fr) 1.125rem; gap:0.375rem; }.program .duration { display:none; }.art { width:2.5rem; height:2.375rem; }
-  .inspector { left:0.9375rem; right:0.9375rem; bottom:0.9375rem; width:auto; max-height:13.125rem; padding:0.625rem; }.inspector:before { margin:-0.625rem -0.625rem 0.5rem; }
-  .inspector>.eyebrow,.inspector .info-row,.inspector .hint,.inspector .warning,.inspector-detail { display:none; }.inspector h2 { margin-right:4.6875rem; font-size:1rem; }.type-chip { margin-bottom:0.1875rem; }
-  .nudge-row { position:absolute; right:0.625rem; top:2.75rem; display:flex; }.nudge-row button { width:2.375rem; min-height:1.875rem; padding:0; font-size:0; }.nudge-row button:first-child:after { content:'↑';font-size:1rem; }.nudge-row button:last-child:after { content:'↓';font-size:1rem; }
-  .inspector .wide { min-height:1.5625rem; margin-top:0.1875rem; }.candidate { grid-template-columns:1.9375rem minmax(0,1fr); }.rule-row,.library-row,.role-row,.block-row,.role-editor-row { grid-template-columns:1fr; }.day-grid-row { grid-template-columns:4.5rem 1fr; }.logo-editor { display:block; }.head-logo { display:none; }.candidate-actions { grid-column:2; }.modal { padding-inline:0.625rem; }
+  .inspector { left:0.5rem; right:0.5rem; bottom:calc(0.5rem + env(safe-area-inset-bottom)); width:auto; padding:0 0.625rem 0.625rem; }
+  .inspector>.sheet-toggle { width:calc(100% + 1.25rem); margin-inline:-0.625rem; }
+  .overlay { padding:0.375rem 0.375rem calc(0.375rem + env(safe-area-inset-bottom)); }
+  .overlay .modal { width:100%; max-height:calc(var(--vh) - var(--bar) - 0.75rem - env(safe-area-inset-bottom)); padding-inline:0.625rem; }
+  .candidate { grid-template-columns:1.9375rem minmax(0,1fr); }.candidate-actions { grid-column:2; flex-wrap:wrap; }
+  .rule-row,.library-row,.role-row,.block-row,.role-editor-row,.filler-row { grid-template-columns:1fr; }.day-grid-row { grid-template-columns:4.5rem 1fr; }.logo-editor { display:block; }.head-logo { display:none; }
+  .settings-grid,.schedule-settings { grid-template-columns:1fr; }
+  .slot-row .slot-section select,.slot-section select,.slot-row .slot-commercials select { min-width:0; }
+  .dialog-actions .spacer { display:none; }
+}
+@media (max-width:360px) { .brand-name { display:none; } }
+/* Landscape phones: the channel list needs the rail's full height. */
+@media (max-height:500px) { .rail-note { display:none; } }
+
+/* Touch screens: larger hit targets and a taller menu bar. Inputs stay at 16px or
+   more so phones don't zoom the page when one is focused. */
+@media (hover:none) and (pointer:coarse) {
+  .pointer-only { display:none; }
+  .touch-only { display:inline; }
+}
+@media (pointer:coarse) {
+  :root { --bar:2.75rem; }
+  button,.top-actions button,.edit-actions button,.candidate-actions button,.slot-actions button,.basket-list li button,.prompt-chips button,.nudge-row button { min-height:2.5rem; }
+  .menu-dropdown button { min-height:2.75rem; }
+  /* Phones have no Escape key, so the close box has to be easy to hit. */
+  .modal { padding-top:2.75rem; }
+  .modal:before { height:2.25rem; }
+  .modal-close { top:0.25rem; width:1.75rem; height:1.75rem; min-height:1.75rem; }
+  .modal-close:after { font-size:1.25rem; }
+  .inspector>.sheet-toggle { height:2.25rem; }
+  input[type=checkbox] { width:1.5rem; height:1.5rem; }
+  input:not([type=checkbox]):not([type=radio]),select,textarea { font-size:max(1rem,16px)!important; }
 }

@@ -6,6 +6,13 @@ change behavior.
 
 ## [Unreleased]
 
+### Phones, tablets and other screen sizes
+
+- On phones, **Menu** opens every menu in one list (before, the menus were hidden), and the channels are a swipeable strip that keeps the current one in view.
+- Below 1180px, Program Info is a sheet over the lineup: collapsed it shows the program with Earlier/Later, Move or swap, Insert and Remove; its title bar expands the details.
+- Touch screens get larger buttons, a taller menu bar and close box, and inputs that don't zoom the page.
+- Text scales with the smaller of width and height, so short wide monitors no longer get TV-size type. 1080p TVs are unchanged.
+
 ### Library browser
 
 - Libraries and folders of up to 1,000 items are listed whole, in episode order taken from the number in each title (so "Capítulo 2" and "Chapter 2" sit together as episode 2), with **Order** for title (natural, 2 before 10) or release date.

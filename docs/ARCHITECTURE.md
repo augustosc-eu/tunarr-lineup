@@ -86,7 +86,7 @@ server implements those paths.
 | `vite.config.ts` | Hosted build/dev: `vinext()` and `cloudflare()` plugins. |
 | `vite.local.config.ts` | Companion build/dev: React plugin, Tailwind PostCSS, and dev middleware for sign-in and `/api/tunarr`. |
 | `vitest.config.ts` | Unit/UI tests (`tests/**/*.test.{ts,tsx}`, default env `node`). |
-| `playwright.config.ts`, `e2e/` | End-to-end suite: `e2e/desk.spec.ts` against the built companion and `e2e/fake-tunarr.mjs`. |
+| `playwright.config.ts`, `e2e/` | End-to-end suite: `e2e/desk.spec.ts` (TV) and `e2e/responsive.spec.ts` (phone, tablet, laptop, ultrawide) against the built companion and `e2e/fake-tunarr.mjs`. |
 | `.github/workflows/ci.yml` | CI: lint, typecheck, unit tests, both builds, e2e, Docker build plus healthcheck. |
 | `.github/workflows/release.yml` | On a published GitHub release: builds the image for amd64 and arm64, pushes it to `ghcr.io/<owner>/<repo>` (version, major.minor, `latest`), and checks its healthcheck. |
 | `Dockerfile`, `.dockerignore`, `docker-compose.example.yml` | Companion container and an example stack alongside Tunarr. |
@@ -556,6 +556,7 @@ bundle (`envPrefix`); none are used.
     - draft encoding and decoding, the IndexedDB store via `fake-indexeddb`, the memory fallback, `rebaseHistory` and version fingerprints
   - `page.test.tsx` (jsdom): `Home` against a stateful `fakeCompanion()`. The fake enforces `If-Match` like the companion. Covers live loading, saves, 412 conflicts, remote slide and cancel, block moves, the Move dialog, menus, the on-air marker, export, drafts kept across channel switches and reloads, undo past a save, stale drafts dropped, the slot editor (catalog sources, adding slots with commercials and mid-roll, creating a time-slot schedule for a manual channel, preview then save with the seed, discard), library inserts, commercial breaks, remove/length/undo, drafts with inserted items, filler-list creation, and channel filler settings, demo guards, and no silent demo fallback.
 - **`e2e/` (Playwright):**
+  - `responsive.spec.ts` checks a 390×844 touch phone (Menu sheet, Program Info sheet edit and save, channel strip) and that 768×1024, 1280×800 and 2560×1080 fit without horizontal overflow.
   - `desk.spec.ts` runs at 1920×1080 against the built companion and `fake-tunarr.mjs`. The fake mimics Tunarr's guide window and provides `/__test/reset`, `/__test/state` and `/__test/edit-elsewhere` hooks.
   - It covers:
     - same-origin requests, artwork and the on-air marker
@@ -576,5 +577,10 @@ bundle (`envPrefix`); none are used.
 - **Remote-first input:** every command has a keyboard path, and the menus duplicate toolbar actions.
 - **Styling:**
   - One global stylesheet with semantic classes. Window titles come from CSS `content:`.
-  - Sizes are in `rem` from `html { font-size: clamp(16px, 1.25vw, 32px) }`; 1px hairlines stay `px`.
-  - Breakpoints are at 1180px (floating inspector) and 760px (stacked layout; the connection button shows only its status dot).
+  - Sizes are in `rem` from `html { font-size: clamp(16px, min(1.25vw, 2.2223vh), 32px) }`; 1px hairlines stay `px`. The height term keeps short, wide windows from getting TV-size text; 1920×1080 is exactly 24px.
+  - Heights use `--vh` (`100dvh` where supported, so mobile browser toolbars are accounted for) and `--bar` (the menu bar height, taller on touch screens).
+  - Breakpoints:
+    - **≤1180px:** two columns. Program Info becomes a floating sheet whose title bar (`.sheet-toggle`, state `infoExpanded`) expands it. Collapsed, it shows the program and the everyday actions (Earlier/Later, Move or swap, Insert, Remove, grouped in `.primary-actions`); expanded, everything.
+    - **≤960px:** the connection button shows only its status dot, and the toolbar Undo is hidden (it stays in the Edit menu and the edit list).
+    - **≤760px (phones):** `MenuBar` swaps its titles for one **Menu** button whose sheet lists every menu (same keys: ↑/↓, Enter, Esc); the channel rail becomes a strip of chips that keeps the active one in view; dialogs fill the screen.
+  - `@media (pointer: coarse)`: larger hit targets, a taller menu bar and close box, and inputs of at least 16px so phones don't zoom on focus. `@media (hover: none)` swaps the drag tip for a touch one.

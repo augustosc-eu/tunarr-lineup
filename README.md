@@ -37,6 +37,7 @@ see [Run with Docker Compose](#run-with-docker-compose-recommended).
   - **Arrows** move between programs. **OK/Enter** picks the selection up; **↑/↓** slide it, OK drops it, and **Back** cancels.
   - **← / →** change the day, and **CH+ / CH−** (or PgUp/PgDn) change the channel.
   - Press `?` for the full list.
+- **Phones and tablets.** The desk adapts to the screen. On narrow screens Program Info is a sheet over the lineup with Earlier/Later, Move or swap, Insert and Remove; tap its title bar for the details. On phones, **Menu** opens every menu in one list and the channels are a strip you can swipe.
 - **Edit list.** Step-by-step undo and redo (⌘Z / ⇧⌘Z, or Ctrl+Z / Ctrl+Y). Changed rows are marked, and **Revert all** discards every edit.
   - Unsaved work and the edit list are kept per channel in the browser (IndexedDB). They survive switching channels, reloading the page and turning the TV off.
   - The edit list carries over a save, so a save can be undone and saved again.
@@ -331,7 +332,8 @@ Tests live in `tests/`:
 - `hardening.test.ts`: host-name checks (DNS rebinding), own-key validation, saved-template size limits, and templates without `TUNARR_URL`.
 - `lineup.test.ts`, `broadcast.test.ts`: reorder, block moves, move-to-time, timecode, day totals, CSV, undo history, artwork URLs, and save payload preservation for every lineup item type.
 - `page.test.tsx`: live loading, date navigation, reorder → save → re-fetch, conflict detection, remote-key slide, block moves, menus, log export, and no silent demo fallback.
-- `e2e/desk.spec.ts`: the real browser flow at 1920×1080 and phone width.
+- `e2e/desk.spec.ts`: the real browser flow at 1920×1080.
+- `e2e/responsive.spec.ts`: phone (Menu sheet, Program Info sheet, channel strip), tablet, laptop and ultrawide layouts.
 
 ## Releases
 

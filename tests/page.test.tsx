@@ -521,6 +521,37 @@ describe('programming desk tools', () => {
     expect(screen.queryByText('Keyboard & remote shortcuts')).toBeNull();
   });
 
+  it('lists every menu in one sheet for phones, operable by keyboard', async () => {
+    fakeCompanion();
+    render(<Home />);
+    await pickAlpha();
+    const button = screen.getByRole('menuitem', { name: 'Menu' });
+    fireEvent.click(button);
+    const sheet = screen.getByRole('menu', { name: 'All menus' });
+    for (const title of ['File', 'Edit', 'View', 'Channel', 'Lists', 'Setup', 'Help']) expect(within(sheet).getByRole('group', { name: title })).toBeTruthy();
+    // Left and right don't wander off to the desktop titles, which phones hide.
+    fireEvent.keyDown(sheet, { key: 'ArrowRight' });
+    expect(screen.getByRole('menu', { name: 'All menus' })).toBeTruthy();
+    fireEvent.keyDown(sheet, { key: 'Escape' });
+    expect(screen.queryByRole('menu', { name: 'All menus' })).toBeNull();
+    expect(document.activeElement).toBe(button);
+    fireEvent.keyDown(button, { key: 'ArrowDown' });
+    fireEvent.click(within(screen.getByRole('menu', { name: 'All menus' })).getByRole('menuitem', { name: /Move Later/ }));
+    expect(screen.getByText('Moved “Alpha Movie” later')).toBeTruthy();
+    expect(screen.queryByRole('menu', { name: 'All menus' })).toBeNull();
+  });
+
+  it('expands and collapses Program Info, which narrow screens show as a sheet', async () => {
+    fakeCompanion();
+    render(<Home />);
+    await pickAlpha();
+    const toggle = screen.getByRole('button', { name: 'Show details' });
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    fireEvent.click(toggle);
+    expect(screen.getByRole('button', { name: 'Hide details' }).getAttribute('aria-expanded')).toBe('true');
+    expect(document.querySelector('.inspector')!.classList.contains('expanded')).toBe(true);
+  });
+
   it('opens each channel with what is on air selected, so Insert goes next to it', async () => {
     fakeCompanion();
     render(<Home />);

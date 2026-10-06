@@ -118,7 +118,7 @@ on the `broadcast-programming` branch.
 
 - **Status:** Explicit (`app/globals.css` comment: "Everything is sized in rem, so the whole interface scales with the screen: 16px on laptops, about 24px on a 1080p TV viewed from the couch.").
 - **Decision:**
-  - The root font size is `clamp(16px, 1.25vw, 32px)` and every size is in `rem`, except 1px hairlines.
+  - The root font size is `clamp(16px, min(1.25vw, 2.2223vh), 32px)` and every size is in `rem`, except 1px hairlines. The height term (added 2026-10-06) keeps short, wide windows such as a 2560×1080 monitor at 24px instead of 32px; a 1080p TV is unchanged at 24px.
   - Font smoothing is on (`antialiased`), and base type is at least 13px before scaling.
 - **Replaces:** the earlier `-webkit-font-smoothing: none` with body text mostly 8–12px (commit `fa10bfd` stylesheet).
 
@@ -375,3 +375,14 @@ on the `broadcast-programming` branch.
   - The new start is computed server-side from Tunarr's current copy. The browser sends only a flag, never a start time.
   - It isn't offered on slot-schedule channels, because a start-time change regenerates the schedule and would discard the edit.
   - It isn't the default: it changes a channel setting, and on a lineup that hasn't repeated it does nothing.
+
+## D44. Phones and tablets get a compact desk, not a separate app
+
+- **Status:** Explicit (owner request, 2026-10-06: "adjust the app for different resolutions and add a mobile view or mode").
+- **Decision:**
+  - The same page adapts by width; there is no separate mobile app or manual switch. Below 1180px Program Info is a collapsible sheet over the lineup. Below 760px the menus fold into one **Menu** sheet and the channels become a scrollable strip.
+  - Collapsed, the sheet keeps the everyday edits (Earlier/Later, Move or swap, Insert, Remove) one tap away; its title bar expands the full details, the length editor, pick-up and the edit list.
+  - Touch screens get larger targets (`pointer: coarse`) and a bigger close box, because phones have no Escape key.
+- **Alternatives considered:** hiding the menu bar on phones, as before, left most commands unreachable. A separate mobile route would duplicate the desk and drift from it.
+- **Consequence:** drag and drop doesn't work with touch; touch users move programs with Earlier/Later and Move or swap.
+
