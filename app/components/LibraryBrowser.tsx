@@ -4,13 +4,19 @@ import { useEffect, useMemo, useState } from 'react';
 import { durationTimecode } from '../../lib/broadcast';
 import {
   childType,
+  defaultLibrarySort,
+  findLibraryItems,
   isPlayable,
   itemLabel,
+  LIBRARY_SORT_LABELS,
+  sortLibraryItems,
+  titleNumber,
   toContentProgram,
   topLevelType,
   TYPE_LABELS,
   type ContentProgram,
   type LibraryItem,
+  type LibrarySort,
   type MediaSource,
 } from '../../lib/library';
 import { tunarrApi } from '../../lib/tunarrClient';
@@ -26,7 +32,12 @@ type Props = {
   onClose: () => void;
 };
 
-const PAGE_SIZE = 40;
+const PAGE_SIZE = 100;
+/**
+ * Listings up to this size are loaded whole, so they can be shown in episode
+ * order and searched by number here. Bigger ones page through Tunarr's search.
+ */
+const LOAD_ALL_MAX = 1000;
 const errorText = (error: unknown) => (error instanceof Error ? error.message : 'Something went wrong.');
 
 export function LibraryBrowser({ title, mode, confirmLabel = 'Add', onPick, onClose }: Props) {
@@ -44,6 +55,9 @@ export function LibraryBrowser({ title, mode, confirmLabel = 'Add', onPick, onCl
   const [error, setError] = useState('');
   const [basket, setBasket] = useState<ContentProgram[]>([]);
   const [adding, setAdding] = useState('');
+  /** The whole listing is loaded: sort and search it here instead of asking Tunarr. */
+  const [complete, setComplete] = useState(false);
+  const [sort, setSort] = useState<LibrarySort | null>(null);
 
   const wantedMediaType = mode === 'show' ? 'shows' : mode === 'movies' ? 'movies' : undefined;
   const source = sources?.find((item) => item.id === sourceId);
@@ -70,29 +84,46 @@ export function LibraryBrowser({ title, mode, confirmLabel = 'Add', onPick, onCl
     return () => { cancelled = true; };
   }, [wantedMediaType]);
 
-  // Load a page of results for the current library, folder and search.
+  // Load the current library or folder: whole when it's small enough, otherwise
+  // a page at a time (and searched by Tunarr). A whole listing is searched here.
+  const serverQuery = complete ? '' : query;
   useEffect(() => {
-    if (!sourceId) return;
+    if (!sourceId || complete) return;
     let cancelled = false;
     const type = folder ? childType(folder.type) : topLevelType(library?.mediaType ?? source?.mediaType);
-    tunarrApi.searchLibrary({ mediaSourceId: sourceId, libraryId: libraryId || undefined, text: folder ? undefined : query || undefined, type, parentId: folder?.uuid, page, limit: PAGE_SIZE })
-      .then((result) => {
-        if (cancelled) return;
-        setResults((current) => (page === 0 ? result.results : [...current, ...result.results]));
-        setTotalPages(result.totalPages);
-        setTotalHits(result.totalHits);
-        setError('');
-      })
+    const search = (at: number) => tunarrApi.searchLibrary({ mediaSourceId: sourceId, libraryId: libraryId || undefined, text: folder ? undefined : serverQuery || undefined, type, parentId: folder?.uuid, page: at, limit: PAGE_SIZE });
+    (async () => {
+      const first = await search(page);
+      let items = first.results;
+      let whole = false;
+      if (page === 0 && !serverQuery && first.totalHits <= LOAD_ALL_MAX) {
+        for (let at = 1; at < first.totalPages && !cancelled; at += 1) items = [...items, ...(await search(at)).results];
+        whole = true;
+      }
+      if (cancelled) return;
+      setResults((current) => (page === 0 ? items : [...current, ...items]));
+      setTotalPages(first.totalPages);
+      setTotalHits(first.totalHits);
+      if (whole) setComplete(true);
+      setError('');
+    })()
       .catch((reason) => { if (!cancelled) setError(errorText(reason)); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [folder, library?.mediaType, libraryId, page, query, source?.mediaType, sourceId]);
+  }, [complete, folder, library?.mediaType, libraryId, page, query, serverQuery, source?.mediaType, sourceId]);
 
   const resetResults = () => {
     setResults([]);
     setPage(0);
     setLoading(true);
+    setComplete(false);
+    setSort(null);
+    // A search belongs to the listing it was made in.
+    setQuery('');
+    setText('');
   };
+  const order = sort ?? defaultLibrarySort(results);
+  const shown = useMemo(() => (complete ? findLibraryItems(sortLibraryItems(results, order), query) : results), [complete, order, query, results]);
   const chooseSource = (id: string) => {
     const next = sources?.find((item) => item.id === id);
     setSourceId(id);
@@ -142,28 +173,41 @@ export function LibraryBrowser({ title, mode, confirmLabel = 'Add', onPick, onCl
               {libraries.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
             </select>
           </label>
-          <form className="library-search" onSubmit={(event) => { event.preventDefault(); setPath([]); setQuery(text.trim()); resetResults(); }}>
-            <label className="search"><span>⌕</span><input aria-label="Search the library" placeholder="Search this library" value={text} onChange={(event) => setText(event.target.value)} /></label>
+          <form className="library-search" onSubmit={(event) => {
+            event.preventDefault();
+            const next = text.trim();
+            if (complete) { setQuery(next); return; }
+            setPath([]);
+            resetResults();
+            setText(next);
+            setQuery(next);
+          }}>
+            <label className="search"><span>⌕</span><input aria-label="Search the library" placeholder={complete ? 'Find by title or number' : 'Search this library'} value={text} onChange={(event) => { setText(event.target.value); if (complete) setQuery(event.target.value.trim()); }} /></label>
             <button type="submit">Search</button>
           </form>
+          {complete && <label className="field"><span>Order</span>
+            <select aria-label="Order" value={order} onChange={(event) => setSort(event.target.value as LibrarySort)}>
+              {(Object.keys(LIBRARY_SORT_LABELS) as LibrarySort[]).map((value) => <option key={value} value={value}>{LIBRARY_SORT_LABELS[value]}</option>)}
+            </select>
+          </label>}
         </div>
 
         <nav className="library-path" aria-label="Location">
           <button className="quiet" onClick={() => goUp(0)} disabled={!path.length}>{library?.name ?? source?.name ?? 'Library'}{query && !path.length ? ` · “${query}”` : ''}</button>
           {path.map((item, index) => <span key={item.uuid}> › <button className="quiet" onClick={() => goUp(index + 1)} disabled={index === path.length - 1}>{itemLabel(item)}</button></span>)}
-          <small>{totalHits.toLocaleString('en')} {totalHits === 1 ? 'item' : 'items'}</small>
+          <small>{complete && query ? `${shown.length.toLocaleString('en')} of ${results.length.toLocaleString('en')}` : `${totalHits.toLocaleString('en')} ${totalHits === 1 ? 'item' : 'items'}`}</small>
         </nav>
 
         <div className="library-list" aria-busy={loading}>
           {error && <div className="warning" role="alert"><b>Library unavailable</b><span>{error}</span></div>}
-          {!loading && !error && !results.length && <p className="subtle candidate-empty">Nothing here.</p>}
-          {results.map((item) => {
+          {!loading && !error && !shown.length && <p className="subtle candidate-empty">{query ? `Nothing matches “${query}”.` : 'Nothing here.'}</p>}
+          {shown.map((item) => {
             const folderType = childType(item.type);
             const playable = isPlayable(item);
             const picked = basketIds.has(item.uuid);
             return (
               <div className="candidate library-item" key={item.uuid}>
-                <span className="mini-art blue">{(item.title || '?').slice(0, 1)}</span>
+                <span className="mini-art blue">{complete && order === 'number' && titleNumber(item) !== null ? titleNumber(item) : (item.title || '?').slice(0, 1)}</span>
                 <span><b>{itemLabel(item)}</b><small>{TYPE_LABELS[item.type] ?? item.type}{item.duration ? ` · ${durationTimecode(item.duration)}` : ''}{item.childCount ? ` · ${item.childCount} ${folderType ?? 'item'}s` : ''}</small></span>
                 <span className="candidate-actions">
                   {mode === 'show' && item.type === 'show' && <button className="primary" aria-label={`Use ${itemLabel(item)}`} onClick={() => onPick({ show: { id: item.uuid, title: item.title, mediaSourceId: sourceId, libraryId: libraryId || undefined } })}>Use this show</button>}
@@ -174,7 +218,7 @@ export function LibraryBrowser({ title, mode, confirmLabel = 'Add', onPick, onCl
               </div>
             );
           })}
-          {page + 1 < totalPages && <button className="wide" disabled={loading} onClick={() => { setLoading(true); setPage((value) => value + 1); }}>{loading ? 'Loading…' : 'Load more'}</button>}
+          {!complete && page + 1 < totalPages && <button className="wide" disabled={loading} onClick={() => { setLoading(true); setPage((value) => value + 1); }}>{loading ? 'Loading…' : 'Load more'}</button>}
         </div>
 
         {mode !== 'show' && basket.length > 0 && <ol className="basket-list" aria-label="Selected programs">

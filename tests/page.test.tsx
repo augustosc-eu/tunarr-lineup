@@ -26,6 +26,11 @@ const AI_PROPOSAL = {
   notes: 'Your library has no live-action kids shows.',
 };
 const LIBRARY_MOVIE = { uuid: 'a1b2c3d4-0000-4000-8000-0000000000d1', type: 'movie', title: 'Zulu Movie', year: 1999, duration: 90 * 60_000 };
+/** A downloaded series whose titles came in two languages (every third one in English). */
+const SERIES = Array.from({ length: 153 }, (_, i) => ({
+  uuid: `e0000000-0000-4000-8000-${String(i + 1).padStart(12, '0')}`, type: 'other_video', duration: 50 * 60_000,
+  title: (i + 1) % 3 === 2 ? `Chapter ${i + 1} - Widows and Children of Rock & Roll` : `Capítulo ${i + 1} - Viudas e Hijos del Rock & Roll`,
+}));
 
 const today = () => {
   const now = new Date();
@@ -58,9 +63,16 @@ function fakeCompanion(options: { schedule?: { type: string; slots: unknown[]; [
     if (url.pathname === '/api/tunarr/health') return reply(options.health ?? { status: 200, body: { status: 'connected', tunarrHost: 'tunarr:8000', channelCount: 2 } });
     if (url.pathname === '/api/tunarr/channels') return reply({ status: 200, body: channels });
     // Library and lists (see server/content.ts for the real routes).
-    if (url.pathname === '/api/tunarr/media-sources') return reply({ status: 200, body: [{ id: 'src-1', name: 'Plex', type: 'plex', libraries: [{ id: 'lib-movies', name: 'Movies', mediaType: 'movies' }] }] });
+    if (url.pathname === '/api/tunarr/media-sources') return reply({ status: 200, body: [{ id: 'src-1', name: 'Plex', type: 'plex', libraries: [{ id: 'lib-movies', name: 'Movies', mediaType: 'movies' }, { id: 'lib-videos', name: 'Viudas', mediaType: 'other_videos' }] }] });
     if (url.pathname === '/api/tunarr/library/search') {
-      const query = JSON.parse(String(init!.body)) as { type?: string };
+      const query = JSON.parse(String(init!.body)) as { type?: string; libraryId?: string; page?: number; limit?: number };
+      if (query.libraryId === 'lib-videos') {
+        // Like Tunarr: plain alphabetical order, a page at a time.
+        const all = SERIES.slice().sort((a, b) => (a.title < b.title ? -1 : 1));
+        const limit = query.limit ?? 40;
+        const at = query.page ?? 0;
+        return reply({ status: 200, body: { results: all.slice(at * limit, (at + 1) * limit), page: at, totalPages: Math.ceil(all.length / limit), totalHits: all.length } });
+      }
       if (query.type === 'season') return reply({ status: 200, body: { results: [1, 2, 3].map((index) => ({ uuid: `season-${index}`, type: 'season', title: `Season ${index}`, index, childCount: 10 })), page: 0, totalPages: 1, totalHits: 3 } });
       return reply({ status: 200, body: { results: [LIBRARY_MOVIE], page: 0, totalPages: 1, totalHits: 1 } });
     }
@@ -848,6 +860,34 @@ describe('full lineup editing', () => {
     fireEvent.click(within(library).getByRole('button', { name: 'Add Zulu Movie (1999)' }));
     fireEvent.click(within(library).getByRole('button', { name: 'Insert 1' }));
     expect(await screen.findByText(/^Inserted “Zulu Movie” at /)).toBeTruthy();
+  });
+
+  it('lists a whole library in episode order and finds an episode by number in any language', async () => {
+    const { requests } = fakeCompanion();
+    render(<Home />);
+    await pickAlpha();
+    fireEvent.click(screen.getAllByRole('button', { name: 'Insert…' })[0]);
+    fireEvent.click(within(await screen.findByRole('dialog', { name: 'Insert into the lineup' })).getByRole('button', { name: 'Browse library…' }));
+    const library = await screen.findByRole('dialog', { name: 'Insert programs' });
+    fireEvent.change(within(library).getByLabelText('Library'), { target: { value: 'lib-videos' } });
+    // Both pages are loaded, then shown 1, 2, 3… whichever language each title is in.
+    await waitFor(() => expect(within(library).getByText('153 items')).toBeTruthy());
+    expect(requests.filter((r) => r.path === '/api/tunarr/library/search' && (r.body as { libraryId?: string }).libraryId === 'lib-videos').map((r) => (r.body as { page: number }).page)).toEqual([0, 1]);
+    expect((within(library).getByLabelText('Order') as unknown as HTMLSelectElement).value).toBe('number');
+    const titles = () => [...library.querySelectorAll('.library-item b')].map((element) => element.textContent);
+    expect(titles().slice(0, 3)).toEqual(['Capítulo 1 - Viudas e Hijos del Rock & Roll', 'Chapter 2 - Widows and Children of Rock & Roll', 'Capítulo 3 - Viudas e Hijos del Rock & Roll']);
+    // "capitulo 2" finds episode 2 although its title is in English, and not Capítulo 20-29.
+    fireEvent.change(within(library).getByLabelText('Search the library'), { target: { value: 'capitulo 2' } });
+    expect(titles()).toEqual(['Chapter 2 - Widows and Children of Rock & Roll']);
+    expect(within(library).getByText('1 of 153')).toBeTruthy();
+    fireEvent.click(within(library).getByRole('button', { name: 'Add Chapter 2 - Widows and Children of Rock & Roll' }));
+    fireEvent.click(within(library).getByRole('button', { name: 'Insert 1' }));
+    expect(await screen.findByText(/^Inserted “Chapter 2 - Widows and Children of Rock & Roll” at /)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Save lineup' }));
+    await waitFor(() => expect(count(requests, 'POST', '/api/tunarr/channels/chan-news/programming')).toBe(1));
+    expect(posted(requests).some((item) => item.id === SERIES[1].uuid)).toBe(true);
+    // Searching never went to Tunarr: the whole list was already here.
+    expect(requests.some((r) => r.path === '/api/tunarr/library/search' && (r.body as { text?: string }).text)).toBe(false);
   });
 
   it('inserts a commercial break that plays from filler lists', async () => {

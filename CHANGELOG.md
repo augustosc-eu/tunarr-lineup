@@ -4,6 +4,14 @@ All notable changes to Tunarr Lineup are listed here. Versions follow
 [Semantic Versioning](https://semver.org); until 1.0, minor versions may
 change behavior.
 
+## [Unreleased]
+
+### Library browser
+
+- Libraries and folders of up to 1,000 items are listed whole, in episode order taken from the number in each title (so "Capítulo 2" and "Chapter 2" sit together as episode 2), with **Order** for title (natural, 2 before 10) or release date.
+- Search filters as you type, ignores accents, and matches numbers to the title's numbers: "capitulo 2" finds "Chapter 2 - …", not "Capítulo 20".
+- The basket lists every pick with a remove button, and the edit list names what was inserted.
+
 ## [0.1.0] - 2026-10-06
 
 First public release.
