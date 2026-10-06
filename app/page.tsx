@@ -51,7 +51,8 @@ import {
   type Programming,
 } from '../lib/lineup';
 import { channelLogoUrl, programArtwork, programDetail, programTitle } from '../lib/programInfo';
-import type { EventPlacement } from '../lib/events';
+import { boundaryAt, insertedStart, passesBefore, type EventPlacement, type InsertWhere } from '../lib/events';
+import { keptStartTime, lineupLength } from '../server/lineupVersion';
 import { lineupEntry, seasonsFromEpisodes, type ContentProgram } from '../lib/library';
 import { changeSlotSource, draftFromSchedule, newSlot, showOption, type SchedulePreview, type ScheduleDraftState, type SeasonInfo, type Slot, type SlotCatalog, type SlotSchedule } from '../lib/schedule';
 import { programmingVersion } from '../server/lineupVersion';
@@ -91,7 +92,7 @@ type SlotEditor = {
   showingPreview: boolean;
 };
 
-type LibraryPicker = { purpose: 'insert'; where: 'before' | 'after' } | { purpose: 'slot-show'; index: number | null } | { purpose: 'movies' };
+type LibraryPicker = { purpose: 'insert'; where: InsertWhere } | { purpose: 'slot-show'; index: number | null } | { purpose: 'movies' };
 
 const closedSlotEditor: SlotEditor = { channelId: '', open: false, busy: false, error: '', isNew: false, loaded: false, draft: draftFromSchedule(null), saved: null, preview: null, previewOf: '', showingPreview: false };
 const draftKey = (draft: ScheduleDraftState) => JSON.stringify([draft.type, draft.settings, draft.slots, draft.extraMovies.map((movie) => movie.id)]);
@@ -101,6 +102,7 @@ const NOW_TICK_MS = 15_000;
 
 const dateLabel = (value: string) => new Intl.DateTimeFormat('en', { weekday: 'long', month: 'long', day: 'numeric' }).format(new Date(`${value}T12:00:00`));
 const inputDate = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+const inputTime = (ms: number) => { const date = new Date(ms); return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`; };
 const fullTimeLabel = (ms: number) => `${new Intl.DateTimeFormat('en', { weekday: 'short' }).format(new Date(ms))} ${clockTimecode(ms)}`;
 const dayPeriod = (ms: number) => {
   const hour = new Date(ms).getHours();
@@ -206,9 +208,10 @@ export default function Home() {
   const [guide, setGuide] = useState<GuideState | null>(null);
   const [guideLoading, setGuideLoading] = useState(false);
   const [guideError, setGuideError] = useState('');
-  const [anchorIndex, setAnchorIndex] = useState(0);
-  const [selectedIndex, setSelectedIndex] = useState(0);
-  const [cursorStart, setCursorStart] = useState<number | null>(null);
+  const [storedAnchor, setAnchorIndex] = useState(-1);
+  const [storedSelected, setSelectedIndex] = useState(-1);
+  const [storedCursorStart, setCursorStart] = useState<number | null>(null);
+  const [keepOnAir, setKeepOnAir] = useState(false);
   const [selectedDate, setSelectedDate] = useState(demoDate);
   const [search, setSearch] = useState('');
   const [history, setHistory] = useState<History>(emptyHistory);
@@ -246,30 +249,54 @@ export default function Home() {
   const activeChannelIndex = channels.findIndex((channel) => channel.id === activeChannelId);
   const dirty = useMemo(() => !sameLineup(lineup, originalLineup), [lineup, originalLineup]);
   const changed = useMemo(() => (dirty ? changedPositions(lineup, originalLineup) : new Set<number>()), [dirty, lineup, originalLineup]);
-  const block = normalizeBlock(Math.min(anchorIndex, Math.max(lineup.length - 1, 0)), Math.min(selectedIndex, Math.max(lineup.length - 1, 0)));
-  const blockSize = lineup.length ? block.end - block.start + 1 : 0;
-  const inBlock = (index: number) => index >= block.start && index <= block.end && index >= 0;
-  const selectedItem = lineup[selectedIndex];
+  // A longer or shorter lineup moves every pass after the first. "Keep what's
+  // on air in place" previews (and on save, sets) the start time that keeps
+  // the pass airing now where it is; it only matters once the lineup has repeated.
+  const baseLength = useMemo(() => lineupLength(base?.lineup), [base]);
+  const draftLength = useMemo(() => lineupLength(lineup), [lineup]);
+  const hasChannel = !!activeChannel;
+  const tunarrStart = activeChannel?.startTime ?? 0;
+  const generated = programming.schedule != null;
+  const loopedBefore = useMemo(() => (base ? passesBefore(base.lineup, tunarrStart, now) : 0), [base, now, tunarrStart]);
+  const canKeepOnAir = live && hasChannel && base?.channelId === activeChannelId && !generated && loopedBefore > 0;
+  const keeping = keepOnAir && canKeepOnAir;
+  /** The start time to project the lineup from, with `added` ms more in it. */
+  const startWith = (added: number) => (keeping ? keptStartTime(tunarrStart, baseLength, draftLength + added, now) : tunarrStart);
+  const channelStart = useMemo(() => (keeping ? keptStartTime(tunarrStart, baseLength, draftLength, now) : tunarrStart), [baseLength, draftLength, keeping, now, tunarrStart]);
   const guideIsCurrent = live && !dirty && guide?.channelId === activeChannelId && guide.date === selectedDate;
   const slotPreview = slotEditor.showingPreview && slotEditor.channelId === activeChannelId ? slotEditor.preview : null;
   const viewPrograms = useMemo(() => (slotPreview ? { ...programming.programs, ...slotPreview.programs } : programming.programs), [programming.programs, slotPreview]);
   const daySchedule = useMemo(() => {
     if (slotPreview) return scheduleForDay(null, slotPreview.lineup, slotPreview.startTime, selectedDate);
-    if (!activeChannel) return { rows: [] as Instance[], guideWindow: null, guideStale: false };
-    return scheduleForDay(guideIsCurrent && guide ? guide.programs : null, lineup, activeChannel.startTime, selectedDate);
-  }, [activeChannel, guide, guideIsCurrent, lineup, selectedDate, slotPreview]);
+    if (!hasChannel) return { rows: [] as Instance[], guideWindow: null, guideStale: false };
+    return scheduleForDay(guideIsCurrent && guide ? guide.programs : null, lineup, channelStart, selectedDate);
+  }, [hasChannel, channelStart, guide, guideIsCurrent, lineup, selectedDate, slotPreview]);
   const instances = daySchedule.rows;
   const visibleInstances = useMemo(() => {
     const query = search.trim().toLowerCase();
     if (!query) return instances;
     return instances.filter(({ item, title }) => `${title ?? programTitle(item, viewPrograms)} ${programDetail(item, viewPrograms)}`.toLowerCase().includes(query));
   }, [instances, viewPrograms, search]);
+  const onAir = onAirPosition(visibleInstances, now);
+  // Insert, Remove and Move act on the selection, so it must be a row on screen.
+  // A channel opens with nothing picked (-1), and a picked item can air on
+  // another day (on a long cycle, weeks away); until a row on screen is picked,
+  // the selection is what's on air, or the day's first row.
+  const storedVisible = storedSelected >= 0 && visibleInstances.some((row) => row.lineupIndex === storedSelected);
+  const fallbackRow = storedVisible || grab || slotPreview ? undefined
+    : (onAir >= 0 && visibleInstances[onAir].lineupIndex >= 0 ? visibleInstances[onAir] : visibleInstances.find((row) => row.lineupIndex >= 0));
+  const anchorIndex = fallbackRow ? fallbackRow.lineupIndex : Math.max(storedAnchor, 0);
+  const selectedIndex = fallbackRow ? fallbackRow.lineupIndex : Math.max(storedSelected, 0);
+  const cursorStart = fallbackRow ? fallbackRow.start : storedCursorStart;
+  const block = normalizeBlock(Math.min(anchorIndex, Math.max(lineup.length - 1, 0)), Math.min(selectedIndex, Math.max(lineup.length - 1, 0)));
+  const blockSize = lineup.length ? block.end - block.start + 1 : 0;
+  const inBlock = (index: number) => index >= block.start && index <= block.end && index >= 0;
+  const selectedItem = lineup[selectedIndex];
   const cursorPosition = useMemo(() => {
     const exact = visibleInstances.findIndex((row) => row.lineupIndex === selectedIndex && row.start === cursorStart);
     return exact >= 0 ? exact : visibleInstances.findIndex((row) => row.lineupIndex === selectedIndex);
   }, [cursorStart, selectedIndex, visibleInstances]);
   const selectedInstance = cursorPosition >= 0 ? visibleInstances[cursorPosition] : undefined;
-  const onAir = onAirPosition(visibleInstances, now);
   const { from: dayFrom, to: dayTo } = dayRange(selectedDate);
   const dayStartMs = dayFrom.getTime();
   const dayEndMs = dayTo.getTime();
@@ -340,12 +367,14 @@ export default function Home() {
     setLoading(true);
     setProgrammingError('');
     resetEditing();
+    setKeepOnAir(false);
     if (!keepSelection) {
       setProgramming(emptyProgramming);
       setOriginalLineup([]);
       setBase(null);
       setGuide(null);
-      select(0, null);
+      // Nothing picked yet: the selection is what's on air (see fallbackRow).
+      select(-1, null);
     }
     try {
       const data = await tunarrApi.programming(channelId);
@@ -369,6 +398,7 @@ export default function Home() {
             current = decoded.current;
             restoredHistory = decoded.history;
             restoredPrograms = decoded.programs;
+            if (stored.keepOnAir) setKeepOnAir(true);
             if (stored.dirty) note = `Restored your unsaved changes (${decoded.history.past.length} ${decoded.history.past.length === 1 ? 'edit' : 'edits'}).`;
           }
         } else if (stored) {
@@ -478,13 +508,13 @@ export default function Home() {
     if (!live || !base || base.channelId !== activeChannelId || loading || grab) return;
     const store = draftStore();
     const keep = dirty || history.past.length > 0 || history.future.length > 0;
-    const record = keep ? encodeDraft(base.channelId, base.version, base.lineup, lineup, history, dirty, programming.programs) : null;
+    const record = keep ? { ...encodeDraft(base.channelId, base.version, base.lineup, lineup, history, dirty, programming.programs), ...(keepOnAir ? { keepOnAir: true } : {}) } : null;
     const write = record ? store.put(record) : store.delete(base.channelId);
     const channelId = base.channelId;
     write
       .then(() => setDraftMarks((marks) => (!!marks[channelId] === dirty ? marks : { ...marks, [channelId]: dirty })))
       .catch(() => {});
-  }, [activeChannelId, base, dirty, grab, history, lineup, live, loading, programming.programs]);
+  }, [activeChannelId, base, dirty, grab, history, keepOnAir, lineup, live, loading, programming.programs]);
 
   // Follow the keyboard/remote cursor: focus the row and keep it on screen.
   useEffect(() => {
@@ -550,7 +580,7 @@ export default function Home() {
       setProgramming(sample);
       setOriginalLineup(structuredClone(sample.lineup));
       resetEditing();
-      select(0, null);
+      select(-1, null);
       return;
     }
     void loadProgramming(channel.id, selectedDate);
@@ -579,7 +609,7 @@ export default function Home() {
     if (selectedDate !== today) changeDate(today);
     scrolledToNow.current = '';
     if (!activeChannel) return;
-    const rows = scheduleForDay(null, lineup, activeChannel.startTime, today).rows;
+    const rows = scheduleForDay(null, lineup, channelStart, today).rows;
     const row = rows[onAirPosition(rows, now)];
     if (row) {
       focusCursor.current = true;
@@ -598,7 +628,7 @@ export default function Home() {
   const followBlock = (next: LineupItem[], nextBlock: Block) => {
     setAnchorIndex(nextBlock.end);
     setSelectedIndex(nextBlock.start);
-    if (activeChannel) setCursorStart(occurrenceStart(next, activeChannel.startTime, nextBlock.start, selectedInstance?.start ?? dayStartMs));
+    if (activeChannel) setCursorStart(occurrenceStart(next, startWith(cycleDuration(next) - draftLength), nextBlock.start, selectedInstance?.start ?? dayStartMs));
     focusCursor.current = true;
   };
 
@@ -624,7 +654,7 @@ export default function Home() {
 
   const moveToTime = (time: number) => {
     if (!activeChannel) return;
-    const result = moveBlockToTime(lineup, block, activeChannel.startTime, time);
+    const result = moveBlockToTime(lineup, block, channelStart, time);
     if (!result || result.unchanged) return;
     applyEdit(`Moved ${describe()} to start ${clockTimecode(result.start)}`, result.lineup, result.block);
     if (inputDate(new Date(result.start)) !== selectedDate) changeDate(inputDate(new Date(result.start)));
@@ -706,13 +736,19 @@ export default function Home() {
     const channelId = activeChannelId;
     const savedLineup = lineup;
     const savedHistory = history;
-    const { request, skipped } = buildManualSave(savedLineup);
+    const built = buildManualSave(savedLineup);
+    const skipped = built.skipped;
+    // The companion moves the start time itself, from Tunarr's current copy.
+    const request = keeping && baseLength !== lineupLength(built.request.lineup) ? { ...built.request, keepOnAir: true } : built.request;
     setSaving(true);
     try {
       // The companion checks the version and writes under a per-channel lock,
       // refusing (412) if the channel changed since this lineup was loaded.
-      await tunarrApi.saveProgramming(channelId, request, base.version);
-      notify(skipped ? `Lineup saved to Tunarr (${skipped} zero-length ${skipped === 1 ? 'item' : 'items'} left out)` : 'Lineup saved to Tunarr');
+      const result = (await tunarrApi.saveProgramming(channelId, request, base.version)) as { startTime?: unknown; startTimeError?: unknown } | null;
+      const movedTo = typeof result?.startTime === 'number' ? result.startTime : null;
+      if (movedTo !== null) setChannels((list) => list.map((channel) => (channel.id === channelId ? { ...channel, startTime: movedTo } : channel)));
+      if (typeof result?.startTimeError === 'string') notify(result.startTimeError);
+      else notify(`${skipped ? `Lineup saved to Tunarr (${skipped} zero-length ${skipped === 1 ? 'item' : 'items'} left out)` : 'Lineup saved to Tunarr'}${request.keepOnAir ? '. The start time moved so what’s on air keeps its time.' : ''}`);
       // Re-read what Tunarr actually stored, and carry the edit list over to it.
       await loadProgramming(channelId, selectedDate, { keepSelection: true, rebase: { saved: request.lineup, history: savedHistory } });
       void tunarrApi.channels().then((list) => setChannels([...list].sort((a, b) => a.number - b.number))).catch(noteFailure);
@@ -882,12 +918,37 @@ export default function Home() {
 
   // ------------------------------------------------------------ lineup edits
 
-  const insertAt = (where: 'before' | 'after', items: LineupItem[], label: string, meta: Record<string, ContentProgram> = {}) => {
-    const at = !lineup.length ? 0 : where === 'before' ? block.start : block.end + 1;
-    const result = insertItems(lineup, at, items);
+  /**
+   * Where Insert puts `added` ms of new items, and when they will really air.
+   * A time goes to the program boundary nearest it; before/after go next to
+   * the selection. Both are worked out on the lengthened cycle (see boundaryAt).
+   */
+  const insertPoint = (where: InsertWhere, added: number): { index: number; start: number | null; passes: number } => {
+    if (!activeChannel || !lineup.length) return { index: 0, start: null, passes: 0 };
+    // `passes`: how many lineup passes grow between the fixed point (the
+    // channel start, or what's on air when keeping it in place) and the spot.
+    const passesTo = (time: number) => Math.abs(passesBefore(lineup, channelStart, time) - (keeping ? passesBefore(lineup, channelStart, now) : 0));
+    if (typeof where === 'object') {
+      const boundary = boundaryAt(lineup, startWith(added), where.at, where.snap, added);
+      return boundary ? { ...boundary, passes: passesTo(where.at) } : { index: 0, start: null, passes: 0 };
+    }
+    const index = where === 'before' ? block.start : block.end + 1;
+    const near = selectedInstance?.start ?? occurrenceStart(lineup, channelStart, block.start, dayStartMs);
+    return { index, start: insertedStart(lineup, channelStart, index, near, added, startWith(added)), passes: passesTo(near) };
+  };
+
+  const insertAt = (where: InsertWhere, items: LineupItem[], label: string, meta: Record<string, ContentProgram> = {}) => {
+    const point = insertPoint(where, cycleDuration(items));
+    const result = insertItems(lineup, point.index, items);
     if (!result) return;
     if (Object.keys(meta).length) setProgramming((current) => ({ ...current, programs: { ...current.programs, ...meta } as Programming['programs'] }));
-    applyEdit(`Inserted ${label}`, result.lineup, result.block);
+    applyEdit(`Inserted ${label}${point.start !== null ? ` at ${clockTimecode(point.start)}` : ''}`, result.lineup, result.block);
+    // Show the day it airs and select it there.
+    if (point.start !== null) {
+      const day = inputDate(new Date(point.start));
+      if (day !== selectedDate) changeDate(day);
+      setCursorStart(point.start);
+    }
     setInsertOpen(false);
   };
 
@@ -1089,7 +1150,7 @@ export default function Home() {
           } else if (!grab && key === 'n') goToNow();
           else if (!grab && key === 't') changeDate(inputDate(new Date()));
           else if (!grab && key === 'm' && selectedItem) setArrangeOpen(true);
-          else if (!grab && key === 'i' && activeChannel) setInsertOpen(true);
+          else if (!grab && !slotPreview && key === 'i' && activeChannel) setInsertOpen(true);
           else if (!grab && !slotPreview && key === 'e' && activeChannel && lineup.length) setEventOpen(true);
           else if (!grab && key === 'Delete' && selectedItem) { event.preventDefault(); removeSelection(); }
           else if (key === '?') setInfoDialog('shortcuts');
@@ -1362,7 +1423,7 @@ export default function Home() {
             {selectedInstance && cursorPosition === onAir && <div className="info-row on-air-row"><span>On air</span><b>{durationTimecode(selectedInstance.stop - now)} left</b></div>}
             <div className="nudge-row"><button disabled={block.start === 0 || !!grab} onClick={() => nudge(-1)}>↑ Earlier</button><button disabled={block.end >= lineup.length - 1 || !!grab} onClick={() => nudge(1)}>↓ Later</button></div>
             <button className="wide primary" disabled={!!grab} onClick={() => setArrangeOpen(true)}>Move or swap…</button>
-            <div className="nudge-row"><button disabled={!!grab} onClick={() => setInsertOpen(true)}>Insert…</button><button disabled={!!grab} onClick={removeSelection}>Remove</button></div>
+            <div className="nudge-row"><button disabled={!!grab || !!slotPreview} onClick={() => setInsertOpen(true)}>Insert…</button><button disabled={!!grab} onClick={removeSelection}>Remove</button></div>
             {blockSize === 1 && hasAdjustableLength(selectedItem) && <LengthEditor key={`${selectedIndex}-${selectedItem.duration}`} duration={selectedItem.duration} disabled={!!grab} onApply={changeLength} />}
             <button className="wide" onClick={() => (grab ? drop() : pickUp())}>{grab ? 'Drop here' : 'Pick up to slide'}</button>
             <p className="hint">{grab ? 'Use ↑ ↓ to slide, OK to drop, Back to cancel.' : 'Tip: drag a row, Shift-click to select a block, or press OK on a row to pick it up.'}</p>
@@ -1373,6 +1434,7 @@ export default function Home() {
                 {history.past.slice(-8).reverse().map((entry, index) => <li key={`${history.past.length - index}`}>{entry.label}</li>)}
                 {!history.past.length && dirty && <li>Unsaved changes</li>}
               </ol>
+              {canKeepOnAir && baseLength !== draftLength && <label className="keep-on-air"><input type="checkbox" checked={keepOnAir} onChange={(event) => setKeepOnAir(event.target.checked)} /> Keep what’s on air in place</label>}
               <div className="edit-actions">
                 <button disabled={!canUndo} onClick={undo}>Undo</button>
                 <button disabled={!canRedo} onClick={redo}>Redo</button>
@@ -1381,7 +1443,7 @@ export default function Home() {
             </div>}
           </> : <>
             <p className="subtle">{lineup.length ? 'Choose a program to adjust it.' : 'This lineup is empty.'}</p>
-            {activeChannel && <button className="wide primary" onClick={() => setInsertOpen(true)}>Insert…</button>}
+            {activeChannel && <button className="wide primary" disabled={!!slotPreview} onClick={() => setInsertOpen(true)}>Insert…</button>}
           </>}
         </aside>
       </div>
@@ -1503,6 +1565,10 @@ export default function Home() {
         anchorLabel={selectedItem ? (blockSize > 1 ? 'the selection' : `“${programTitle(selectedItem, programming.programs)}”`) : 'the start'}
         channels={live ? channels : []}
         currentChannelId={activeChannelId}
+        date={selectedDate}
+        time={inputTime(selectedInstance?.start ?? (selectedDate === inputDate(new Date(now)) ? now : dayStartMs))}
+        keepOnAir={canKeepOnAir ? { checked: keepOnAir, onChange: setKeepOnAir } : undefined}
+        startFor={(where, added) => { const point = insertPoint(where, added); return point.start === null ? null : { start: point.start, passes: point.passes }; }}
         onBrowse={(where) => { setInsertOpen(false); setLibraryPicker({ purpose: 'insert', where }); }}
         onInsert={(items, label, where) => insertAt(where, items, label)}
         onClose={() => setInsertOpen(false)}
@@ -1518,7 +1584,7 @@ export default function Home() {
 
       {listsOpen && <ListsManager kind={listsOpen} onClose={() => setListsOpen(null)} onChanged={() => { if (slotEditor.open || catalog) loadCatalog(); }} />}
 
-      {eventOpen && activeChannel && <EventDialog channel={activeChannel} channels={channels} lineup={lineup} programs={programming.programs} date={selectedDate} generated={hasGeneratedSchedule(programming)} onClose={() => setEventOpen(false)} onPlace={placeEventEdit} />}
+      {eventOpen && activeChannel && <EventDialog channel={{ ...activeChannel, startTime: channelStart }} channels={channels} lineup={lineup} programs={programming.programs} date={selectedDate} generated={hasGeneratedSchedule(programming)} onClose={() => setEventOpen(false)} onPlace={placeEventEdit} />}
       {templatesOpen && <TemplatesDialog channels={channels} activeChannel={activeChannel} activeHasSchedule={hasGeneratedSchedule(programming)} catalog={catalog} onClose={() => setTemplatesOpen(false)} onApply={applyTemplate} />}
       {setupDialog === 'smart' && <SmartCollectionsManager onClose={() => setSetupDialog(null)} onChanged={() => { if (slotEditor.open || catalog) loadCatalog(); }} />}
       {setupDialog === 'sources' && <MediaSourcesDialog onClose={() => setSetupDialog(null)} />}
@@ -1554,7 +1620,7 @@ export default function Home() {
         block={block}
         date={selectedDate}
         previewTime={(time) => {
-          const result = moveBlockToTime(lineup, block, activeChannel.startTime, time);
+          const result = moveBlockToTime(lineup, block, channelStart, time);
           return result ? { start: result.start, unchanged: result.unchanged } : null;
         }}
         onMoveToTime={moveToTime}

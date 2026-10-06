@@ -21,7 +21,9 @@ test('opens a live desk at TV resolution without leaving its own origin', async 
   page.on('console', (message) => { if (message.type() === 'error') errors.push(message.text()); });
   await page.reload();
   await expect(page.locator('.program.on-air')).toHaveCount(1);
-  await expect(page.getByText('ON AIR')).toBeVisible();
+  await expect(page.locator('.on-air-tag')).toBeVisible();
+  // The desk opens with what's on air selected: the inspector shows its time left.
+  await expect(page.locator('.on-air-row')).toContainText('left');
   await expect(page.getByText('Tunarr connected')).toBeVisible();
   await expect.poll(() => page.evaluate(() => [...document.querySelectorAll<HTMLImageElement>('.art img')].filter((image) => image.naturalWidth > 0).length)).toBeGreaterThan(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0);
@@ -46,8 +48,9 @@ test('picks up, slides and drops with remote keys, then saves and persists', asy
   await page.reload();
   await expect(page.locator('.program').first()).toBeVisible();
   await expect(page.getByRole('button', { name: 'Saved', exact: true })).toBeVisible();
+  await page.locator('.program', { hasText: 'Alpha Hour' }).first().click();
   await page.getByRole('button', { name: 'Move or swap…' }).click();
-  await expect(page.getByText('Currently #1 of 6')).toBeVisible();
+  await expect(page.getByText('Currently #3 of 6')).toBeVisible();
   expect((await fakeState(page)).saves).toBe(1);
 });
 
@@ -460,4 +463,49 @@ test('schedules a movie as an event on a date and keeps the rest on time', async
   // Replace mode keeps the cycle length: two hours before, two hours after.
   const durations = lineup as unknown as Array<{ duration: number }>;
   expect(durations.reduce((sum, item) => sum + item.duration, 0)).toBe(120 * 60_000);
+});
+
+test('inserts a movie at a date and time on another day, from the keyboard', async ({ page }) => {
+  await page.keyboard.press('i');
+  const insert = page.getByRole('dialog', { name: 'Insert into the lineup' });
+  await expect(insert.getByRole('status', { name: 'Insert placement' })).toContainText('Starts ');
+  await insert.getByRole('radio', { name: 'At a time…' }).click();
+  const tomorrow = new Date(Date.now() + 86_400_000);
+  const pad = (value: number) => String(value).padStart(2, '0');
+  const date = `${tomorrow.getFullYear()}-${pad(tomorrow.getMonth() + 1)}-${pad(tomorrow.getDate())}`;
+  await insert.getByLabel('Insert date').fill(date);
+  await insert.getByLabel('Insert time').fill('10:00');
+  await expect(insert.getByRole('status', { name: 'Insert placement' })).toContainText(/Starts .*10:/);
+  await page.screenshot({ path: test.info().outputPath('insert-at-time.png') });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await insert.getByRole('button', { name: 'Browse library…' }).click();
+  const library = page.getByRole('dialog', { name: 'Insert programs' });
+  await library.getByRole('button', { name: 'Add Zulu Dawn (1979)' }).click();
+  await library.getByRole('button', { name: 'Insert 1' }).click();
+  await expect(page.locator('.edit-list')).toContainText('Inserted “Zulu Dawn” at 10:');
+  await expect(page.locator('.program.cursor')).toContainText('Zulu Dawn');
+  await expect(page.getByLabel('Jump to date')).toHaveValue(date);
+  await page.keyboard.press('Control+s');
+  await expect(page.getByRole('status')).toHaveText('Lineup saved to Tunarr');
+  expect((await fakeState(page)).lineups[NEWS].some((item) => item.id === '4d4d4d4d-1a2b-4c3d-8e9f-000000000001')).toBe(true);
+});
+
+test('keeps what is on air in place while inserting, by moving the start time on save', async ({ page }) => {
+  // The fake's 2-hour lineup started two hours ago, so it has played through once.
+  const startTime = (await fullState(page)).channels.find((channel) => channel.id === NEWS)!.startTime;
+  const onAir = page.locator('.program.on-air');
+  const before = (await onAir.locator('time').innerText()).slice(0, 8);
+  await onAir.click();
+  await page.keyboard.press('i');
+  const insert = page.getByRole('dialog', { name: 'Insert into the lineup' });
+  await insert.getByRole('radio', { name: 'Flex time' }).click();
+  await insert.getByLabel(/Keep what’s on air in place/).check();
+  await insert.getByRole('button', { name: 'Insert', exact: true }).click();
+  await expect(page.locator('.edit-list')).toContainText('Inserted flex time at');
+  await expect(onAir.locator('time')).toContainText(before);
+  await page.keyboard.press('Control+s');
+  await expect(page.getByRole('status')).toContainText('start time moved so what’s on air keeps its time');
+  expect((await fullState(page)).channels.find((channel) => channel.id === NEWS)!.startTime).toBe(startTime - 2 * 60_000);
+  await page.reload();
+  await expect(page.locator('.program.on-air time')).toContainText(before);
 });

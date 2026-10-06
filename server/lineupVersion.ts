@@ -27,3 +27,24 @@ export function programmingVersion(lineup: unknown, schedule: unknown) {
   const text = JSON.stringify({ lineup: lineup ?? [], schedule: schedule ?? null });
   return `${cyrb53(text).toString(36)}-${cyrb53(text, 0x9e3779b9).toString(36)}-${text.length.toString(36)}`;
 }
+
+/** Total length (ms) of a lineup's items, ignoring anything without a positive duration. */
+export function lineupLength(lineup: unknown) {
+  if (!Array.isArray(lineup)) return 0;
+  return lineup.reduce((sum: number, item) => {
+    const duration = (item as { duration?: unknown } | null)?.duration;
+    return typeof duration === 'number' && Number.isFinite(duration) && duration > 0 ? sum + duration : sum;
+  }, 0);
+}
+
+/**
+ * A manual lineup repeats from the channel's start time, so changing its
+ * length by d moves the pass airing at `now` by d for every pass before it.
+ * This is the start time that keeps that pass (what's on air, and the rest of
+ * it) where it was: the browser previews with it, and the companion saves it.
+ */
+export function keptStartTime(startTime: number, oldLength: number, newLength: number, now: number) {
+  if (!(oldLength > 0) || !(newLength > 0) || !Number.isFinite(startTime)) return startTime;
+  const passes = Math.max(0, Math.floor((now - startTime) / oldLength));
+  return Math.max(0, Math.round(startTime + passes * (oldLength - newLength)));
+}

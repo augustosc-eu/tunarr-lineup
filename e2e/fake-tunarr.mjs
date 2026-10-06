@@ -236,7 +236,8 @@ http.createServer(async (req, res) => {
       const { name, number, ...rest } = body;
       delete rest.id;
       state.channelExtras[channel.id] = { ...state.channelExtras[channel.id], ...rest };
-      Object.assign(channel, { name, number, icon: rest.icon ?? channel.icon });
+      // Like Tunarr, a new start time moves when the lineup plays.
+      Object.assign(channel, { name, number, icon: rest.icon ?? channel.icon, ...(typeof rest.startTime === 'number' ? { startTime: rest.startTime } : {}) });
     }
     return send(res, 200, { fillerCollections: [], fillerRepeatCooldown: 30000, disableFillerOverlay: false, guideMinimumDuration: 30000, guideFlexTitle: '', groupTitle: 'tunarr', transcodeConfigId: 'keep-me', ...channel, ...state.channelExtras[channel.id], sessions: [] });
   }

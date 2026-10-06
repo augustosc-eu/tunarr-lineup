@@ -2,7 +2,7 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { handleNodeApiRequest } from '../server/nodeAdapter';
-import { programmingVersion } from '../server/lineupVersion';
+import { keptStartTime, lineupLength, programmingVersion } from '../server/lineupVersion';
 import { createProxyConfig, handleTunarrApi, type ProxyConfig, type ProxyRequest } from '../server/tunarrProxy';
 
 type Call = { url: string; init: RequestInit };
@@ -256,6 +256,86 @@ describe('saving manual programming', () => {
     expect(first.status).toBe(200);
     expect(second.status).toBe(412);
     expect(calls.map((call) => call.init.method)).toEqual(['GET', 'POST', 'GET']);
+  });
+
+  describe('keeping what is on air in place', () => {
+    const length = 4_530_000; // the lineup above
+    const longer = [...lineup, { type: 'flex', duration: 470_000 }];
+    /** Tunarr with a channel that started 10.5 passes ago; records the channel PUT. */
+    const channelTunarr = (options: { schedule?: unknown; putStatus?: number } = {}) => {
+      const startTime = Date.now() - 10.5 * length;
+      const puts: Array<Record<string, unknown>> = [];
+      const responder = (url: string, init: RequestInit) => {
+        if (url.endsWith('/api/channels/abc') && init.method === 'PUT') {
+          puts.push(JSON.parse(String(init.body)));
+          return options.putStatus ? new Response('"nope"', { status: options.putStatus }) : jsonResponse({});
+        }
+        if (url.endsWith('/api/channels/abc')) return jsonResponse({ id: 'abc', name: 'Movies', startTime, programCount: 5, transcoding: {}, onDemand: { enabled: false } });
+        if (init.method === 'POST') return jsonResponse({ lineup: longer, programs: {} });
+        return jsonResponse({ lineup, programs: {}, schedule: options.schedule });
+      };
+      return { startTime, puts, responder };
+    };
+
+    it('works out the start time that keeps the pass on air where it is', () => {
+      expect(lineupLength(lineup)).toBe(length);
+      expect(lineupLength([{ duration: 5 }, { duration: -1 }, { duration: 'x' }, null])).toBe(5);
+      // Ten passes have aired; each grew by 470 000 ms, so the start moves back ten times that.
+      expect(keptStartTime(1_000_000_000, length, length + 470_000, 1_000_000_000 + 10.5 * length)).toBe(1_000_000_000 - 4_700_000);
+      // Nothing to keep on the first pass, before the channel started, or with no length.
+      expect(keptStartTime(1_000_000_000, length, length + 470_000, 1_000_000_000 + 0.5 * length)).toBe(1_000_000_000);
+      expect(keptStartTime(1_000_000_000, length, length + 470_000, 0)).toBe(1_000_000_000);
+      expect(keptStartTime(1_000_000_000, 0, length, 2_000_000_000)).toBe(1_000_000_000);
+      // A shorter lineup moves it forward; fractions are rounded to whole ms.
+      expect(keptStartTime(0, 3.5, 3, 10)).toBe(1);
+    });
+
+    it('saves the lineup first, then moves the start time on Tunarr’s copy of the channel', async () => {
+      const fake = channelTunarr();
+      const { calls, config } = setup(fake.responder);
+      const response = await handleTunarrApi(post({ type: 'manual', lineup: longer, append: false, keepOnAir: true }), config);
+      expect(response.status).toBe(200);
+      expect(calls.map((call) => `${call.init.method} ${new URL(call.url).pathname}`)).toEqual([
+        'GET /api/channels/abc/programming', 'POST /api/channels/abc/programming', 'GET /api/channels/abc', 'PUT /api/channels/abc',
+      ]);
+      // The keepOnAir flag is Lineup's, never forwarded to Tunarr.
+      expect(JSON.parse(String(calls[1].init.body))).toEqual({ type: 'manual', lineup: longer, append: false });
+      const moved = Math.round(fake.startTime - 10 * 470_000);
+      expect(fake.puts).toEqual([{ id: 'abc', name: 'Movies', startTime: moved, onDemand: { enabled: false } }]);
+      expect(body(response).startTime).toBe(moved);
+    });
+
+    it('leaves the channel alone when the length did not change, and refuses on a slot schedule', async () => {
+      const same = channelTunarr();
+      const { calls, config } = setup(same.responder);
+      const response = await handleTunarrApi(post({ type: 'manual', lineup: [...lineup].reverse(), append: false, keepOnAir: true }), config);
+      expect(response.status).toBe(200);
+      expect(same.puts).toEqual([]);
+      expect(calls.some((call) => call.init.method === 'PUT')).toBe(false);
+
+      const scheduled = channelTunarr({ schedule: { type: 'time', slots: [] } });
+      const scheduledSetup = setup(scheduled.responder);
+      const refused = await handleTunarrApi(post({ type: 'manual', lineup: longer, append: false, keepOnAir: true }, { 'if-match': `"${programmingVersion(lineup, { type: 'time', slots: [] })}"` }), scheduledSetup.config);
+      expect(refused.status).toBe(400);
+      expect(body(refused).error.message).toContain('slot schedule');
+      expect(scheduledSetup.calls.map((call) => call.init.method)).toEqual(['GET']);
+    });
+
+    it('reports a start time Tunarr refused, after a saved lineup', async () => {
+      const fake = channelTunarr({ putStatus: 400 });
+      const { config } = setup(fake.responder);
+      const response = await handleTunarrApi(post({ type: 'manual', lineup: longer, append: false, keepOnAir: true }), config);
+      expect(response.status).toBe(200);
+      expect(body(response).startTimeError).toMatch(/^The lineup was saved, but the start time didn’t move/);
+      expect(body(response).lineup).toEqual(longer);
+    });
+
+    it('accepts only true or false', async () => {
+      const { fetchImpl, config } = setup(tunarr());
+      const response = await handleTunarrApi(post({ type: 'manual', lineup, append: false, keepOnAir: 'yes' }), config);
+      expect(response.status).toBe(400);
+      expect(fetchImpl).not.toHaveBeenCalled();
+    });
   });
 
   it('passes Tunarr validation messages back', async () => {

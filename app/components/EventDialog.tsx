@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import { durationTimecode, makeFlex, makeRedirect } from '../../lib/broadcast';
-import { placeEvent, repeatLabel, type EventMode, type EventPlacement, type EventSnap } from '../../lib/events';
+import { airTimeLabel as when, placeEvent, repeatLabel, type EventMode, type EventPlacement, type EventSnap } from '../../lib/events';
 import { lineupEntry, type ContentProgram } from '../../lib/library';
 import type { Channel, LineupItem, Programming } from '../../lib/lineup';
 import { programTitle } from '../../lib/programInfo';
@@ -23,7 +23,6 @@ type Props = {
 
 type What = 'programs' | 'redirect' | 'flex';
 const MINUTE = 60_000;
-const when = (ms: number) => new Intl.DateTimeFormat('en', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(new Date(ms));
 const inputDate = (ms: number) => {
   const date = new Date(ms);
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;

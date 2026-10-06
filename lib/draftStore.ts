@@ -24,6 +24,8 @@ export type StoredDraft = {
   extras?: LineupItem[];
   /** Program details for added entries, keyed by program id. */
   programs?: Record<string, unknown>;
+  /** The user chose to keep what's on air in place when this draft is saved. */
+  keepOnAir?: boolean;
 };
 
 export type DraftStore = {

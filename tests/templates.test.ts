@@ -2,7 +2,7 @@ import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { placeEvent, repeatLabel } from '../lib/events';
+import { boundaryAt, insertedStart, passesBefore, placeEvent, repeatLabel } from '../lib/events';
 import type { LineupItem } from '../lib/lineup';
 import { DAY_MS, type ScheduleDraftState, type SourceOption } from '../lib/schedule';
 import { BUILT_IN_TEMPLATES, inGroup, matchesSearch } from '../lib/templateCatalog';
@@ -225,6 +225,43 @@ describe('events on a date', () => {
     expect(pushed.cycle).toBe(4 * HOUR + 100 * MIN);
     expect(placeEvent([], start, at, event, 'replace')).toBeNull();
     expect(placeEvent(lineup, start, start + 60 * MIN, event, 'replace')!.drift).toBe(0);
+  });
+
+  it('finds the insert position for any time, on any pass through the lineup', () => {
+    // Weeks before and after the channel started, inside "c" (01:30–03:00).
+    for (const pass of [-9, 0, 42]) {
+      const passStart = start + pass * 4 * HOUR;
+      expect(boundaryAt(lineup, start, passStart + 100 * MIN)).toEqual({ index: 3, start: passStart + 180 * MIN });
+      expect(boundaryAt(lineup, start, passStart + 100 * MIN, 'before')).toEqual({ index: 2, start: passStart + 90 * MIN });
+    }
+    // Exactly on a boundary: no drift either way. Inside the last item: after the end.
+    expect(boundaryAt(lineup, start, start + 60 * MIN, 'before')).toEqual({ index: 1, start: start + 60 * MIN });
+    expect(boundaryAt(lineup, start, start + 190 * MIN)).toEqual({ index: 4, start: start + 240 * MIN });
+    // Fractional durations, as local media reports them.
+    expect(boundaryAt([item('x', 0.5), item('y', 1)], start, start + 1)).toEqual({ index: 1, start: start + 0.5 * MIN });
+    expect(boundaryAt([], start, start)).toBeNull();
+    expect(boundaryAt(lineup, start, Number.NaN)).toBeNull();
+  });
+
+  it('finds where added items really air once every earlier pass is longer', () => {
+    // 100 minutes added: each pass is 5h40m. Ten passes in, "at" 01:40 into the pass is inside "c".
+    const added = 100 * MIN;
+    const passStart = start + 10 * (4 * HOUR + added);
+    const point = boundaryAt(lineup, start, passStart + 100 * MIN, 'after', added)!;
+    expect(point).toEqual({ index: 3, start: passStart + 180 * MIN });
+    // Inserting there and walking the new cycle really puts the items at point.start.
+    const next = [...lineup.slice(0, point.index), item('new', 100), ...lineup.slice(point.index)];
+    const offset = next.slice(0, point.index).reduce((sum, entry) => sum + entry.duration, 0);
+    expect((point.start - start - offset) % (4 * HOUR + added)).toBe(0);
+    // Past the old end (where the added time sits at the end of a pass): next pass, or the end of this one.
+    expect(boundaryAt(lineup, start, start + 250 * MIN, 'after', added)).toEqual({ index: 0, start: start + 4 * HOUR + added });
+    expect(boundaryAt(lineup, start, start + 250 * MIN, 'before', added)).toEqual({ index: 4, start: start + 4 * HOUR });
+    // Next to a row on screen: on the first pass nothing moves; ten passes in, it airs 10 × 100 min later.
+    expect(insertedStart(lineup, start, 2, start + 60 * MIN, added)).toBe(start + 90 * MIN);
+    expect(insertedStart(lineup, start, 2, start + 10 * 4 * HOUR + 60 * MIN, added)).toBe(start + 10 * 4 * HOUR + 90 * MIN + 10 * added);
+    expect(insertedStart([], start, 0, start, added)).toBeNull();
+    expect(passesBefore(lineup, start, start + 10 * 4 * HOUR + 1)).toBe(10);
+    expect(passesBefore(lineup, start, start - 1)).toBe(0);
   });
 
   it('says when a replacing event runs past the end of the lineup', () => {

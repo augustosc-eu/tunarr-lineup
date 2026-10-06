@@ -71,6 +71,8 @@ export type ManualProgrammingRequest = {
   type: 'manual';
   lineup: LineupItem[];
   append: false;
+  /** Ask the companion to move the start time so the pass on air keeps its times (keptStartTime). */
+  keepOnAir?: boolean;
 };
 
 export function dayRange(date: string) {

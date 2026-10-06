@@ -363,3 +363,15 @@ on the `broadcast-programming` branch.
 - **Alternatives considered:** checking only when sign-in is on as well was rejected, because it would break people who open a password-protected Lineup by a host name, for no added protection. Trusting `x-forwarded-host` was rejected, because a same-origin page can set it.
 - **Consequence:** people who open Lineup without a password by a name such as `nas.local` must add it to `LINEUP_ALLOWED_HOSTS`. The 403 page says so.
 
+## D43. Insert anywhere, at the time it will really air
+
+- **Status:** Explicit (owner request, 2026-10-06: "we need to ensure we can insert programs into any channel at any time"). Prompted by an insert on a 50-day lineup that landed weeks away from the program on screen.
+- **Decision:**
+  - Insert works on every channel: empty lineups, generated schedules (with the existing save warning) and any day. Besides before/after the selection, it takes a date and time, snapped to a program boundary like events (D40).
+  - A channel opens with the program on air selected (owner decision, 2026-10-06). Until a row on the day shown is picked, the selection stays on what's on air (or the day's first program), never an off-screen lineup item. Tests that act on a specific row pick it first, so they don't depend on the clock.
+  - A manual lineup repeats from the channel's fixed start time, so inserting L ms makes every pass L longer and moves a channel that has repeated N times by N×L. Placement is worked out on the new cycle (`boundaryAt`, `insertedStart`), the dialog states the start time and the repeat effect first, and the desk then follows the items to the day they air.
+- **Keeping what's on air in place** is an opt-in per draft (owner decision, 2026-10-06). On save, the companion moves the channel's start time by N×L (`keptStartTime`), so the pass airing now keeps its times.
+  - It is a second write, made under the same channel lock after the lineup save. If it fails, the result is an ordinary save, and the reply says so; it doesn't roll back.
+  - The new start is computed server-side from Tunarr's current copy. The browser sends only a flag, never a start time.
+  - It isn't offered on slot-schedule channels, because a start-time change regenerates the schedule and would discard the edit.
+  - It isn't the default: it changes a channel setting, and on a lineup that hasn't repeated it does nothing.

@@ -1,10 +1,10 @@
-import { programmingVersion } from './lineupVersion.js';
+import { keptStartTime, lineupLength, programmingVersion } from './lineupVersion.js';
 import path from 'node:path';
 import { handleAdminRoute, matchAdminRoute, type AdminRoute } from './admin.js';
 import { createAiConfig, type AiConfig } from './ai.js';
 import { handleLineupRoute, matchLineupRoute, type LineupRoute } from './lineupRoutes.js';
 import { createTemplateStore, type TemplateStore } from './templateStore.js';
-import { handleContentRoute, matchContentRoute, type ContentRoute } from './content.js';
+import { handleContentRoute, matchContentRoute, NOT_SAVEABLE, type ContentRoute } from './content.js';
 import { channelLogo, type ExternalImageFetcher } from './logos.js';
 import { callTunarr, fail, fetchUpstream, json, UpstreamError } from './upstream.js';
 import { buildSchedule, programPool, validateExtraPrograms, validateSeed } from './slotSchedule.js';
@@ -181,7 +181,7 @@ function parseIfMatch(value: string | undefined) {
 type CurrentProgramming = { lineup?: unknown; programs?: unknown; schedule?: unknown };
 
 type Write =
-  | { kind: 'manual'; lineup: unknown[] }
+  | { kind: 'manual'; lineup: unknown[]; keepOnAir: boolean }
   | { kind: 'schedule'; type: 'time' | 'random'; edit: unknown; seed?: number[]; discardCount?: number; extra: string[] };
 
 function header(headers: ProxyRequest['headers'], name: string) {
@@ -224,11 +224,12 @@ export function validateLineupRange(params: URLSearchParams): { from: string; to
   return { from: from.toISOString(), to: to.toISOString() };
 }
 
-export function validateManualProgramming(body: unknown): { lineup: unknown[] } | { error: string } {
+export function validateManualProgramming(body: unknown): { lineup: unknown[]; keepOnAir: boolean } | { error: string } {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return { error: 'Request body must be a JSON object.' };
   const request = body as Record<string, unknown>;
   if (request.type !== 'manual') return { error: 'Only manual programming ("type": "manual") can be saved here.' };
   if (request.append !== undefined && request.append !== false) return { error: '"append" must be false.' };
+  if (request.keepOnAir !== undefined && typeof request.keepOnAir !== 'boolean') return { error: '"keepOnAir" must be true or false.' };
   if (!Array.isArray(request.lineup)) return { error: '"lineup" must be an array.' };
   if (request.lineup.length > MAX_LINEUP_ITEMS) return { error: 'Lineup is too large.' };
   for (const [index, item] of request.lineup.entries()) {
@@ -247,7 +248,7 @@ export function validateManualProgramming(body: unknown): { lineup: unknown[] } 
       return { error: `Lineup item ${index} is missing its redirect channel.` };
     }
   }
-  return { lineup: request.lineup };
+  return { lineup: request.lineup, keepOnAir: request.keepOnAir === true };
 }
 
 /** Fetches program artwork through Tunarr. Only image bytes are passed on. */
@@ -378,7 +379,7 @@ export async function handleTunarrApi(request: ProxyRequest, config: ProxyConfig
         } else {
           const checked = validateManualProgramming(parsed);
           if ('error' in checked) return fail(400, 'invalid_programming', checked.error);
-          write = { kind: 'manual', lineup: checked.lineup };
+          write = { kind: 'manual', lineup: checked.lineup, keepOnAir: checked.keepOnAir };
         }
         expectedVersion = parseIfMatch(header(request.headers, 'if-match'));
         if (!expectedVersion) return fail(428, 'precondition_required', 'Saves must say which version of the channel they replace (If-Match).');
@@ -416,6 +417,10 @@ export async function handleTunarrApi(request: ProxyRequest, config: ProxyConfig
             }
             let body: unknown;
             if (pending.kind === 'manual') {
+              // A start-time change regenerates a slot schedule, which would discard this lineup.
+              if (pending.keepOnAir && current?.schedule != null) {
+                throw new UpstreamError(400, 'invalid_programming', 'This channel is generated from a slot schedule, so its start time can’t move. Save without keeping what’s on air in place.');
+              }
               body = { type: 'manual', lineup: pending.lineup, append: false };
             } else {
               // Creating, converting or editing: buildSchedule keeps the current
@@ -425,7 +430,29 @@ export async function handleTunarrApi(request: ProxyRequest, config: ProxyConfig
               const programs = programPool(built.schedule.slots as Array<Record<string, unknown>>, current?.lineup, current?.programs, pending.extra);
               body = { type: pending.type, schedule: built.schedule, programs, seed: pending.seed, discardCount: pending.discardCount };
             }
-            return json(200, await callTunarr(config, target, 'POST', path, JSON.stringify(body)));
+            const saved = await callTunarr(config, target, 'POST', path, JSON.stringify(body));
+            if (pending.kind !== 'manual' || !pending.keepOnAir) return json(200, saved);
+            // Keep the pass on air in place: move the start time by what every
+            // earlier pass gained or lost. The lineup is saved first, so a failure
+            // here leaves an ordinary save, and the reply says so.
+            try {
+              const channelPath = `/api/channels/${route.channelId}`;
+              const channel = await callTunarr(config, target, 'GET', channelPath);
+              if (!channel || typeof channel !== 'object' || typeof (channel as { startTime?: unknown }).startTime !== 'number') {
+                throw new UpstreamError(502, 'tunarr_invalid_response', 'Tunarr returned an unexpected channel.');
+              }
+              const from = (channel as { startTime: number }).startTime;
+              const startTime = keptStartTime(from, lineupLength(current?.lineup), lineupLength(pending.lineup), Date.now());
+              if (startTime !== from) {
+                const next: Record<string, unknown> = { ...(channel as Record<string, unknown>), startTime };
+                for (const field of NOT_SAVEABLE) delete next[field];
+                await callTunarr(config, target, 'PUT', channelPath, JSON.stringify(next));
+              }
+              return json(200, { ...(saved as object), startTime });
+            } catch (error) {
+              const message = error instanceof UpstreamError ? error.message : 'Tunarr did not accept the new start time.';
+              return json(200, { ...(saved as object), startTimeError: `The lineup was saved, but the start time didn’t move: ${message}` });
+            }
           });
         }
         case 'schedule':

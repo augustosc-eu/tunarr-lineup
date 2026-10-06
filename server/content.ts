@@ -246,7 +246,8 @@ function validateOffline(value: unknown, current: unknown): Json | string {
   return base;
 }
 // Read-only or response-only fields Tunarr's save schema does not accept.
-const NOT_SAVEABLE = ['programCount', 'sessions', 'fallback', 'transcoding'];
+/** Fields Tunarr returns on a channel but refuses in a channel update. */
+export const NOT_SAVEABLE = ['programCount', 'sessions', 'fallback', 'transcoding'];
 
 export function channelSettings(channel: unknown) {
   if (!isObject(channel)) return {};

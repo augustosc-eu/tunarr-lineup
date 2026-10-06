@@ -77,7 +77,7 @@ In every non-connected case the user can **Check again** or choose **Use demo da
 
 ### 3. Rearrange
 
-A selection is one program or a **block**: Shift-click, or Shift+↑/↓, selects a contiguous run.
+A selection is one program or a **block**: Shift-click, or Shift+↑/↓, selects a contiguous run. A channel opens with the program on air selected. Until you pick a row on the day shown, the selection stays on what's on air (or the day's first program), so Insert and Remove always act on something you can see.
 
 - **↑ Earlier / ↓ Later** (inspector or Edit menu): slide the selection past its neighbour.
 - **Pick up to slide** (OK/Enter on a row):
@@ -107,7 +107,11 @@ Edits mark the lineup unsaved:
 
 ### 4a. Insert, remove and change lengths
 
-- **Insert…** (`I`, Edit menu, inspector): choose where (before or after the selection) and what:
+- **Insert…** (`I`, Edit menu, inspector) works on any channel, including an empty one or one generated from a slot schedule (saving warns first). Choose where and what:
+  - **Where:** before or after the selection, or **At a time…**: a date and time on any day. A time snaps to the next program boundary (or, if you choose, the one before), because Tunarr can't cut a program short.
+  - The dialog says when the new items will start before anything changes, and afterwards the desk goes to that day and selects them. The edit list records the time ("Inserted “…” at 20:30:00").
+  - A manual lineup repeats from the channel's start time, so adding to it makes every pass longer. On a channel that has already repeated, that moves the programs around the insert too; the dialog says so, and the times shown are where things really air.
+  - **Keep what's on air in place** (in the Insert dialog and the edit list, offered once the lineup has repeated and the channel has no slot schedule): when you save, the channel's start time moves so the program on now and the rest of its pass keep their times. Everything you see while editing already reflects it. Inserts later than the current pass still move what's around them, and the dialog says so. If Tunarr refuses the new start time, the lineup is still saved and the desk says the start time didn't move.
   - **Programs from the library:** browse a media source and library, search, open a show or season, then add single items or **Add all**. Picks collect in a basket; **Insert N** adds them in order.
   - **Commercial break:** flex time of a set length, filled from chosen filler lists, with an optional repeat cooldown.
   - **Flex time** or a **redirect** to another channel, of a set length.

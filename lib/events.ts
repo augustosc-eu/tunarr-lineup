@@ -8,6 +8,11 @@ import type { LineupItem } from './lineup';
 
 export type EventMode = 'replace' | 'push';
 export type EventSnap = 'after' | 'before';
+/** Where Insert puts new items: next to the selection, or at a date and time. */
+export type InsertWhere = 'before' | 'after' | { at: number; snap: EventSnap };
+
+/** "Tue 6 Oct, 20:00:00": when something airs. */
+export const airTimeLabel = (ms: number) => new Intl.DateTimeFormat('en', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(new Date(ms));
 
 export type EventPlacement = {
   lineup: LineupItem[];
@@ -35,13 +40,16 @@ export type EventPlacement = {
 const total = (items: LineupItem[]) => items.reduce((sum, item) => sum + item.duration, 0);
 
 /**
- * Places `event` items at the boundary at or after (or at or before) `at`.
- * Returns null when the lineup is empty or the event has no length.
+ * The lineup position at the program boundary at or after (or at or before)
+ * `at`, and when items inserted there start. The lineup repeats from the
+ * channel's start, so adding `added` ms lengthens every earlier pass and moves
+ * later ones: the boundary is found on the new cycle, which makes `start`
+ * where the items will really air. Null when the lineup is empty.
  */
-export function placeEvent(lineup: LineupItem[], channelStart: number, at: number, event: LineupItem[], mode: EventMode, snap: EventSnap = 'after'): EventPlacement | null {
-  const cycle = total(lineup);
-  const length = total(event);
-  if (!lineup.length || cycle <= 0 || length <= 0) return null;
+export function boundaryAt(lineup: LineupItem[], channelStart: number, at: number, snap: EventSnap = 'after', added = 0): { index: number; start: number } | null {
+  const length = total(lineup);
+  const cycle = length + added;
+  if (!lineup.length || length <= 0 || !Number.isFinite(at)) return null;
   // Which pass through the lineup `at` falls in, and where inside it.
   const pass = Math.floor((at - channelStart) / cycle);
   const passStart = channelStart + pass * cycle;
@@ -52,12 +60,44 @@ export function placeEvent(lineup: LineupItem[], channelStart: number, at: numbe
     cursor += lineup[index].duration;
     index += 1;
   }
-  // `index` is the item airing at `at` and `cursor` its start within the pass.
-  if (cursor !== offset && snap === 'after') {
-    cursor += lineup[index].duration;
-    index += 1;
-  }
-  const start = passStart + cursor;
+  if (cursor === offset || snap === 'before') return { index, start: passStart + cursor };
+  // `at` is inside lineup[index] (or, past the old end, inside what's added
+  // there): start when it ends, which may be the start of the next pass.
+  return index < lineup.length
+    ? { index: index + 1, start: passStart + cursor + lineup[index].duration }
+    : { index: 0, start: passStart + cycle };
+}
+
+/**
+ * When items of `added` ms inserted at `index` start, on the pass of the
+ * lineup that airs around `near` (the row they're inserted next to). Every
+ * earlier pass grows by `added`, so on a channel that has already repeated,
+ * this is later than the spot on screen.
+ */
+export function insertedStart(lineup: LineupItem[], channelStart: number, index: number, near: number, added: number, newStart = channelStart) {
+  const length = total(lineup);
+  if (!lineup.length || length <= 0) return null;
+  const pass = Math.floor((near - channelStart) / length);
+  // `newStart`: the channel start after the insert, if it moves too (keeping what's on air in place).
+  return newStart + pass * (length + added) + total(lineup.slice(0, index));
+}
+
+/** How many times the lineup has played through by `at`. */
+export function passesBefore(lineup: LineupItem[], channelStart: number, at: number) {
+  const length = total(lineup);
+  return length > 0 ? Math.max(0, Math.floor((at - channelStart) / length)) : 0;
+}
+
+/**
+ * Places `event` items at the boundary at or after (or at or before) `at`.
+ * Returns null when the lineup is empty or the event has no length.
+ */
+export function placeEvent(lineup: LineupItem[], channelStart: number, at: number, event: LineupItem[], mode: EventMode, snap: EventSnap = 'after'): EventPlacement | null {
+  const length = total(event);
+  // Pushing lengthens the cycle; replacing keeps it (an overrun is reported).
+  const boundary = boundaryAt(lineup, channelStart, at, snap, mode === 'push' ? length : 0);
+  if (!boundary || length <= 0) return null;
+  const { index, start } = boundary;
   let removed: LineupItem[] = [];
   let pad = 0;
   let overrun = 0;

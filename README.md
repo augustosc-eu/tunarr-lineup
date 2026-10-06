@@ -30,13 +30,13 @@ TV with a remote as well as with a mouse and keyboard.
   - **Conflict check:** every save says which version of the channel it was based on (`If-Match`). The companion checks that version and writes while holding a per-channel lock. If the channel changed in the meantime, nothing is saved.
   - **Remaining gap:** this fully closes the gap between Lineup sessions. Against edits made in Tunarr's own UI, it leaves a window of a few milliseconds (Tunarr has no conditional save of its own).
   - **Generated schedules:** channels driven by a slot or time schedule ask for confirmation first.
-- **Full lineup editing.** **Edit → Insert…** (or `I`) adds, before or after the selection:
+- **Full lineup editing.** **Edit → Insert…** (or `I`) adds, before or after the selection or at a date and time, on any channel:
   - programs from your libraries: movies, episodes, whole seasons or shows, other videos
   - commercial breaks (flex time filled from filler lists)
   - flex time
   - redirects to another channel
 
-  **Remove** (or `Delete`) takes items out. Flex, breaks and redirects have an adjustable length in the inspector. Every edit is in the edit list and the stored draft.
+  **Remove** (or `Delete`) takes items out. Flex, breaks and redirects have an adjustable length in the inspector. Every edit is in the edit list and the stored draft. The dialog says when inserted items will air. Because a manual lineup repeats from the channel's start time, a longer lineup moves later passes; tick **Keep what's on air in place** to have the companion move the start time on save so the current pass keeps its times.
 - **Library browser.** Browse or search any media source and library Tunarr has indexed (Plex, Jellyfin, Emby, local folders), and drill into shows and seasons.
 - **Commercials and filler.**
   - **Lists → Filler Lists…** creates and edits filler lists (commercials, bumpers, station IDs). **Lists → Custom Shows…** manages custom shows.

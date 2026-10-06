@@ -38,7 +38,7 @@ server implements those paths.
 | `app/components/MenuBar.tsx` | Pull-down menu bar (`MenuBar`, types `Menu`, `MenuItem`) with mouse and keyboard handling. |
 | `app/components/ScheduleEditor.tsx` | Slot-schedule editor for random- and time-slot channels (source, weight, cooldown, length, order, start time; duplicate/remove/reorder/shift; per-slot seasons, direction, linked slots and commercials). Displays and edits a draft; the page owns the state. |
 | `app/components/LibraryBrowser.tsx` | Library browser (`LibraryBrowser`, `LibraryPick`): source/library pickers, search, show → season → episode navigation, **Add** / **Add all** into a basket. Modes: `programs`, `show`, `movies`. |
-| `app/components/InsertDialog.tsx` | Insert programs (via the browser), commercial break, flex or redirect, before or after the selection. |
+| `app/components/InsertDialog.tsx` | Insert programs (via the browser), commercial break, flex or redirect, before or after the selection or at a date and time; shows when the items will start. |
 | `app/components/ListsManager.tsx` | Filler-list and custom-show manager (create, rename, delete, edit contents through `LibraryBrowser`). |
 | `app/components/ChannelSettingsDialog.tsx` | Channel settings in tabs: General (name, number, group, guide flex title, guide minimum, start time, hidden, on demand), Logo & watermark (logo address and corner, watermark, offline screen), Streaming (stream mode, transcode profile, subtitles), Commercials (filler collections, cooldown, overlay). |
 | `app/components/NewChannelDialog.tsx` | New or duplicated channel: name, number (next free by default), group, transcode profile or channel to copy. |
@@ -60,7 +60,7 @@ server implements those paths.
 | `lib/templates.ts` | Template building blocks: role `preset`s, `AD_STYLES` by market, `GENERAL_TEMPLATES`, `templateToDraft` (with per-block ad levels via `midRollFor`), `weekGrid`/`dayRows` (Sunday is day 0; single-weekday overrides), `daySegments`, `roleUsage`, `scheduleToTemplate`, `blankTemplate`, `defaultSource`. |
 | `lib/networkTemplates.ts` | Network-inspired templates for Japan, Argentina, the United States, Canada, Spain, the United Kingdom and Italy, including music-channel formats (`NETWORK_TEMPLATES`, `REGIONS`). |
 | `lib/templateCatalog.ts` | `BUILT_IN_TEMPLATES`, gallery groups (`TEMPLATE_GROUPS`, `inGroup`) and search. |
-| `lib/events.ts` | `placeEvent` (snap to a program boundary; replace with flex padding, or push) and `repeatLabel`. |
+| `lib/events.ts` | `boundaryAt` (the insert position nearest a time, on the lengthened cycle), `insertedStart`, `passesBefore`, `placeEvent` (snap to a program boundary; replace with flex padding, or push), `repeatLabel` and `airTimeLabel`. |
 | `lib/programInfo.ts` | `getProgram`, `programTitle`, `programDetail`, `programArtwork`, `channelLogoUrl`. |
 | `lib/tunarrClient.ts` | Browser client for `/api/tunarr/*`: `checkHealth`, `tunarrApi`, `TunarrApiError`, `ConnectionState`. |
 | `lib/demoData.ts` | Demo channels and lineup (`demoChannels`, `demoProgramming()`, `demoDate`). |
@@ -178,7 +178,7 @@ which is set to the same rule for the page itself).
 5. **Query:** `lineup` must pass `validateLineupRange` (ISO date-times, `to > from`, at most 14 days, normalized to UTC). Every other route rejects any query (`400 invalid_query`).
 6. **POST body:**
    - Must be `application/json` (else `415`) and valid JSON (else `400 invalid_json`).
-   - **`programming` with `type: 'manual'`:** `validateManualProgramming` checks `append` false or absent and each item's type, positive duration and ids.
+   - **`programming` with `type: 'manual'`:** `validateManualProgramming` checks `append` false or absent, `keepOnAir` true/false or absent, and each item's type, positive duration and ids.
    - **`programming` with `type: 'time' | 'random'`:** `{ schedule: { slots, timeZoneOffset? }, seed?, discardCount? }`, with the seed checked by `validateSeed`.
    - **Both programming saves** require `If-Match` (`parseIfMatch`), else `428 precondition_required`.
    - **`schedule-preview`:** the body is `{ slots, timeZoneOffset? }`.
@@ -192,6 +192,7 @@ per channel within this process:
 
 1. **Version check.** `GET` the channel's programming and compute `programmingVersion(lineup, schedule)`. If it differs from `If-Match`, the response is `412 lineup_changed` and nothing is posted.
 2. **Manual saves.** `POST {type:'manual', lineup, append:false}` with the items unchanged.
+   - **`keepOnAir: true`** ("Keep what's on air in place") is Lineup's flag and is never forwarded. Refused with `400` on a channel with a slot `schedule`, because a start-time change regenerates it. After the lineup is saved, the proxy `GET`s `/api/channels/:id`, computes `keptStartTime(startTime, old length, new length, now)` (`server/lineupVersion.ts`: every pass before now grew or shrank by the same amount, so the start moves the other way by that many times), and `PUT`s Tunarr's copy of the channel with only `startTime` changed (read-only fields removed, as for channel settings). The reply adds `startTime`. If that step fails, the lineup stays saved and the reply carries `startTimeError` instead. The browser shows that message.
 3. **Schedule saves.**
    - The requested type must match the current `schedule.type`, else `409 schedule_type_mismatch`.
    - `buildEditedSchedule(current.schedule, edit)` validates the slots and returns Tunarr's current schedule with only `slots` replaced (plus `timeZoneOffset` if it's a valid offset). Errors give `400 invalid_schedule`.
@@ -321,7 +322,7 @@ All state is local React state in `Home`. There is no context, store or browser 
 
 - **Connection and mode:** `mode` (`'live' | 'demo'`, starting `'live'`) and `connection` (`ConnectionState`).
 - **Data:** `channels`, `activeChannelId`, `programming`, `originalLineup` (the saved baseline) and `guide`.
-- **Selection and cursor:** `anchorIndex` and `selectedIndex` form a contiguous block (`normalizeBlock`). `cursorStart` records the start time of the focused row, which disambiguates repeats of the same item within a day.
+- **Selection and cursor:** `anchorIndex` and `selectedIndex` form a contiguous block (`normalizeBlock`). `cursorStart` records the start time of the focused row, which disambiguates repeats of the same item within a day. The stored selection (`storedSelected`, `storedAnchor`, `storedCursorStart`) only counts while it is a row of the day shown; otherwise the selection is derived (`fallbackRow`) as the row on air, or the day's first lineup row. A channel opens with nothing picked (`-1`), so it opens with what's on air selected. A picked item can also air on another day (on a long cycle, weeks away), and the fallback keeps Insert, Remove and Move on a row you can see.
 - **Dialogs for full editing:** `insertOpen`, `libraryPicker` (`{ purpose: 'insert' | 'slot-show' | 'movies', … }`), `listsOpen` (`'filler' | 'custom'`), `settingsOpen`, and `catalog` (custom shows, filler lists, smart collections and channels for slot sources).
 - **Editing:**
   - `history` (`lib/history.ts`); `grab` (`{ before, block }` while a block is picked up); `draggedIndex`.
@@ -376,7 +377,7 @@ block (`followBlock`, which uses `occurrenceStart`).
 | Move to time | Move dialog (live preview via `previewTime`) | `moveToTime` → `moveBlockToTime`, which tries every insertion point against the real cycle and returns the exact resulting start |
 | Pick up / slide / drop | OK/Enter, ↑/↓, OK/Enter; inspector button; Edit menu | `pickUp` stores `grab`; `slideGrab` → `shiftBlock` without history; `drop` records one entry; `cancelGrab` restores `grab.before` |
 | Undo / Redo / Revert all | ⌘Z / ⇧⌘Z / Ctrl+Y, Edit menu, edit list | `undo` / `redo` (`lib/history.ts`); `revertAll` restores the baseline and clears history |
-| Insert | `I`, Edit menu, inspector, empty-lineup inspector | `InsertDialog` → `insertAt(where, items, label, meta)` → `insertItems`. Library programs come from `LibraryBrowser` via `pickFromLibrary` → `lineupEntry`; their metadata is merged into `programming.programs`. Breaks use `makeCommercialBreak` (flex with `fillerConfig`); also `makeFlex` and `makeRedirect`. |
+| Insert | `I`, Edit menu, inspector, empty-lineup inspector | `InsertDialog` → `insertAt(where, items, label, meta)` → `insertPoint` (`boundaryAt` for a time, `insertedStart` next to the selection) → `insertItems`; then the desk shows the day the items air and puts the cursor on them. With **Keep what's on air in place** (`keepOnAir`, stored in the draft), the desk projects from `channelStart = keptStartTime(Tunarr's start, base length, draft length, now)` and places inserts with `startWith(added)`, so the preview matches what the save sets. Library programs come from `LibraryBrowser` via `pickFromLibrary` → `lineupEntry`; their metadata is merged into `programming.programs`. Breaks use `makeCommercialBreak` (flex with `fillerConfig`); also `makeFlex` and `makeRedirect`. |
 | Remove | `Delete`, Edit menu, inspector | `removeSelection` → `removeBlock` |
 | Change length | Inspector `LengthEditor` (flex, breaks, redirects) | `changeLength` → `setItemDuration` (returns a new item object) |
 
