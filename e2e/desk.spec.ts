@@ -192,7 +192,7 @@ test('inserts a commercial break that plays a filler list', async ({ page }) => 
   await page.locator('.program', { hasText: 'Bravo Report' }).first().click();
   await page.getByRole('button', { name: 'Insert…' }).click();
   const insert = page.getByRole('dialog', { name: 'Insert into the lineup' });
-  await insert.getByRole('radio', { name: 'Commercial break' }).click();
+  await insert.getByRole('radio', { name: 'Commercial break', exact: true }).click();
   await insert.getByLabel(/Station Ads/).check();
   await insert.getByLabel('Length minutes').fill('3');
   await insert.getByRole('button', { name: 'Insert' }).click();
@@ -499,7 +499,7 @@ test('keeps what is on air in place while inserting, by moving the start time on
   await onAir.click();
   await page.keyboard.press('i');
   const insert = page.getByRole('dialog', { name: 'Insert into the lineup' });
-  await insert.getByRole('radio', { name: 'Flex time' }).click();
+  await insert.getByRole('radio', { name: 'Flex time', exact: true }).click();
   await insert.getByLabel(/Keep what’s on air in place/).check();
   await insert.getByRole('button', { name: 'Insert', exact: true }).click();
   await expect(page.locator('.edit-list')).toContainText('Inserted flex time at');

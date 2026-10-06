@@ -253,7 +253,7 @@ describe('live mode', () => {
   it('warns before saving over a generated schedule', async () => {
     const { requests } = fakeCompanion({ schedule: { type: 'time', slots: [] } });
     render(<Home />);
-    await screen.findAllByText('Alpha Movie');
+    await pickAlpha();
     expect(screen.getByText('Generated schedule')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: /Later/ }));
 
@@ -272,7 +272,7 @@ describe('live mode', () => {
   it('keeps changes and reports the error when a save fails', async () => {
     const { fetchMock } = fakeCompanion();
     render(<Home />);
-    await screen.findAllByText('Alpha Movie');
+    await pickAlpha();
     fireEvent.click(screen.getByRole('button', { name: /Later/ }));
     const passthrough = fetchMock.getMockImplementation()!;
     fetchMock.mockImplementation((input, init) => (init?.method === 'POST'
@@ -331,7 +331,7 @@ describe('live mode', () => {
   it('drops a stored draft when Tunarr’s lineup changed since it was made', async () => {
     const { state } = fakeCompanion();
     const first = render(<Home />);
-    await screen.findAllByText('Alpha Movie');
+    await pickAlpha();
     fireEvent.click(screen.getByRole('button', { name: /Later/ }));
     await waitFor(async () => expect((await draftStore().get('chan-news'))?.dirty).toBe(true));
     first.unmount();
@@ -404,7 +404,7 @@ describe('programming desk tools', () => {
   it('refuses to overwrite changes made elsewhere since loading', async () => {
     const { requests, state } = fakeCompanion();
     render(<Home />);
-    await screen.findAllByText('Alpha Movie');
+    await pickAlpha();
     fireEvent.click(screen.getByRole('button', { name: /Later/ }));
     // Someone edits the channel in Tunarr's own UI meanwhile.
     state.lineup = [...state.lineup].reverse();
@@ -570,7 +570,8 @@ describe('programming desk tools', () => {
     render(<Home />);
     fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Use demo data' }));
     await screen.findByText('Studio Selects');
-    fireEvent.click(screen.getByRole('button', { name: /Later/ }));
+    // Any edit will do; what's on air may be the lineup's last item.
+    fireEvent.click([screen.getByRole('button', { name: /Later/ }), screen.getByRole('button', { name: /Earlier/ })].find((button) => !(button as HTMLButtonElement).disabled)!);
     fireEvent.click(screen.getByRole('button', { name: 'Demo mode' }));
     fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Connect to Tunarr' }));
     expect(within(await screen.findByRole('alertdialog')).getByText('Discard unsaved changes?')).toBeTruthy();
@@ -828,6 +829,25 @@ describe('full lineup editing', () => {
     expect(state.lineup.some((item) => item.type === 'flex' && item.duration === 2 * 60_000)).toBe(true);
     // Saved and reloaded from the moved start time, what's on air is still where it was.
     await waitFor(() => expect(onAir()).toBe(before));
+  });
+
+  it('lists what is picked before inserting, and names it in the edit list', async () => {
+    fakeCompanion();
+    render(<Home />);
+    await pickAlpha();
+    fireEvent.click(screen.getAllByRole('button', { name: 'Insert…' })[0]);
+    fireEvent.click(within(await screen.findByRole('dialog', { name: 'Insert into the lineup' })).getByRole('button', { name: 'Browse library…' }));
+    const library = await screen.findByRole('dialog', { name: 'Insert programs' });
+    fireEvent.click(await within(library).findByRole('button', { name: 'Add Zulu Movie (1999)' }));
+    const picked = within(library).getByRole('list', { name: 'Selected programs' });
+    expect(within(picked).getByText('Zulu Movie (1999)')).toBeTruthy();
+    // A wrong pick can be taken out before anything is inserted.
+    fireEvent.click(within(picked).getByRole('button', { name: 'Remove Zulu Movie (1999)' }));
+    expect(within(library).queryByRole('list', { name: 'Selected programs' })).toBeNull();
+    expect((within(library).getByRole('button', { name: /^Insert/ }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(within(library).getByRole('button', { name: 'Add Zulu Movie (1999)' }));
+    fireEvent.click(within(library).getByRole('button', { name: 'Insert 1' }));
+    expect(await screen.findByText(/^Inserted “Zulu Movie” at /)).toBeTruthy();
   });
 
   it('inserts a commercial break that plays from filler lists', async () => {

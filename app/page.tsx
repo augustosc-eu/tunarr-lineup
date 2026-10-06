@@ -102,6 +102,13 @@ const NOW_TICK_MS = 15_000;
 
 const dateLabel = (value: string) => new Intl.DateTimeFormat('en', { weekday: 'long', month: 'long', day: 'numeric' }).format(new Date(`${value}T12:00:00`));
 const inputDate = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+/** “A”, “A” and “B”, or “A”, “B” and 3 more: what an insert added, for the edit list. */
+const insertedLabel = (programs: ContentProgram[]) => {
+  const titles = programs.map((program) => `“${String((program.program as { title?: string }).title ?? 'program')}”`);
+  if (titles.length <= 2) return titles.join(' and ');
+  if (titles.length === 3) return `${titles[0]}, ${titles[1]} and ${titles[2]}`;
+  return `${titles[0]}, ${titles[1]} and ${titles.length - 2} more`;
+};
 const inputTime = (ms: number) => { const date = new Date(ms); return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`; };
 const fullTimeLabel = (ms: number) => `${new Intl.DateTimeFormat('en', { weekday: 'short' }).format(new Date(ms))} ${clockTimecode(ms)}`;
 const dayPeriod = (ms: number) => {
@@ -978,10 +985,10 @@ export default function Home() {
     setLibraryPicker(null);
     if (!picker) return;
     if (picker.purpose === 'insert' && 'programs' in pick) {
-      const entries = pick.programs.filter((program) => program.duration > 0).map(lineupEntry);
-      if (!entries.length) return;
-      const count = entries.length;
-      insertAt(picker.where, entries.map((entry) => entry.item), count === 1 ? `“${String((pick.programs[0].program as { title?: string }).title ?? 'program')}”` : `${count} programs`, Object.fromEntries(entries.map((entry) => entry.meta)));
+      const programs = pick.programs.filter((program) => program.duration > 0);
+      if (!programs.length) return;
+      const entries = programs.map(lineupEntry);
+      insertAt(picker.where, entries.map((entry) => entry.item), insertedLabel(programs), Object.fromEntries(entries.map((entry) => entry.meta)));
     } else if (picker.purpose === 'slot-show' && 'show' in pick) {
       setSlotEditor((current) => {
         const option = showOption(pick.show);

@@ -177,6 +177,12 @@ export function LibraryBrowser({ title, mode, confirmLabel = 'Add', onPick, onCl
           {page + 1 < totalPages && <button className="wide" disabled={loading} onClick={() => { setLoading(true); setPage((value) => value + 1); }}>{loading ? 'Loading…' : 'Load more'}</button>}
         </div>
 
+        {mode !== 'show' && basket.length > 0 && <ol className="basket-list" aria-label="Selected programs">
+          {basket.map((program) => {
+            const label = itemLabel(program.program as LibraryItem);
+            return <li key={program.id}><span>{label}</span><small>{durationTimecode(program.duration)}</small><button className="quiet" aria-label={`Remove ${label}`} onClick={() => setBasket((current) => current.filter((entry) => entry.id !== program.id))}>×</button></li>;
+          })}
+        </ol>}
         {mode !== 'show' && <div className="dialog-actions library-basket">
           <span>{basket.length ? <><b>{basket.length.toLocaleString('en')}</b> selected · {durationTimecode(basketDuration)}</> : 'Nothing selected yet.'}</span>
           <span className="spacer" />
