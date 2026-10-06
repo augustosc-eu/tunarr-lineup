@@ -1,7 +1,7 @@
 # Example: run Tunarr and the Lineup companion on one Docker network.
 #
 #   cp docker-compose.example.yml docker-compose.yml
-#   docker compose up -d --build
+#   docker compose up -d
 #
 # Then open Lineup at http://localhost:3000 (Tunarr itself stays at :8000).
 # The browser only talks to Lineup; Lineup reaches Tunarr as http://tunarr:8000
@@ -25,8 +25,9 @@ services:
       - tunarr
 
   lineup:
-    build: .
-    # image: tunarr-lineup:latest
+    image: ghcr.io/augustosc-eu/tunarr-lineup:latest
+    # Or build from this repository instead:
+    # build: .
     container_name: tunarr-lineup
     restart: unless-stopped
     depends_on:

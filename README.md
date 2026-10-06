@@ -6,6 +6,25 @@ insert and remove programs, build slot schedules, and add commercials and
 filler, all saved through Tunarr's own API. It is designed to be driven from a
 TV with a remote as well as with a mouse and keyboard.
 
+![The Lineup programming desk at 1920×1080: channel list, the day's schedule with the program on air, and the selected program's inspector](docs/screenshot.png)
+
+## Quick start
+
+You need a running [Tunarr](https://tunarr.com) server. Run the companion next
+to it and point `TUNARR_URL` at Tunarr's address as the container sees it:
+
+```sh
+docker run -d --name tunarr-lineup -p 3000:3000 \
+  -e TUNARR_URL=http://192.168.1.50:8000 \
+  -v lineup-data:/data \
+  ghcr.io/augustosc-eu/tunarr-lineup:latest
+```
+
+Open **http://localhost:3000** (or the machine's IP address). The image runs on
+amd64 and arm64. Lineup can rewrite your channels, so read [Sign-in](#sign-in)
+before making it reachable by anyone else. To run Tunarr and Lineup together,
+see [Run with Docker Compose](#run-with-docker-compose-recommended).
+
 ## Programming desk features
 
 - **On-air view.** A red line marks the program on air now, timed to the second, and **Now** (or the `N` key) jumps to it.
@@ -193,7 +212,7 @@ only sends the password to the address you signed in on.
 ```sh
 cp docker-compose.example.yml docker-compose.yml
 # edit the Tunarr volume path / TZ, or drop the tunarr service if you already run it
-docker compose up -d --build
+docker compose up -d
 ```
 
 Open **http://localhost:3000**. Tunarr itself stays at http://localhost:8000.
@@ -205,7 +224,9 @@ Open **http://localhost:3000**. Tunarr itself stays at http://localhost:8000.
 - Lineup can rewrite channel programming. Publish it as `127.0.0.1:3000:3000` if it should only be reachable from the Docker host.
 - Saved templates are kept in the `lineup-data` named volume (`/data` in the container). Add the AI settings from the compose file's comments to turn on **Ask AI…**.
 
-To build and run only the companion against an existing Tunarr:
+The compose file uses the published image (`ghcr.io/augustosc-eu/tunarr-lineup`, tags `latest`
+or a version such as `0.1.0`). To build it from source instead, replace
+`image:` with `build: .` on the `lineup` service, or:
 
 ```sh
 docker build -t tunarr-lineup .
@@ -311,6 +332,12 @@ Tests live in `tests/`:
 - `lineup.test.ts`, `broadcast.test.ts`: reorder, block moves, move-to-time, timecode, day totals, CSV, undo history, artwork URLs, and save payload preservation for every lineup item type.
 - `page.test.tsx`: live loading, date navigation, reorder → save → re-fetch, conflict detection, remote-key slide, block moves, menus, log export, and no silent demo fallback.
 - `e2e/desk.spec.ts`: the real browser flow at 1920×1080 and phone width.
+
+## Releases
+
+See [CHANGELOG.md](CHANGELOG.md). Publishing a GitHub release builds and pushes
+the image for amd64 and arm64 (`.github/workflows/release.yml`). Security
+reports: [SECURITY.md](SECURITY.md).
 
 ## License
 

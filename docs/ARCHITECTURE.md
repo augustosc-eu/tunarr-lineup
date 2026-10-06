@@ -88,6 +88,7 @@ server implements those paths.
 | `vitest.config.ts` | Unit/UI tests (`tests/**/*.test.{ts,tsx}`, default env `node`). |
 | `playwright.config.ts`, `e2e/` | End-to-end suite: `e2e/desk.spec.ts` against the built companion and `e2e/fake-tunarr.mjs`. |
 | `.github/workflows/ci.yml` | CI: lint, typecheck, unit tests, both builds, e2e, Docker build plus healthcheck. |
+| `.github/workflows/release.yml` | On a published GitHub release: builds the image for amd64 and arm64, pushes it to `ghcr.io/<owner>/<repo>` (version, major.minor, `latest`), and checks its healthcheck. |
 | `Dockerfile`, `.dockerignore`, `docker-compose.example.yml` | Companion container and an example stack alongside Tunarr. |
 | `public/` | `favicon.svg`, `og.png`. Served by both targets. |
 | Generated (do not edit) | `dist/`, `dist-local/`, `dist-server/`, `.next/types/`, `.vinext/`, `.wrangler/`, `next-env.d.ts`, `test-results/`, `playwright-report/`. |
@@ -535,11 +536,12 @@ bundle (`envPrefix`); none are used.
   3. It has a `HEALTHCHECK` on `/healthz` and starts with `CMD node dist-server/main.js`.
 
   No `TUNARR_URL` or password is baked in.
-- **`docker-compose.example.yml`:** Tunarr plus Lineup on a shared network, with `TUNARR_URL=http://tunarr:8000`. Commented options cover `LINEUP_PASSWORD` and timeouts, the amd64-only Tunarr image, and binding to `127.0.0.1`.
+- **`docker-compose.example.yml`:** Tunarr plus Lineup (the published `ghcr.io/augustosc-eu/tunarr-lineup` image, or `build: .`) on a shared network, with `TUNARR_URL=http://tunarr:8000`. Commented options cover `LINEUP_PASSWORD` and timeouts, the amd64-only Tunarr image, and binding to `127.0.0.1`.
 - **Hosted:** `vinext build` with the `cloudflare()` plugin → `dist/`.
 - **CI** (`.github/workflows/ci.yml`):
   - **`checks` job:** `npm ci`, lint, typecheck, `npm test`, both builds, `playwright install chromium`, `test:e2e`, and the report as an artifact on failure.
   - **`docker` job:** image build, then curls `/healthz` until the container answers.
+- **Release** (`.github/workflows/release.yml`): publishing a GitHub release `vX.Y.Z` builds the multi-arch image with QEMU and Buildx, pushes it to GHCR, then runs the pushed image and curls `/healthz`. It can also be run by hand for an existing tag. Notes come from `CHANGELOG.md`.
 
 ## 13. Testing
 
