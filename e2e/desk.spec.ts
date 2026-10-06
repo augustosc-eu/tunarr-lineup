@@ -475,14 +475,15 @@ test('inserts a movie at a date and time on another day, from the keyboard', asy
   const date = `${tomorrow.getFullYear()}-${pad(tomorrow.getMonth() + 1)}-${pad(tomorrow.getDate())}`;
   await insert.getByLabel('Insert date').fill(date);
   await insert.getByLabel('Insert time').fill('10:00');
-  await expect(insert.getByRole('status', { name: 'Insert placement' })).toContainText(/Starts .*10:/);
+  await expect(insert.getByRole('status', { name: 'Insert placement' })).toContainText(/Starts .*(1[0-3]):\d\d:\d\d/);
   await page.screenshot({ path: test.info().outputPath('insert-at-time.png') });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await insert.getByRole('button', { name: 'Browse library…' }).click();
   const library = page.getByRole('dialog', { name: 'Insert programs' });
   await library.getByRole('button', { name: 'Add Zulu Dawn (1979)' }).click();
   await library.getByRole('button', { name: 'Insert 1' }).click();
-  await expect(page.locator('.edit-list')).toContainText('Inserted “Zulu Dawn” at 10:');
+  // It starts at the first program boundary at or after 10:00 (when the program on air then ends).
+  await expect(page.locator('.edit-list')).toContainText(/Inserted “Zulu Dawn” at (1[0-3]):\d\d:\d\d/);
   await expect(page.locator('.program.cursor')).toContainText('Zulu Dawn');
   await expect(page.getByLabel('Jump to date')).toHaveValue(date);
   await page.keyboard.press('Control+s');
