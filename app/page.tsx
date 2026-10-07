@@ -307,9 +307,10 @@ export default function Home() {
       .catch(() => { /* Falls back to every station-ID list. */ });
     return () => { cancelled = true; };
   }, [live, activeChannelId]);
-  const stationIds = useMemo(() => channelStationIds(filler.stationIdsByList, channelFiller.channelId === activeChannelId ? channelFiller.listIds : []), [filler.stationIdsByList, channelFiller, activeChannelId]);
   const lineup = programming.lineup;
   const activeChannel = channels.find((channel) => channel.id === activeChannelId);
+  // IDs named for this channel ("El 7 ID.mp4") plus its ticked lists; never another channel's.
+  const stationIds = useMemo(() => channelStationIds(filler.stationIdsByList, channelFiller.channelId === activeChannelId ? channelFiller.listIds : [], activeChannel, channels, spotTitle), [filler.stationIdsByList, channelFiller, activeChannelId, activeChannel, channels]);
   const activeChannelIndex = channels.findIndex((channel) => channel.id === activeChannelId);
   const dirty = useMemo(() => !sameLineup(lineup, originalLineup), [lineup, originalLineup]);
   const changed = useMemo(() => (dirty ? changedPositions(lineup, originalLineup) : new Set<number>()), [dirty, lineup, originalLineup]);
@@ -1027,7 +1028,7 @@ export default function Home() {
   const openBreaksWithStationIds = () => {
     if (grab || slotPreview) return;
     if (!stationIds.ids.length) {
-      notify('No station IDs yet. Tag a filler list as Station IDs in Lists → Station IDs…');
+      notify(Object.keys(filler.stationIdsByList).length ? `No station IDs for ${activeChannel?.name ?? 'this channel'}. Name one for it (“${activeChannel?.name ?? 'Channel'} ID.mp4”) or tick a list in Channel Settings → Commercials.` : 'No station IDs yet. Tag a filler list as Station IDs in Lists → Station IDs…');
       return;
     }
     const result = openBreaksWithIds(lineup, stationIds.ids, (item) => !!item.id && filler.spots.get(item.id) === 'station-id');
@@ -1704,6 +1705,8 @@ export default function Home() {
         nextStationId={nextStationId}
         stationIdTitle={nextStationId ? spotTitle(nextStationId) : undefined}
         ownStationIds={stationIds.own}
+        stationIds={stationIds.ids}
+        channelName={activeChannel.name}
         onInsert={(items, label, where, meta) => insertAt(where, items, label, meta)}
         onClose={() => setInsertOpen(false)}
       />}
