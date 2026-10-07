@@ -57,7 +57,8 @@ function sendFile(res: http.ServerResponse, filePath: string, method: string, im
 }
 
 export function createLineupServer({ config, auth, staticRoot, hosts = { any: false, names: [] } }: { config: ProxyConfig; auth: AuthConfig; staticRoot: string; hosts?: HostPolicy }) {
-    return http.createServer(async (req, res) => {
+  // Video uploads can take a while on a slow network; Node's 5-minute default would cut them off.
+  return http.createServer({ requestTimeout: config.mediaFolder ? 4 * 3_600_000 : 300_000 }, async (req, res) => {
     try {
       const method = req.method ?? 'GET';
       const pathname = (req.url ?? '/').split('?')[0];

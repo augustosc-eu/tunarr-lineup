@@ -1,3 +1,6 @@
+import { mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 
 const FAKE = 'http://127.0.0.1:18000';
@@ -346,7 +349,7 @@ test('adds a media source and turns on its library without exposing secrets', as
   await dialog.getByLabel('Use library TV Shows').check();
   await expect(dialog.getByRole('status')).toContainText('Turned on TV Shows');
   const sources = (await fullState(page)).mediaSources;
-  expect(sources[1]).toMatchObject({ name: 'Den Plex', type: 'plex', uri: 'http://192.168.1.20:32400', accessToken: 'abcdef123456', libraries: [{ name: 'TV Shows', enabled: true }] });
+  expect(sources.find((source) => source.name === 'Den Plex')).toMatchObject({ name: 'Den Plex', type: 'plex', uri: 'http://192.168.1.20:32400', accessToken: 'abcdef123456', libraries: [{ name: 'TV Shows', enabled: true }] });
   expect(await dialog.innerText()).not.toContain('abcdef123456');
 });
 
@@ -552,4 +555,35 @@ test('tags a station-ID list, opens a commercial break with an ID and shows the 
   ]);
   // No page-width overflow with the strip, hour logs and rundowns on screen.
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+});
+
+test('picks up uploaded station IDs and added folders as filler lists by itself', async ({ page }) => {
+  const fileName = `Top of hour ${Date.now()}.mp4`;
+  await page.getByRole('menuitem', { name: 'Setup' }).click();
+  await page.getByRole('menuitem', { name: /Filler Folders/ }).click();
+  const dialog = page.getByRole('dialog', { name: 'Filler folders' });
+  // The upload folder is added to Tunarr without asking.
+  await expect(dialog.locator('.source-block', { hasText: 'Station IDs' }).first()).toContainText('scanned');
+  await dialog.getByLabel('Upload to Station IDs').setInputFiles({ name: fileName, mimeType: 'video/mp4', buffer: Buffer.from('not really a video') });
+  await expect(dialog.getByRole('status')).toContainText('Made “Station IDs (folder)” (1 video)');
+  await expect(dialog.getByText(fileName)).toBeVisible();
+  let lists = (await fullState(page)).fillerLists;
+  expect(lists.find((list) => list.name === 'Station IDs (folder)')?.programs).toHaveLength(1);
+
+  // A folder already on the Tunarr server, filled by hand: its list appears after the scan.
+  const folder = await mkdtemp(path.join(tmpdir(), 'lineup-e2e-ads-'));
+  await writeFile(path.join(folder, 'Soda.mp4'), 'x');
+  await writeFile(path.join(folder, 'Cereal.mp4'), 'x');
+  await dialog.getByLabel('New folder role').selectOption('commercials');
+  await dialog.getByLabel('Folder path').fill(folder);
+  await dialog.getByRole('button', { name: 'Add folder' }).click();
+  await expect(dialog.getByRole('status')).toContainText('(2 videos)');
+  lists = (await fullState(page)).fillerLists;
+  expect(lists.find((list) => list.name.startsWith('Commercials – lineup-e2e-ads-'))?.programs).toHaveLength(2);
+  await expect(dialog.locator('.source-block', { hasText: folder })).toContainText('→ “Commercials – lineup-e2e-ads-');
+
+  // A new file reaches the list after a scan, with no button for the list.
+  await writeFile(path.join(folder, 'Juice.mp4'), 'x');
+  await dialog.locator('.source-block', { hasText: folder }).getByRole('button', { name: 'Scan now' }).click();
+  await expect(dialog.getByRole('status')).toContainText('(3 videos)');
 });

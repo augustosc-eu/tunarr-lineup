@@ -9,6 +9,7 @@ import { LibraryBrowser, type LibraryPick } from './components/LibraryBrowser';
 import { ListsManager } from './components/ListsManager';
 import { MenuBar, type Menu } from './components/MenuBar';
 import { MediaSourcesDialog } from './components/MediaSourcesDialog';
+import { FillerFoldersDialog } from './components/FillerFoldersDialog';
 import { MoveDialog } from './components/MoveDialog';
 import { NewChannelDialog } from './components/NewChannelDialog';
 import { ScheduleEditor } from './components/ScheduleEditor';
@@ -272,7 +273,7 @@ export default function Home() {
   // Station-log view: each commercial break expanded into its (estimated) spots.
   const [showRundowns, setShowRundowns] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [setupDialog, setSetupDialog] = useState<'sources' | 'transcode' | 'smart' | null>(null);
+  const [setupDialog, setSetupDialog] = useState<'sources' | 'folders' | 'transcode' | 'smart' | null>(null);
   const [newChannel, setNewChannel] = useState<{ copyFrom: string } | null>(null);
   const [templatesOpen, setTemplatesOpen] = useState(false);
   const [eventOpen, setEventOpen] = useState(false);
@@ -1317,6 +1318,7 @@ export default function Home() {
     ] },
     { title: 'Setup', items: [
       { label: 'Media Sources…', disabled: !live, onSelect: () => setSetupDialog('sources') },
+      { label: 'Filler Folders…', disabled: !live, onSelect: () => setSetupDialog('folders') },
       { label: 'Transcode Profiles…', disabled: !live, onSelect: () => setSetupDialog('transcode') },
     ] },
     { title: 'Help', items: [
@@ -1707,6 +1709,7 @@ export default function Home() {
       {templatesOpen && <TemplatesDialog channels={channels} activeChannel={activeChannel} activeHasSchedule={hasGeneratedSchedule(programming)} catalog={catalog} fillerRoles={filler.roles} onClose={() => setTemplatesOpen(false)} onApply={applyTemplate} />}
       {setupDialog === 'smart' && <SmartCollectionsManager onClose={() => setSetupDialog(null)} onChanged={() => { if (slotEditor.open || catalog) loadCatalog(); }} />}
       {setupDialog === 'sources' && <MediaSourcesDialog onClose={() => setSetupDialog(null)} />}
+      {setupDialog === 'folders' && <FillerFoldersDialog roles={filler.roles} onClose={() => setSetupDialog(null)} onChanged={() => { filler.reload(); if (slotEditor.open || catalog) loadCatalog(); }} />}
       {setupDialog === 'transcode' && <TranscodeProfilesDialog onClose={() => setSetupDialog(null)} />}
       {newChannel && <NewChannelDialog
         channels={channels}

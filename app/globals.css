@@ -462,6 +462,13 @@ input[type=checkbox] { width:1.25rem; height:1.25rem; margin:0; accent-color:var
 .lists-modal { width:min(74rem,100%); max-height:92vh; }
 .lists-modal:before { content:'Lists'; }
 .sources-modal:before { content:'Media Sources'; }
+.folders-modal:before { content:'Filler Folders'; }
+.folders-list { max-height:40vh; margin-bottom:0.5rem; }
+.file-row { grid-template-columns:minmax(0,1fr) auto auto; min-height:2.75rem; }
+.file-row > span:first-child { min-width:0; }
+.file-row b,.file-row small { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.file-row select,.source-head select { height:2.125rem; padding:0 0.375rem; background:#fff; border:1px solid #111; border-radius:0; box-shadow:inset 1px 1px #777,inset -1px -1px #fff; }
+.add-folder { align-items:end; }
 .transcode-modal:before { content:'Transcode Profiles'; }
 .new-channel-modal:before { content:'New Channel'; }
 .lists-layout { display:grid; grid-template-columns:minmax(14rem,20rem) 1fr; gap:0.75rem; }
@@ -633,7 +640,7 @@ input[type=checkbox] { width:1.25rem; height:1.25rem; margin:0; accent-color:var
   .overlay { padding:0.375rem 0.375rem calc(0.375rem + env(safe-area-inset-bottom)); }
   .overlay .modal { width:100%; max-height:calc(var(--vh) - var(--bar) - 0.75rem - env(safe-area-inset-bottom)); padding-inline:0.625rem; }
   .candidate { grid-template-columns:1.9375rem minmax(0,1fr); }.candidate-actions { grid-column:2; flex-wrap:wrap; }
-  .rule-row,.library-row,.role-row,.block-row,.role-editor-row,.filler-row { grid-template-columns:1fr; }.day-grid-row { grid-template-columns:4.5rem 1fr; }.logo-editor { display:block; }.head-logo { display:none; }
+  .rule-row,.library-row,.file-row,.role-row,.block-row,.role-editor-row,.filler-row { grid-template-columns:1fr; }.day-grid-row { grid-template-columns:4.5rem 1fr; }.logo-editor { display:block; }.head-logo { display:none; }
   .settings-grid,.schedule-settings { grid-template-columns:1fr; }
   .slot-row .slot-section select,.slot-section select,.slot-row .slot-commercials select { min-width:0; }
   .dialog-actions .spacer { display:none; }
@@ -661,3 +668,5 @@ input[type=checkbox] { width:1.25rem; height:1.25rem; margin:0; accent-color:var
   input[type=checkbox] { width:1.5rem; height:1.5rem; }
   input:not([type=checkbox]):not([type=radio]),select,textarea { font-size:max(1rem,16px)!important; }
 }
+.other-libraries { margin:0.25rem 0 0.5rem; }
+.other-libraries summary { min-height:2.25rem; padding:0.375rem 0; cursor:pointer; font-size:0.9375rem; }

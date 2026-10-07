@@ -2,17 +2,9 @@
 // programs, so Lineup keeps the role itself (LINEUP_DATA_DIR/filler-roles.json).
 // Pure helpers for the browser; the role list itself is in server/fillerRoles.ts.
 
-import type { FillerRole, FillerRoles } from '../server/fillerRoles';
+import { guessRole, type FillerRole, type FillerRoles } from '../server/fillerRoles';
 
-export { FILLER_ROLES, isFillerRole, type FillerRole, type FillerRoles } from '../server/fillerRoles';
-
-export const ROLE_LABELS: Record<FillerRole, string> = {
-  'station-id': 'Station IDs',
-  commercials: 'Commercials',
-  promos: 'Promos',
-  bumpers: 'Bumpers',
-  other: 'Other filler',
-};
+export { FILLER_ROLES, folderRole, guessRole, isFillerRole, ROLE_LABELS, type FillerRole, type FillerRoles } from '../server/fillerRoles';
 
 /** Singular, for a spot or a row badge. */
 export const ROLE_SPOT_LABELS: Record<FillerRole, string> = {
@@ -22,24 +14,6 @@ export const ROLE_SPOT_LABELS: Record<FillerRole, string> = {
   bumpers: 'Bumper',
   other: 'Filler',
 };
-
-const IDENT = /\bids?\b|ident|identificador|cortina|sign[- ]?(on|off)|top of (the )?hour/i;
-const PROMO = /promo|trailer|coming up|next on|avance/i;
-const BUMPER = /bumper|bump|interstitial|separador/i;
-const COMMERCIAL = /commercial|\bads?\b|advert|\bspots?\b|tanda|anuncio|publicidad|comercial/i;
-
-/**
- * A suggestion from the list's name, used only when no role is stored.
- * "Station" alone means IDs only when nothing more specific matches ("Station Ads").
- */
-export function guessRole(name: string): FillerRole | undefined {
-  if (IDENT.test(name)) return 'station-id';
-  if (PROMO.test(name)) return 'promos';
-  if (BUMPER.test(name)) return 'bumpers';
-  if (COMMERCIAL.test(name)) return 'commercials';
-  if (/station/i.test(name)) return 'station-id';
-  return undefined;
-}
 
 /** The stored role, else the name's guess. */
 export const roleOf = (list: { id: string; name: string }, roles: FillerRoles): FillerRole | undefined => roles[list.id] ?? guessRole(list.name);

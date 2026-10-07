@@ -129,6 +129,8 @@ function fakeCompanion(options: { schedule?: { type: string; slots: unknown[]; [
     const listPrograms = /^\/api\/tunarr\/filler-lists\/([^/]+)\/programs$/.exec(url.pathname);
     if (listPrograms) return reply({ status: 200, body: state.listPrograms[listPrograms[1]] ?? [] });
     if (url.pathname === '/api/tunarr/filler-roles') return reply({ status: 200, body: state.fillerRoles });
+    // The desk picks up filler folders on load; this companion has none.
+    if (url.pathname === '/api/tunarr/filler-folders/sync') return reply({ status: 200, body: { connected: false, created: [], updated: [], errors: [] } });
     const role = /^\/api\/tunarr\/filler-roles\/([^/]+)$/.exec(url.pathname);
     if (role) {
       if (method === 'DELETE') delete state.fillerRoles[role[1]];
@@ -255,7 +257,7 @@ describe('live mode', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save lineup' }));
 
     await waitFor(() => expect(count(requests, 'POST', '/api/tunarr/channels/chan-news/programming')).toBe(1));
-    const post = requests.find((r) => r.method === 'POST')!;
+    const post = requests.find((r) => r.method === 'POST' && r.path.endsWith('/programming'))!;
     expect(post.body).toEqual({ type: 'manual', lineup: JSON.parse(JSON.stringify([original[1], original[0], ...original.slice(2)])), append: false });
     expect(state.lineup[0].type).toBe('flex');
 
@@ -357,7 +359,7 @@ describe('live mode', () => {
     fireEvent.click(screen.getAllByRole('button', { name: 'Undo' })[0]);
     fireEvent.click(await screen.findByRole('button', { name: 'Save lineup' }));
     await waitFor(() => expect(count(requests, 'POST', '/api/tunarr/channels/chan-news/programming')).toBe(2));
-    const posts = requests.filter((r) => r.method === 'POST');
+    const posts = requests.filter((r) => r.method === 'POST' && r.path.endsWith('/programming'));
     expect((posts[1].body as { lineup: LineupItem[] }).lineup.map((item) => item.id ?? item.type)).toEqual(mixedLineup().map((item) => item.id ?? item.type));
   });
 
@@ -431,7 +433,7 @@ describe('no silent fallback to demo mode', () => {
 });
 
 const lineupOrder = (requests: ReturnType<typeof fakeCompanion>['requests']) =>
-  (requests.find((r) => r.method === 'POST')!.body as { lineup: LineupItem[] }).lineup.map((item) => item.id ?? item.type);
+  (requests.find((r) => r.method === 'POST' && r.path.endsWith('/programming'))!.body as { lineup: LineupItem[] }).lineup.map((item) => item.id ?? item.type);
 
 describe('programming desk tools', () => {
   it('refuses to overwrite changes made elsewhere since loading', async () => {

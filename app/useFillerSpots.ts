@@ -41,6 +41,16 @@ export function useFillerSpots(live: boolean): FillerSpots {
   const [programs, setPrograms] = useState<Record<string, ContentProgram[]>>({});
   const [version, setVersion] = useState(0);
 
+  // Folders are picked up when the desk opens: new uploads and rescans reach their lists.
+  useEffect(() => {
+    if (!live) return;
+    let cancelled = false;
+    tunarrApi.syncFillerFolders()
+      .then((sync) => { if (!cancelled && (sync.created.length || sync.updated.length)) setVersion((current) => current + 1); })
+      .catch(() => { /* Optional: the desk works without it. */ });
+    return () => { cancelled = true; };
+  }, [live]);
+
   useEffect(() => {
     // Demo mode has no filler lists; the derived values below come out empty.
     if (!live) return;

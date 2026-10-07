@@ -3,6 +3,9 @@
 // and a channel's programming-related settings. Like the rest of the proxy,
 // each route is explicit, inputs are validated before any upstream call, and
 // responses are trimmed to what the interface needs.
+import { isFillerRole, type FillerRole } from './fillerRoles.js';
+import type { FillerRoleStore } from './fillerRoleStore.js';
+import { StoreError } from './jsonFile.js';
 import type { ProxyConfig, ProxyResponse, TunarrTarget } from './tunarrProxy.js';
 import { callTunarr, fail, json, UpstreamError } from './upstream.js';
 
@@ -18,6 +21,7 @@ export type ContentRoute =
   | { name: 'filler-lists'; methods: string[] }
   | { name: 'filler-list'; methods: string[]; id: string }
   | { name: 'filler-list-programs'; methods: string[]; id: string }
+  | { name: 'filler-list-from-library'; methods: string[] }
   | { name: 'custom-shows'; methods: string[] }
   | { name: 'custom-show'; methods: string[]; id: string }
   | { name: 'custom-show-programs'; methods: string[]; id: string }
@@ -29,6 +33,7 @@ export function matchContentRoute(path: string, channelIdPattern: RegExp): Conte
   if (path === '/media-sources') return { name: 'media-sources', methods: ['GET'] };
   if (path === '/library/search') return { name: 'library-search', methods: ['POST'] };
   if (path === '/filler-lists') return { name: 'filler-lists', methods: ['GET', 'POST'] };
+  if (path === '/filler-lists/from-library') return { name: 'filler-list-from-library', methods: ['POST'] };
   if (path === '/custom-shows') return { name: 'custom-shows', methods: ['GET', 'POST'] };
   if (path === '/smart-collections') return { name: 'smart-collections', methods: ['GET'] };
   let match = /^\/programs\/([^/]+)\/descendants$/.exec(path);
@@ -129,6 +134,35 @@ export function validateFillerListBody(body: unknown, creating: boolean): { body
     out.programs = checked.programs;
   }
   return { body: out };
+}
+
+/** Containers in a library; a filler list holds only playable items. */
+const CONTAINER_TYPES = new Set(['show', 'season', 'artist', 'album']);
+const PAGE_SIZE = 100;
+
+export type FromLibrary = { mediaSourceId: string; libraryId: string; listId?: string; name?: string; role?: FillerRole };
+
+export function validateFromLibrary(body: unknown): FromLibrary | { error: string } {
+  if (!isObject(body)) return { error: 'Send { "mediaSourceId", "libraryId", "name" or "listId", "role"? }.' };
+  if (typeof body.mediaSourceId !== 'string' || !UUID.test(body.mediaSourceId)) return { error: 'Choose a media source.' };
+  if (typeof body.libraryId !== 'string' || !UUID.test(body.libraryId)) return { error: 'Choose a folder.' };
+  if (body.listId !== undefined && (typeof body.listId !== 'string' || !UUID.test(body.listId))) return { error: 'List id is not valid.' };
+  if (body.listId === undefined && !validName(body.name)) return { error: 'The list needs a name (up to 200 characters).' };
+  if (body.role !== undefined && !isFillerRole(body.role)) return { error: 'Choose station-id, commercials, promos, bumpers or other.' };
+  return {
+    mediaSourceId: body.mediaSourceId,
+    libraryId: body.libraryId,
+    listId: body.listId as string | undefined,
+    name: typeof body.name === 'string' ? body.name.trim() : undefined,
+    role: body.role as FillerRole | undefined,
+  };
+}
+
+/** Everything Tunarr has indexed in one library, as filler-list entries (full programs, like Insert sends). */
+export function libraryEntries(results: unknown[]): Json[] {
+  return results.filter(isObject)
+    .filter((item) => typeof item.uuid === 'string' && UUID.test(item.uuid) && finite(item.duration) && item.duration > 0 && !CONTAINER_TYPES.has(String(item.type)))
+    .map((item) => ({ type: 'content', id: item.uuid, duration: item.duration, program: item }));
 }
 
 export function validateCustomShowBody(body: unknown, creating: boolean): { body: Json } | { error: string } {
@@ -339,6 +373,40 @@ type Context = {
 
 const LIST_NOT_FOUND = 'Tunarr could not find that list.';
 
+/**
+ * Creates (name) or refreshes (listId) a filler list from everything Tunarr
+ * indexed in one library, then stores its role and the list↔library link.
+ * Null when the library has nothing playable yet (Tunarr refuses empty lists).
+ */
+export async function buildFromLibrary(config: ProxyConfig, target: TunarrTarget, request: FromLibrary): Promise<{ id: string; count: number; storeError?: string } | null> {
+  const call = (verb: 'POST' | 'PUT', path: string, payload: unknown, notFound?: string) => callTunarr(config, target, verb, path, JSON.stringify(payload), notFound);
+  // Read the whole library; listings without search text page from 0.
+  const programs: Json[] = [];
+  for (let page = 0; programs.length < MAX_LIST_ITEMS; page += 1) {
+    const result = (await call('POST', '/api/programs/search', { mediaSourceId: request.mediaSourceId, libraryId: request.libraryId, query: {}, page, limit: PAGE_SIZE }, 'Tunarr could not find that folder.')) as Json | null;
+    const results = Array.isArray(result?.results) ? result!.results : [];
+    programs.push(...libraryEntries(results));
+    const total = finite(result?.totalHits) ? result!.totalHits : 0;
+    if (results.length < PAGE_SIZE || (page + 1) * PAGE_SIZE >= total) break;
+  }
+  if (!programs.length) return null;
+  const list = programs.slice(0, MAX_LIST_ITEMS);
+  let id = request.listId;
+  if (id) await call('PUT', `/api/filler-lists/${id}`, { programs: list }, LIST_NOT_FOUND);
+  else id = str(((await call('POST', '/api/filler-lists', { name: request.name, programs: list })) as Json | null)?.id);
+  if (!id) throw new UpstreamError(502, 'tunarr_invalid_response', 'Tunarr did not return the new list.');
+  // The list exists in Tunarr either way; a store failure is reported, not hidden.
+  const roles = config.fillerRoles as FillerRoleStore | undefined;
+  let storeError: string | undefined;
+  try {
+    if (roles && request.role) await roles.set(id, request.role);
+    if (roles) await roles.link(id, { mediaSourceId: request.mediaSourceId, libraryId: request.libraryId, builtAt: Date.now() });
+  } catch (error) {
+    storeError = error instanceof StoreError ? error.message : 'The list’s role could not be saved.';
+  }
+  return { id, count: list.length, ...(storeError ? { storeError } : {}) };
+}
+
 export async function handleContentRoute(route: ContentRoute, { config, target, method, body, withChannelLock }: Context): Promise<ProxyResponse> {
   const call = (verb: 'GET' | 'POST' | 'PUT' | 'DELETE', path: string, payload?: unknown, notFound?: string) =>
     callTunarr(config, target, verb, path, payload === undefined ? undefined : JSON.stringify(payload), notFound);
@@ -375,6 +443,13 @@ export async function handleContentRoute(route: ContentRoute, { config, target, 
       const checked = validateCustomShowBody(body, true);
       if ('error' in checked) return invalid(checked.error);
       return json(201, await call('POST', base, { ...checked.body, syncMediaSourceId: null, syncMediaSourceType: null, syncExternalPlaylistId: null }));
+    }
+    case 'filler-list-from-library': {
+      const checked = validateFromLibrary(body);
+      if ('error' in checked) return invalid(checked.error);
+      const built = await buildFromLibrary(config, target, checked);
+      if (!built) return fail(409, 'library_empty', 'Tunarr hasn’t found any videos in that folder yet. Scan it, give Tunarr a moment, then try again.');
+      return json(checked.listId ? 200 : 201, built);
     }
     case 'filler-list-programs':
       return json(200, await call('GET', `/api/filler-lists/${route.id}/programs`, undefined, LIST_NOT_FOUND));

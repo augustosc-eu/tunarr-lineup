@@ -2,7 +2,7 @@
 // knows or contacts the Tunarr server's own address.
 import type { Channel, ChannelLineup, ManualProgrammingRequest, Programming } from './lineup';
 import type { RuleSet } from '../server/smartCollection';
-import type { FillerRole, FillerRoles } from '../server/fillerRoles';
+import type { FillerFolders, FillerRole, FillerRoles } from '../server/fillerRoles';
 import type { Template } from '../server/templateSchema';
 import type { ChannelSettings, ContentProgram, ListSummary, ManagedSource, MediaSource, NamedItem, NewMediaSource, SearchResult, SmartCollectionView, TranscodeProfile } from './library';
 import type { SchedulePreview, Slot, SlotSchedule } from './schedule';
@@ -10,6 +10,11 @@ import type { SchedulePreview, Slot, SlotSchedule } from './schedule';
 export type ScheduleDraft = { type: SlotSchedule['type']; settings?: Record<string, unknown>; slots: Slot[]; extraPrograms?: string[] };
 export type AiStatus = { enabled: true; provider: string; model: string } | { enabled: false; message: string };
 export type AiProposal = { template: Template; lists: { commercials?: string; promos?: string }; notes: string };
+export type MediaFile = { name: string; size: number; modifiedAt: number };
+/** A role folder in the media folder, and its library in Tunarr once added. */
+export type MediaRoleFolder = { role: FillerRole; folder: string; files: MediaFile[]; tunarr: { mediaSourceId: string; libraryId: string; lastScannedAt?: number; scanning: boolean } | null };
+export type MediaFolderStatus = { enabled: true; maxBytes: number; folders: MediaRoleFolder[]; tunarrError?: string } | { enabled: false; message: string };
+export type FillerSync = { connected: boolean; created: Array<{ id: string; name: string; count: number; role: FillerRole }>; updated: Array<{ id: string; count: number }>; errors: string[] };
 export type LibraryQuery = { mediaSourceId: string; libraryId?: string; text?: string; type?: string; parentId?: string; page?: number; limit?: number };
 
 const jsonBody = (method: string, body: unknown): RequestInit => ({ method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
@@ -61,6 +66,32 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw new TunarrApiError(response.status, error?.code ?? 'http_error', error?.message ?? `Request failed (HTTP ${response.status}).`, error?.tunarrHost);
   }
   return data as T;
+}
+
+const mediaPath = (role: FillerRole, name: string) => `/api/tunarr/media-folder/${encodeURIComponent(role)}/${encodeURIComponent(name)}`;
+
+/** Uploads one video into a role folder. XHR, because fetch can't report upload progress. */
+export function uploadMediaFile(role: FillerRole, file: File, onProgress?: (fraction: number) => void): Promise<MediaFile> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('PUT', mediaPath(role, file.name));
+    xhr.setRequestHeader('content-type', 'application/octet-stream');
+    xhr.setRequestHeader('accept', 'application/json');
+    xhr.upload.onprogress = (event) => { if (event.lengthComputable) onProgress?.(event.loaded / event.total); };
+    xhr.onerror = () => reject(new TunarrApiError(0, 'upload_interrupted', 'The upload was interrupted. Check the connection and the Lineup server’s free disk space.'));
+    xhr.onload = () => {
+      let data: unknown;
+      try {
+        data = xhr.responseText ? JSON.parse(xhr.responseText) : null;
+      } catch {
+        data = undefined;
+      }
+      if (xhr.status >= 200 && xhr.status < 300 && data) return resolve(data as MediaFile);
+      const error = (data as ErrorBody | null | undefined)?.error;
+      reject(new TunarrApiError(xhr.status, error?.code ?? 'http_error', error?.message ?? `Upload failed (HTTP ${xhr.status}).`));
+    };
+    xhr.send(file);
+  });
 }
 
 const channelPath = (id: string) => `/api/tunarr/channels/${encodeURIComponent(id)}`;
@@ -149,6 +180,18 @@ export const tunarrApi = {
   previewSmartCollection: (body: { keywords?: string } & RuleSet) =>
     request<{ totalHits: number; sample: Array<{ id?: string; title: string; type?: string; year?: number }> }>('/api/tunarr/smart-collections/preview', jsonBody('POST', body)),
   fillerRoles: () => request<FillerRoles>('/api/tunarr/filler-roles'),
+  /** Lists built from folders, folders waiting for their first scan, and libraries not to pick up again. */
+  fillerFolders: () => request<FillerFolders>('/api/tunarr/filler-folders'),
+  /** Adds a folder on the Tunarr server with a role; its list is made after Tunarr's first scan. */
+  addFillerFolder: (path: string, role: FillerRole) => request<{ mediaSourceId: string; libraryId: string; name: string }>('/api/tunarr/filler-folders/add', jsonBody('POST', { path, role })),
+  /** Creates (name) or refreshes (listId) a filler list from everything Tunarr indexed in one folder. */
+  fillerListFromLibrary: (body: { mediaSourceId: string; libraryId: string; name?: string; listId?: string; role?: FillerRole }) =>
+    request<{ id: string; count: number; storeError?: string }>('/api/tunarr/filler-lists/from-library', jsonBody('POST', body)),
+  mediaFolder: () => request<MediaFolderStatus>('/api/tunarr/media-folder'),
+  /** Adds the upload folder to Tunarr and refreshes or makes folder-built filler lists (server/lineupRoutes.ts). */
+  syncFillerFolders: () => request<FillerSync>('/api/tunarr/filler-folders/sync', jsonBody('POST', {})),
+  moveMediaFile: (role: FillerRole, name: string, to: FillerRole) => request<unknown>(`${mediaPath(role, name)}/move`, jsonBody('POST', { role: to })),
+  deleteMediaFile: (role: FillerRole, name: string) => request<unknown>(mediaPath(role, name), { method: 'DELETE' }),
   setFillerRole: (listId: string, role: FillerRole | null) => request<FillerRoles>(`/api/tunarr/filler-roles/${encodeURIComponent(listId)}`, role ? jsonBody('PUT', { role }) : { method: 'DELETE' }),
   savedTemplates: () => request<Template[]>('/api/tunarr/templates'),
   createTemplate: (template: Omit<Template, 'id'> & { id?: string }) => request<Template>('/api/tunarr/templates', jsonBody('POST', template)),

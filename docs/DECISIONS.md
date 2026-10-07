@@ -292,7 +292,7 @@ on the `broadcast-programming` branch.
   - Transcode profiles can be edited from an allowlist (`TRANSCODE_FIELDS`), duplicated and deleted. The default profile and profiles in use can't be deleted. VAAPI device paths and drivers are left as Tunarr has them.
   - Media sources can be added (Plex with a token; Jellyfin and Emby by signing in through Tunarr; local folders), removed, refreshed, and their libraries enabled and scanned.
 - **Secrets are write-only:** server addresses, tokens and passwords go to Tunarr and are never returned (`manageableSources` drops `uri`, `accessToken`, `username`, `userId` and `paths`). Jellyfin/Emby passwords are only passed to Tunarr's login endpoint, never stored.
-- **Still out of scope:** uploading or creating media files, Tunarr's global settings (FFmpeg, HDHomeRun, XMLTV), Plex OAuth sign-in (a token is entered instead).
+- **Still out of scope:** uploading or creating media files (uploads into the media folder were allowed later, see D46), Tunarr's global settings (FFmpeg, HDHomeRun, XMLTV), Plex OAuth sign-in (a token is entered instead).
 
 ## D34. Season filters and linked slots follow Tunarr's own rules
 
@@ -396,3 +396,14 @@ on the `broadcast-programming` branch.
   - **The day view is a log.** Each row is classified (`airKind`): program, commercial break, flex, station ID, commercial, promo, bumper, filler, redirect, with its own colour, tile and badge. Rows Tunarr's guide adds on its own (slot filler, padding) keep their kind and title. Each clock hour gets a summary line; a day strip shows the whole day; **View → Show Break Rundowns** (`B`) lists a plausible fill for each break.
 - **Honesty:** rundowns are estimates labeled as such (`estimateBreakFill`); Tunarr chooses the actual spots at air time.
 - **Consequence:** the day view reads programs of every filler list (up to 40, or only tagged ones beyond that) once per session to recognise spots.
+
+## D46. Filler videos can be uploaded to a media folder Tunarr reads
+
+- **Status:** Explicit: the owner asked for "a way to add media to Tunarr so that we can organize local files for fillers, commercials, station IDs" and chose both uploads and existing folders (2026-10-07). This narrows D33's "no uploads". Evidenced: `server/mediaFolder.ts`, `planUpload` in `server/nodeAdapter.ts`, `/media-folder` in `server/lineupRoutes.ts`, `/filler-lists/from-library` in `server/content.ts`, `app/components/FillerFoldersDialog.tsx`, `tests/mediaFolder.test.ts`, the filler-folders e2e test.
+- **Decision:**
+  - **Uploads go only to the companion's own media folder** (`LINEUP_MEDIA_DIR`, off unless set), into one subfolder per filler role. Lineup never writes into Tunarr's or a media server's folders, and never edits files. Users can move files between role folders and delete them; nothing else.
+  - **Tunarr reads the folder as an ordinary local media source.** Lineup adds it through Tunarr's media-source API with the paths Tunarr sees (`LINEUP_MEDIA_TUNARR_DIR`), so the folder must be mounted into both containers. Programs still come only from what Tunarr has indexed (invariant 3).
+  - **Folders become filler lists, automatically** (owner, same day: "folders and sources in tunarr should be picked up automatically"). `syncFillerFolders` runs when the desk loads and while Filler Folders is open. It adds the upload folder to Tunarr, makes a list for each upload role folder, each folder added with a role, and each Tunarr library (any source type) plainly named for a role, and replaces a followed list's programs after every newer Tunarr scan. Only whole words of a library's name count (`folderRole`), so "Accidents" is never taken for idents. Libraries with no obvious role need one **Make filler list**. The list↔folder links, pending folders and ignored folders are Lineup's own metadata in `filler-roles.json`, like roles.
+  - **A deleted list stays deleted.** If a followed list is gone from Tunarr, Lineup stops following its folder and won't make it again unless the user makes it by hand.
+  - **Upload safety:** streamed to disk (never buffered), size-limited (`LINEUP_MEDIA_MAX_MB`), video extensions only, one path segment, written under a dot-named temporary file and linked into place without overwriting. Same Origin check, host check and optional sign-in as every other route. Absolute paths are not returned to the browser.
+- **Consequence:** the companion now stores user files when the media folder is on (invariant 7). Updating a list replaces its contents with the folder's; hand-added programs in a folder-built list are dropped at the next scan; the dialog shows which lists follow which folder. Lineup writes filler lists in Tunarr without a click, but only lists it made from folders.
