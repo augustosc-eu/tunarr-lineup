@@ -6,6 +6,17 @@ change behavior.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-07
+
+### Station IDs, commercials and flex time
+
+- Filler lists have an **on-air role**: Station IDs, Commercials, Promos, Bumpers or Other. Lineup keeps the role in `LINEUP_DATA_DIR/filler-roles.json` (Tunarr's lists are not renamed); untagged lists get a guess from their name.
+- **Lists → Station IDs…** and **Commercials…** open the filler lists by role. Spots show broadcast lengths (`:10`, `:30`) and each list its length mix.
+- Commercial breaks can **open with a station ID**: the next ID in rotation airs first and its length comes out of the break, so programs keep their times. **Edit → Open Breaks With Station IDs** does it for every break in the lineup. Slots get **Add station IDs to breaks**.
+- The day view reads like a **station log**: commercial breaks, flex time, station IDs, spots, promos and redirects have their own colour, tile and badge; filler Tunarr adds from slots keeps its kind and title; each hour opens with its airtime by kind and commercial minutes; a **day strip** shows the whole day.
+- **View → Show Break Rundowns** (`B`) lists an estimated fill under each break (Tunarr picks the actual spots at air time).
+- Insert pre-picks the commercial lists for a break; templates, channel settings and slot commercials use the stored roles.
+
 ### Phones, tablets and other screen sizes
 
 - On phones, **Menu** opens every menu in one list (before, the menus were hidden), and the channels are a swipeable strip that keeps the current one in view.
@@ -69,4 +80,6 @@ First public release.
   reaches Tunarr through a narrow allowlisted proxy. Optional HTTP Basic
   sign-in and host-name checks against DNS rebinding.
 
+[Unreleased]: https://github.com/augustosc-eu/tunarr-lineup/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/augustosc-eu/tunarr-lineup/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/augustosc-eu/tunarr-lineup/releases/tag/v0.1.0
