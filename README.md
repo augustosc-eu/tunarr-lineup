@@ -291,22 +291,25 @@ Server environment variables:
 - **Tunarr libraries named for a role** ("Commercials", "Station IDs", `/media/promos`, "bumpers"; whole words of the name) get a filler list with that role after their scan. Plex, Jellyfin, Emby and local libraries all count. Other libraries are listed under **Other libraries** with a one-time **Make filler list**.
 - **Folders on the Tunarr server** can be added with a role (a path as Tunarr sees it, e.g. `/media/commercials`); their list appears after Tunarr's scan.
 - **Followed lists stay in step:** after every Tunarr scan that's newer than the list, its programs are replaced with the folder's. Delete a list in Tunarr and Lineup stops following that folder for good (Make filler list follows it again).
-- **The upload folder** lets you add files from the desk. Mount one host folder into both containers and tell Lineup where each sees it:
+- **The upload folder** lets you add files from the desk. It needs one folder mounted into both containers. `docker-compose.example.yml` already has it: a `lineup-media` volume at `/media/lineup` in Tunarr and Lineup, with `LINEUP_MEDIA_DIR=/media/lineup`. For an existing compose file, the dialog shows these lines with a **Copy lines** button:
 
 ```yaml
 services:
   tunarr:
     volumes:
-      - ./filler-media:/media/lineup
+      - lineup-media:/media/lineup
   lineup:
     environment:
-      - LINEUP_MEDIA_DIR=/media
-      - LINEUP_MEDIA_TUNARR_DIR=/media/lineup
+      - LINEUP_MEDIA_DIR=/media/lineup
     volumes:
-      - ./filler-media:/media
+      - lineup-media:/media/lineup
+volumes:
+  lineup-media:
 ```
 
-Lineup creates `station-ids`, `commercials`, `promos`, `bumpers` and `other-filler` inside it and adds them to Tunarr by itself. Uploading starts a scan, and each role's list follows. The Lineup container runs as user `node` (uid 1000), so the host folder must be writable by that user. Uploads never overwrite a file and are written under a temporary name until complete. Anyone who can open Lineup can upload, so turn on sign-in (`LINEUP_PASSWORD`) if others can reach it.
+To keep the videos in a host folder you can browse (e.g. `./filler-media:/media/lineup` in both), make it writable by the Lineup container's user first: `sudo chown 1000:1000 filler-media`. If Tunarr sees the folder at a different path than Lineup, set `LINEUP_MEDIA_TUNARR_DIR` to Tunarr's path.
+
+Lineup creates `station-ids`, `commercials`, `promos`, `bumpers` and `other-filler` inside it and adds them to Tunarr by itself. Uploading starts a scan, and each role's list follows. Uploads never overwrite a file and are written under a temporary name until complete. Anyone who can open Lineup can upload, so turn on sign-in (`LINEUP_PASSWORD`) if others can reach it.
 
 ## AI setup
 

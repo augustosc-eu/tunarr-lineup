@@ -189,7 +189,7 @@ export async function handleLineupRoute(route: LineupRoute, { config, target, me
   try {
     switch (route.name) {
       case 'media-folder': {
-        if (!media) return json(200, { enabled: false, message: config.mediaFolder && 'off' in config.mediaFolder ? config.mediaFolder.off : 'Set LINEUP_MEDIA_DIR on the Lineup server to upload files here.' });
+        if (!media) return json(200, { enabled: false, message: config.mediaFolder && 'off' in config.mediaFolder ? config.mediaFolder.off : 'Uploads are off: LINEUP_MEDIA_DIR is not set on the Lineup server.' });
         const files = await media.list();
         // Which folders Tunarr already reads. Optional: the files still show without Tunarr.
         let libraries: ReturnType<typeof roleLibraries> = {};

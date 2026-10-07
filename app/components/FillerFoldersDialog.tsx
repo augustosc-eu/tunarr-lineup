@@ -19,6 +19,19 @@ const size = (bytes: number) => (bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toF
 const scannedText = (folder: Folder) => (folder.scanning ? 'scanning…' : folder.scanned ? `scanned ${new Date(folder.scanned).toLocaleDateString('en', { month: 'short', day: 'numeric' })}` : 'not scanned yet');
 const lastSegment = (path: string) => path.split(/[\\/]/).filter(Boolean).pop() ?? path;
 
+/** What turns uploads on in docker-compose.yml: one volume, same path in both containers. */
+export const MEDIA_COMPOSE_SNIPPET = `services:
+  tunarr:
+    volumes:
+      - lineup-media:/media/lineup
+  lineup:
+    environment:
+      - LINEUP_MEDIA_DIR=/media/lineup
+    volumes:
+      - lineup-media:/media/lineup
+volumes:
+  lineup-media:`;
+
 /** One line for what a sync picked up, or '' when nothing changed. */
 function syncText(sync: FillerSync, lists: ListSummary[]) {
   const parts: string[] = [];
@@ -47,10 +60,12 @@ export function FillerFoldersDialog({ roles, onClose, onChanged }: Props) {
   const [error, setError] = useState('');
   const [syncErrors, setSyncErrors] = useState<string[]>([]);
   const [confirmDelete, setConfirmDelete] = useState('');
+  const [copied, setCopied] = useState('');
   const [folderRoles, setFolderRoles] = useState<Record<string, FillerRole>>({});
   const [newRole, setNewRole] = useState<FillerRole>('commercials');
   const [newPath, setNewPath] = useState('');
   const inputs = useRef<Partial<Record<FillerRole, HTMLInputElement | null>>>({});
+  const snippet = useRef<HTMLPreElement | null>(null);
   // Background pickup waits while an action runs, so the two don't race.
   const busy = useRef(false);
   const changed = useRef(onChanged);
@@ -136,6 +151,20 @@ export function FillerFoldersDialog({ roles, onClose, onChanged }: Props) {
     return `Uploaded ${plural(done, 'video')} to ${ROLE_LABELS[role]}. The list picks them up after Tunarr’s scan.`;
   });
 
+  // The clipboard needs HTTPS or localhost; on a plain LAN address, select the text instead.
+  const copySnippet = async () => {
+    try {
+      await navigator.clipboard.writeText(MEDIA_COMPOSE_SNIPPET);
+      setCopied('Copied. Add these lines to docker-compose.yml, then run docker compose up -d.');
+    } catch {
+      const range = document.createRange();
+      if (snippet.current) range.selectNodeContents(snippet.current);
+      window.getSelection()?.removeAllRanges();
+      window.getSelection()?.addRange(range);
+      setCopied('Selected. Press Ctrl+C (⌘C on a Mac) to copy.');
+    }
+  };
+
   const uploaded = status?.enabled ? status.folders : [];
   const uploadLibraries = new Set(uploaded.map((folder) => folder.tunarr?.libraryId).filter(Boolean));
   const tunarrFolders: Folder[] = (sources ?? []).flatMap((source) => source.libraries
@@ -171,7 +200,11 @@ export function FillerFoldersDialog({ roles, onClose, onChanged }: Props) {
 
         <h3 className="section-title">Upload folder</h3>
         {status === null && !error && <p className="subtle">Loading…</p>}
-        {status && !status.enabled && <p className="subtle">{status.message} The folder must also be mounted into Tunarr; see the README.</p>}
+        {status && !status.enabled && <div className="media-setup">
+          <p className="subtle">{status.message} To turn them on, add these lines to docker-compose.yml. They give Lineup and Tunarr one shared folder. Then run <code>docker compose up -d</code>. Outside Docker, see the README.</p>
+          <pre ref={snippet} aria-label="docker-compose.yml lines for the upload folder" tabIndex={0}>{MEDIA_COMPOSE_SNIPPET}</pre>
+          <p className="media-setup-copy"><button onClick={() => void copySnippet()}>Copy lines</button>{copied && <span className="subtle" aria-live="polite">{copied}</span>}</p>
+        </div>}
         {status?.enabled && <>
           {status.tunarrError && <div className="warning"><b>Tunarr</b><span>{status.tunarrError}</span></div>}
           <div className="candidate-list folders-list">

@@ -20,8 +20,10 @@ WORKDIR /app
 COPY --from=build /app/dist-server ./dist-server
 COPY --from=build /app/dist-local ./dist-local
 RUN printf '{"type":"module","private":true}\n' > package.json \
- && mkdir -p /data && chown node:node /data
-# Saved programming templates live here; mount a volume to keep them.
+ && mkdir -p /data /media/lineup && chown node:node /data /media/lineup
+# Saved programming templates live in /data; mount a volume to keep them.
+# /media/lineup is the filler upload folder (LINEUP_MEDIA_DIR in the compose
+# example); owning it here lets a fresh named volume start out writable by node.
 VOLUME ["/data"]
 USER node
 EXPOSE 3000
