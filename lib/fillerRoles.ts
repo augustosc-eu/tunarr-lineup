@@ -22,14 +22,57 @@ export function listsWithRole<T extends { id: string; name: string }>(lists: T[]
   return lists.filter((list) => roleOf(list, roles) === role);
 }
 
+/** Lowercase words and numbers, accents dropped, letters split from digits ("EL109" → el, 109). */
+export function nameTokens(name: string): string[] {
+  return name.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase().match(/\p{L}+|\p{N}+/gu) ?? [];
+}
+
 /**
- * The station IDs a channel draws from: those in its own station-ID lists (the
- * ones in its Tunarr filler, set in Channel Settings), else every station-ID
- * list's, so a channel with none assigned works as before.
+ * The channel a station ID is named for: the channel whose whole name appears
+ * in the ID's title, word for word ("EL 7 ID.mp4" → El 7, "EL109 ID B" → El 109,
+ * but "JDRAMA TV ID" is not Drama TV). The longest matching name wins.
  */
-export function channelStationIds<T>(byList: Record<string, T[]>, assignedListIds: string[]): { ids: T[]; own: boolean } {
-  const own = assignedListIds.filter((id, index) => byList[id]?.length && assignedListIds.indexOf(id) === index);
-  return own.length ? { ids: own.flatMap((id) => byList[id]), own: true } : { ids: Object.values(byList).flat(), own: false };
+export function idChannel<C extends { id: string; name: string }>(title: string, channels: C[]): C | undefined {
+  const words = nameTokens(title);
+  let best: C | undefined;
+  let bestLength = 0;
+  for (const channel of channels) {
+    const name = nameTokens(channel.name);
+    if (!name.length || name.length <= bestLength) continue;
+    const found = words.some((_, start) => name.every((word, offset) => words[start + offset] === word));
+    if (found) {
+      best = channel;
+      bestLength = name.length;
+    }
+  }
+  return best;
+}
+
+/**
+ * The station IDs a channel airs: those named for it, plus those in its own
+ * station-ID lists (ticked in Channel Settings, so in its Tunarr filler) that
+ * aren't named for another channel. A channel with none gets the IDs named for
+ * no channel, never another channel's.
+ */
+export function channelStationIds<T extends { id: string }>(
+  byList: Record<string, T[]>,
+  assignedListIds: string[],
+  channel: { id: string; name: string } | undefined,
+  channels: Array<{ id: string; name: string }>,
+  titleOf: (id: T) => string,
+): { ids: T[]; own: boolean } {
+  // One entry per ID, with every list that holds it.
+  const entries = new Map<string, { id: T; lists: string[]; owner?: string }>();
+  for (const [list, ids] of Object.entries(byList)) {
+    for (const id of ids) {
+      const entry = entries.get(id.id);
+      if (entry) entry.lists.push(list);
+      else entries.set(id.id, { id, lists: [list], owner: idChannel(titleOf(id), channels)?.id });
+    }
+  }
+  const all = [...entries.values()];
+  const own = channel ? all.filter((entry) => entry.owner === channel.id || (!entry.owner && entry.lists.some((list) => assignedListIds.includes(list)))) : [];
+  return own.length ? { ids: own.map((entry) => entry.id), own: true } : { ids: all.filter((entry) => !entry.owner).map((entry) => entry.id), own: false };
 }
 
 /** Broadcast-style spot length: ":15", ":30", "1:00", "2:30". */

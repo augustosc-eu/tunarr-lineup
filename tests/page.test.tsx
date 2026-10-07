@@ -16,6 +16,8 @@ const IDENT_A = 'd0000000-0000-4000-8000-0000000000a1';
 const IDENT_B = 'd0000000-0000-4000-8000-0000000000a2';
 const IDENT_C = 'd0000000-0000-4000-8000-0000000000a3';
 const OWN_ID_LIST = 'f0000000-0000-4000-8000-0000000000f3';
+const NEWS_ID = 'd0000000-0000-4000-8000-0000000000a4';
+const MOVIES_ID = 'd0000000-0000-4000-8000-0000000000a5';
 const CUSTOM_ID = 'c0000000-0000-4000-8000-0000000000c1';
 const PROFILE_ID = 'p0000000-0000-4000-8000-000000000001';
 const PROFILE_720 = 'p0000000-0000-4000-8000-000000000002';
@@ -44,7 +46,7 @@ const today = () => {
 };
 
 /** A stateful fake of the companion's /api/tunarr routes. */
-function fakeCompanion(options: { schedule?: { type: string; slots: unknown[]; [key: string]: unknown }; health?: Reply; programming?: Reply; lineupStatus?: number; lineup?: LineupItem[]; startTime?: number; stationIds?: boolean; ownStationIds?: boolean } = {}) {
+function fakeCompanion(options: { schedule?: { type: string; slots: unknown[]; [key: string]: unknown }; health?: Reply; programming?: Reply; lineupStatus?: number; lineup?: LineupItem[]; startTime?: number; stationIds?: boolean; ownStationIds?: boolean; namedIds?: boolean } = {}) {
   const startTime = options.startTime ?? dayRange(today()).from.getTime() - 60 * 60_000;
   const state = {
     lineup: options.lineup ?? (mixedLineup() as LineupItem[]),
@@ -56,6 +58,11 @@ function fakeCompanion(options: { schedule?: { type: string; slots: unknown[]; [
       [ID_LIST]: [
         { type: 'content', id: IDENT_A, duration: 10_000, program: { type: 'other_video', title: 'Ident Sunrise' } },
         { type: 'content', id: IDENT_B, duration: 10_000, program: { type: 'other_video', title: 'Ident Night' } },
+        // Named for a channel, like "EL 7 ID.mp4" in the upload folder.
+        ...(options.namedIds ? [
+          { type: 'content', id: MOVIES_ID, duration: 8_000, program: { type: 'other_video', title: 'MOVIE NIGHT ID' } },
+          { type: 'content', id: NEWS_ID, duration: 12_000, program: { type: 'other_video', title: 'NEWSROOM ID v2' } },
+        ] : []),
       ],
       [OWN_ID_LIST]: [{ type: 'content', id: IDENT_C, duration: 5_000, program: { type: 'other_video', title: 'Newsroom ident' } }],
     } as Record<string, unknown[]>,
@@ -1371,6 +1378,26 @@ describe('station IDs, commercials and flex time', () => {
     await waitFor(() => expect(count(requests, 'POST', '/api/tunarr/channels/chan-news/programming')).toBe(1));
     // Not IDENT_A, which the shared pool would pick first.
     expect(posted(requests)[1]).toEqual({ type: 'content', id: IDENT_C, duration: 5_000 });
+  });
+
+  it('inserts the channel’s own station ID, named for it, from Insert → Station ID', async () => {
+    const { requests } = fakeCompanion({ stationIds: true, namedIds: true });
+    render(<Home />);
+    await pickAlpha();
+    await waitFor(() => expect(requests.some((r) => r.path === `/api/tunarr/filler-lists/${ID_LIST}/programs`)).toBe(true));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    fireEvent.keyDown(document.body, { key: 'i' });
+    const insert = await screen.findByRole('dialog', { name: 'Insert into the lineup' });
+    fireEvent.click(within(insert).getByRole('radio', { name: 'Station ID' }));
+    const ids = within(insert).getByRole('radiogroup', { name: 'Station ID to insert' });
+    // Only Newsroom's: not Movie Night's, and not the generic idents.
+    expect(within(ids).getAllByRole('radio')).toHaveLength(1);
+    expect(within(ids).getByLabelText(/NEWSROOM ID v2/)).toHaveProperty('checked', true);
+    fireEvent.click(within(insert).getByRole('button', { name: 'Insert' }));
+    expect(await screen.findByText(/^Inserted the station ID “NEWSROOM ID v2”/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Save lineup' }));
+    await waitFor(() => expect(count(requests, 'POST', '/api/tunarr/channels/chan-news/programming')).toBe(1));
+    expect(posted(requests)[1]).toEqual({ type: 'content', id: NEWS_ID, duration: 12_000 });
   });
 
   it('assigns station IDs to a channel in Channel Settings', async () => {

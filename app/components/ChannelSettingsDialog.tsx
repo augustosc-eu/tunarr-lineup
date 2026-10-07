@@ -156,7 +156,7 @@ export function ChannelSettingsDialog({ channelId, fillerRoles = {}, onClose, on
           </>}
           {tab === 'filler' && <>
           <h3 className="section-title">Station IDs</h3>
-          <p className="subtle">This channel’s own station IDs. Tunarr airs them in flex time along with the filler below, and Lineup opens this channel’s breaks with them (Edit → Open Breaks With Station IDs, or Insert → Commercial break). With none ticked, Lineup uses every station-ID list.</p>
+          <p className="subtle">IDs named for this channel (“{form.name} ID.mp4”) are its own automatically: Insert → Station ID lists them, and Lineup opens this channel’s breaks with them. Tick a list here to give the channel the whole list, minus IDs named for other channels; Tunarr also airs a ticked list in flex time along with the filler below.</p>
           <div className="checklist" role="group" aria-label="This channel’s station IDs">
             {!idLists.length && <p className="subtle">No station-ID lists yet. Upload IDs in Setup → Filler Folders…, or tag a list in Lists → Station IDs….</p>}
             {idLists.map((list) => (

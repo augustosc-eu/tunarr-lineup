@@ -4,7 +4,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { airKind, estimateBreakFill, hourSummaries, stripSegments, type ListSpots, type SpotIndex } from '../lib/airKinds';
 import { makeBreakWithId, makeCommercialBreak, makeFlex, openBreaksWithIds, pickStationId } from '../lib/broadcast';
-import { channelStationIds, guessRole, roleOf, spotBreakdown, spotLength } from '../lib/fillerRoles';
+import { channelStationIds, guessRole, idChannel, nameTokens, roleOf, spotBreakdown, spotLength } from '../lib/fillerRoles';
 import type { Instance, LineupItem } from '../lib/lineup';
 import { createFillerRoleStore } from '../server/fillerRoleStore';
 import { createProxyConfig, handleTunarrApi, type ProxyRequest } from '../server/tunarrProxy';
@@ -139,15 +139,43 @@ describe('filler role store and routes', () => {
   });
 });
 
-describe('channelStationIds', () => {
-  const byList = { shared: ['a', 'b'], newsroom: ['n'], empty: [] as string[] };
+describe('station IDs by channel', () => {
+  const channels = [
+    { id: 'el7', name: 'El 7' }, { id: 'el109', name: 'El 109' }, { id: 'jdrama', name: 'JDrama TV' }, { id: 'drama', name: 'Drama TV' },
+    { id: 'canal12', name: 'Canal 12' }, { id: 'canal23', name: 'Canal 23' }, { id: 'comedy', name: 'Comedy' }, { id: 'comedy-movies', name: 'Comedy Movies' },
+  ];
+  const owner = (title: string) => idChannel(title, channels)?.id;
 
-  it('uses only the channel’s own station-ID lists', () => {
-    expect(channelStationIds(byList, ['commercials', 'newsroom', 'newsroom'])).toEqual({ ids: ['n'], own: true });
+  it('finds the channel an ID file is named for, word for word', () => {
+    expect(nameTokens('EL109 ID B.mp4')).toEqual(['el', '109', 'id', 'b', 'mp', '4']);
+    expect(owner('EL 7 ID')).toBe('el7');
+    expect(owner('EL109 ID B')).toBe('el109');
+    expect(owner('EL109 ID')).toBe('el109');
+    expect(owner('JDRAMA TV ID V2')).toBe('jdrama');
+    expect(owner('Canal 12 v1')).toBe('canal12');
+    expect(owner('Comedy Movies ident')).toBe('comedy-movies');
+    expect(owner('Comedia ident')).toBeUndefined();
+    expect(owner('Ident Sunrise')).toBeUndefined();
   });
 
-  it('falls back to every station-ID list when the channel has none with IDs', () => {
-    expect(channelStationIds(byList, [])).toEqual({ ids: ['a', 'b', 'n'], own: false });
-    expect(channelStationIds(byList, ['empty', 'commercials'])).toEqual({ ids: ['a', 'b', 'n'], own: false });
+  const id = (key: string, title: string) => ({ id: key, title });
+  const byList = {
+    folder: [id('a', 'EL 7 ID'), id('b', 'EL109 ID'), id('c', 'Generic ident')],
+    music: [id('d', 'Music ident'), id('a', 'EL 7 ID')],
+  };
+  const pool = (channel: string, assigned: string[] = []) => channelStationIds(byList, assigned, channels.find((item) => item.id === channel), channels, (item) => item.title);
+
+  it('gives a channel the IDs named for it, never another channel’s', () => {
+    expect(pool('el7')).toEqual({ ids: [byList.folder[0]], own: true });
+    expect(pool('el109')).toEqual({ ids: [byList.folder[1]], own: true });
+  });
+
+  it('adds a ticked list’s IDs, minus those named for other channels', () => {
+    expect(pool('el7', ['music']).ids.map((item) => item.id)).toEqual(['a', 'd']);
+    expect(pool('el109', ['folder']).ids.map((item) => item.id)).toEqual(['b', 'c']);
+  });
+
+  it('falls back to the IDs named for no channel', () => {
+    expect(pool('canal12')).toEqual({ ids: [byList.folder[2], byList.music[0]], own: false });
   });
 });
