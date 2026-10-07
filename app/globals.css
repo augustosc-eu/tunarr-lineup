@@ -464,6 +464,9 @@ input[type=checkbox] { width:1.25rem; height:1.25rem; margin:0; accent-color:var
 .sources-modal:before { content:'Media Sources'; }
 .folders-modal:before { content:'Filler Folders'; }
 .folders-list { max-height:40vh; margin-bottom:0.5rem; }
+.media-setup { margin-bottom:0.75rem; }
+.media-setup-copy { display:flex; flex-wrap:wrap; align-items:center; gap:0.75rem; margin:0; }
+.media-setup pre { margin:0.5rem 0; padding:0.5rem 0.75rem; overflow-x:auto; background:#fff; border:1px solid #888; box-shadow:inset 1px 1px 0 #555, inset -1px -1px 0 #ddd; font-family:Monaco,"Courier New",monospace; font-size:0.875rem; line-height:1.35; white-space:pre; }
 .file-row { grid-template-columns:minmax(0,1fr) auto auto; min-height:2.75rem; }
 .file-row > span:first-child { min-width:0; }
 .file-row b,.file-row small { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
