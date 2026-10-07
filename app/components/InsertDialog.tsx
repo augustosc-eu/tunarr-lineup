@@ -31,6 +31,8 @@ type Props = {
   /** The station ID a new break would open with (rotated), if any list holds IDs. */
   nextStationId?: ContentProgram;
   stationIdTitle?: string;
+  /** The IDs come from this channel's own station-ID lists (Channel Settings). */
+  ownStationIds?: boolean;
   onInsert: (items: LineupItem[], label: string, where: InsertWhere, meta?: Record<string, ContentProgram>) => void;
   onClose: () => void;
 };
@@ -50,7 +52,7 @@ function DurationField({ label, value, onChange }: { label: string; value: numbe
   );
 }
 
-export function InsertDialog({ live, anchorLabel, channels, currentChannelId, date, time: initialTime, startFor, keepOnAir, roles = {}, nextStationId, stationIdTitle, onBrowse, onInsert, onClose }: Props) {
+export function InsertDialog({ live, anchorLabel, channels, currentChannelId, date, time: initialTime, startFor, keepOnAir, roles = {}, nextStationId, stationIdTitle, ownStationIds, onBrowse, onInsert, onClose }: Props) {
   const [kind, setKind] = useState<Kind>(live ? 'programs' : 'flex');
   const [placement, setPlacement] = useState<'before' | 'after' | 'time'>('after');
   const [day, setDay] = useState(date);
@@ -160,7 +162,7 @@ export function InsertDialog({ live, anchorLabel, channels, currentChannelId, da
             ))}
           </div>
           {nextStationId
-            ? <label className="keep-on-air"><input type="checkbox" checked={withId} onChange={(event) => setWithId(event.target.checked)} /> Open with a station ID <small>“{stationIdTitle ?? 'Station ID'}” ({spotLength(nextStationId.duration)}) airs first; its length comes out of the break. IDs rotate from your Station IDs lists.</small></label>
+            ? <label className="keep-on-air"><input type="checkbox" checked={withId} onChange={(event) => setWithId(event.target.checked)} /> Open with a station ID <small>“{stationIdTitle ?? 'Station ID'}” ({spotLength(nextStationId.duration)}) airs first; its length comes out of the break. IDs rotate from {ownStationIds ? 'this channel’s station IDs (Channel Settings → Commercials)' : 'your Station IDs lists'}.</small></label>
             : <p className="subtle">Tag a filler list as Station IDs (Lists → Station IDs…) to open breaks with an ID.</p>}
           <label className="field"><span>Don’t repeat the same filler within (minutes)</span><input type="number" min={0} step={1} value={cooldown} onChange={(event) => setCooldown(Math.max(0, Number(event.target.value)))} /></label>
         </>}

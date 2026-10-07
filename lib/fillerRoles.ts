@@ -22,6 +22,16 @@ export function listsWithRole<T extends { id: string; name: string }>(lists: T[]
   return lists.filter((list) => roleOf(list, roles) === role);
 }
 
+/**
+ * The station IDs a channel draws from: those in its own station-ID lists (the
+ * ones in its Tunarr filler, set in Channel Settings), else every station-ID
+ * list's, so a channel with none assigned works as before.
+ */
+export function channelStationIds<T>(byList: Record<string, T[]>, assignedListIds: string[]): { ids: T[]; own: boolean } {
+  const own = assignedListIds.filter((id, index) => byList[id]?.length && assignedListIds.indexOf(id) === index);
+  return own.length ? { ids: own.flatMap((id) => byList[id]), own: true } : { ids: Object.values(byList).flat(), own: false };
+}
+
 /** Broadcast-style spot length: ":15", ":30", "1:00", "2:30". */
 export function spotLength(ms: number) {
   const seconds = Math.max(0, Math.round(ms / 1000));

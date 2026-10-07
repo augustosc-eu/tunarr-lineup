@@ -19,8 +19,8 @@ export type FillerSpots = {
   spots: SpotIndex;
   /** List id → its spots, for break rundowns. */
   listSpots: Record<string, ListSpots>;
-  /** Station ID programs from every station-ID list, in list order. */
-  stationIds: ContentProgram[];
+  /** Station ID programs by station-ID list, in list order (see `channelStationIds`). */
+  stationIdsByList: Record<string, ContentProgram[]>;
   setRole: (listId: string, role: FillerRole | null) => Promise<void>;
   reload: () => void;
 };
@@ -72,7 +72,7 @@ export function useFillerSpots(live: boolean): FillerSpots {
   const derived = useMemo(() => {
     const spots: SpotIndex = new Map();
     const listSpots: Record<string, ListSpots> = {};
-    const stationIds: ContentProgram[] = [];
+    const stationIdsByList: Record<string, ContentProgram[]> = {};
     for (const list of live ? lists : []) {
       const role = roleOf(list, roles);
       const items = (programs[list.id] ?? []).filter((program) => program.duration > 0);
@@ -80,10 +80,10 @@ export function useFillerSpots(live: boolean): FillerSpots {
       for (const program of items) {
         // A program in several lists takes the most specific role it has.
         if (role && (!spots.has(program.id) || role === 'station-id')) spots.set(program.id, role);
-        if (role === 'station-id') stationIds.push(program);
+        if (role === 'station-id') (stationIdsByList[list.id] ??= []).push(program);
       }
     }
-    return { spots, listSpots, stationIds };
+    return { spots, listSpots, stationIdsByList };
   }, [lists, live, programs, roles]);
 
   const setRole = useCallback(async (listId: string, role: FillerRole | null) => {

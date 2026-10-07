@@ -18,7 +18,7 @@ import { TemplatesDialog, type TemplateTarget } from './components/TemplatesDial
 import { TranscodeProfilesDialog } from './components/TranscodeProfilesDialog';
 import { spotTitle, useFillerSpots } from './useFillerSpots';
 import { airKind, estimateBreakFill, hourSummaries, KIND_BADGES, KIND_LABELS, stripSegments, type AirKind } from '../lib/airKinds';
-import type { FillerRole } from '../lib/fillerRoles';
+import { channelStationIds, type FillerRole } from '../lib/fillerRoles';
 import {
   changedPositions,
   clockTimecode,
@@ -297,6 +297,17 @@ export default function Home() {
 
   const live = mode === 'live';
   const filler = useFillerSpots(live);
+  // The channel's Tunarr filler lists; its station-ID lists are the IDs it airs (Channel Settings).
+  const [channelFiller, setChannelFiller] = useState<{ channelId: string; listIds: string[] }>({ channelId: '', listIds: [] });
+  useEffect(() => {
+    if (!live || !activeChannelId) return;
+    let cancelled = false;
+    tunarrApi.channelSettings(activeChannelId)
+      .then((settings) => { if (!cancelled) setChannelFiller({ channelId: activeChannelId, listIds: (settings.fillerCollections ?? []).map((item) => item.id) }); })
+      .catch(() => { /* Falls back to every station-ID list. */ });
+    return () => { cancelled = true; };
+  }, [live, activeChannelId]);
+  const stationIds = useMemo(() => channelStationIds(filler.stationIdsByList, channelFiller.channelId === activeChannelId ? channelFiller.listIds : []), [filler.stationIdsByList, channelFiller, activeChannelId]);
   const lineup = programming.lineup;
   const activeChannel = channels.find((channel) => channel.id === activeChannelId);
   const activeChannelIndex = channels.findIndex((channel) => channel.id === activeChannelId);
@@ -1015,17 +1026,17 @@ export default function Home() {
   /** Opens every commercial break with a rotating station ID (one undoable edit). */
   const openBreaksWithStationIds = () => {
     if (grab || slotPreview) return;
-    if (!filler.stationIds.length) {
+    if (!stationIds.ids.length) {
       notify('No station IDs yet. Tag a filler list as Station IDs in Lists → Station IDs…');
       return;
     }
-    const result = openBreaksWithIds(lineup, filler.stationIds, (item) => !!item.id && filler.spots.get(item.id) === 'station-id');
+    const result = openBreaksWithIds(lineup, stationIds.ids, (item) => !!item.id && filler.spots.get(item.id) === 'station-id');
     if (!result) {
       notify('Every commercial break already opens with a station ID.');
       return;
     }
-    setProgramming((current) => ({ ...current, programs: { ...current.programs, ...Object.fromEntries(filler.stationIds.map((program) => [program.id, program])) } as Programming['programs'] }));
-    applyEdit(`Opened ${result.added} ${result.added === 1 ? 'break' : 'breaks'} with a station ID`, result.lineup, { start: block.start, end: block.start });
+    setProgramming((current) => ({ ...current, programs: { ...current.programs, ...Object.fromEntries(stationIds.ids.map((program) => [program.id, program])) } as Programming['programs'] }));
+    applyEdit(`Opened ${result.added} ${result.added === 1 ? 'break' : 'breaks'} with ${stationIds.own ? 'this channel’s station IDs' : 'a station ID'}`, result.lineup, { start: block.start, end: block.start });
   };
 
   /** Puts a date-specific event into the lineup and shows the day it airs. */
@@ -1331,7 +1342,7 @@ export default function Home() {
   const selectedDetail = blockSize > 1
     ? `${durationTimecode(lineup.slice(block.start, block.end + 1).reduce((sum, item) => sum + Math.max(0, item.duration || 0), 0))} total`
     : selectedItem ? `${programDetail(selectedItem, programming.programs)} · ${durationTimecode(selectedItem.duration)}` : '';
-  const nextStationId = pickStationId(filler.stationIds, lineup);
+  const nextStationId = pickStationId(stationIds.ids, lineup);
   const selectedKind: AirKind = selectedItem ? airKind(selectedItem, filler.spots, filler.roles) : 'program';
   const selectedArt = blockSize === 1 && selectedItem ? programArtwork(selectedItem, programming.programs, live) : undefined;
   const lastRowOfBlock = blockSize > 1 ? visibleInstances.find((row) => row.lineupIndex === block.end && selectedInstance && row.start >= selectedInstance.start) : selectedInstance;
@@ -1651,6 +1662,7 @@ export default function Home() {
 
       {slotEditor.open && slotEditor.channelId === activeChannelId && activeChannel && (slotEditor.loaded ? <ScheduleEditor
         fillerRoles={filler.roles}
+        channelFillerListIds={channelFiller.channelId === activeChannelId ? channelFiller.listIds : []}
         channelLabel={`CH ${activeChannel.number} ${activeChannel.name}`}
         isNew={slotEditor.isNew}
         draft={slotEditor.draft}
@@ -1691,6 +1703,7 @@ export default function Home() {
         roles={filler.roles}
         nextStationId={nextStationId}
         stationIdTitle={nextStationId ? spotTitle(nextStationId) : undefined}
+        ownStationIds={stationIds.own}
         onInsert={(items, label, where, meta) => insertAt(where, items, label, meta)}
         onClose={() => setInsertOpen(false)}
       />}
@@ -1731,6 +1744,7 @@ export default function Home() {
         onSaved={(saved, startTimeChanged) => {
           setSettingsOpen(false);
           notify('Channel settings saved to Tunarr');
+          if (saved.fillerCollections) setChannelFiller({ channelId: activeChannelId, listIds: saved.fillerCollections.map((item) => item.id) });
           void tunarrApi.channels().then((list) => setChannels([...list].sort((a, b) => a.number - b.number))).catch(noteFailure);
           if (startTimeChanged && saved.id) void loadProgramming(saved.id, selectedDate, { keepSelection: true });
         }}

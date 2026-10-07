@@ -52,6 +52,8 @@ type Props = {
   catalog: SlotCatalog | null;
   /** Roles Lineup keeps for filler lists, for labels and the station-ID shortcut. */
   fillerRoles?: FillerRoles;
+  /** The channel's Tunarr filler lists; its station-ID list is the one the shortcut adds. */
+  channelFillerListIds?: string[];
   currentChannelId: string;
   busy: boolean;
   error: string;
@@ -73,8 +75,10 @@ const MINUTE = 60_000;
 const minutes = (ms: unknown) => (Number.isFinite(Number(ms)) ? String(Math.round((Number(ms) / MINUTE) * 100) / 100) : '');
 const LIBRARY_SHOW = '__library-show__';
 
-function SlotCommercials({ slot, fillerLists, roles = {}, onChange }: { slot: Slot; fillerLists: Array<{ id: string; name: string }>; roles?: FillerRoles; onChange: (slot: Slot) => void }) {
-  const idList = fillerLists.find((list) => roleOf(list, roles) === 'station-id');
+function SlotCommercials({ slot, fillerLists, roles = {}, channelListIds = [], onChange }: { slot: Slot; fillerLists: Array<{ id: string; name: string }>; roles?: FillerRoles; channelListIds?: string[]; onChange: (slot: Slot) => void }) {
+  // The channel's own station-ID list first (Channel Settings), else any.
+  const idLists = fillerLists.filter((list) => roleOf(list, roles) === 'station-id');
+  const idList = idLists.find((list) => channelListIds.includes(list.id)) ?? idLists[0];
   const fillers = Array.isArray(slot.filler) ? (slot.filler as SlotFiller[]) : [];
   const midRoll = slot.midRoll as MidRoll | undefined;
   const setFillers = (next: SlotFiller[]) => {
@@ -373,7 +377,7 @@ export function ScheduleEditor(props: Props) {
                     setSlots(draft.slots.map((item, position) => (position === index || group?.members.includes(position) ? { ...item, direction: event.target.value } : item)));
                   }}><option value="asc">First to last</option><option value="desc">Last to first</option></select></div>}
                   {slotCanLink(slot) && <SlotLinking slots={draft.slots} index={index} groups={groups} time={time} onChange={setSlots} />}
-                  <div className="slot-section column"><b>Commercials</b><SlotCommercials slot={slot} fillerLists={catalog?.fillerLists ?? []} roles={props.fillerRoles} onChange={(updated) => update(index, () => updated)} /></div>
+                  <div className="slot-section column"><b>Commercials</b><SlotCommercials slot={slot} fillerLists={catalog?.fillerLists ?? []} roles={props.fillerRoles} channelListIds={props.channelFillerListIds} onChange={(updated) => update(index, () => updated)} /></div>
                 </div>}
               </div>
             );

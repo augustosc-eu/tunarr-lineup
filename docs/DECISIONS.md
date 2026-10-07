@@ -407,3 +407,12 @@ on the `broadcast-programming` branch.
   - **A deleted list stays deleted.** If a followed list is gone from Tunarr, Lineup stops following its folder and won't make it again unless the user makes it by hand.
   - **Upload safety:** streamed to disk (never buffered), size-limited (`LINEUP_MEDIA_MAX_MB`), video extensions only, one path segment, written under a dot-named temporary file and linked into place without overwriting. Same Origin check, host check and optional sign-in as every other route. Absolute paths are not returned to the browser.
 - **Consequence:** the companion now stores user files when the media folder is on (invariant 7). Updating a list replaces its contents with the folder's; hand-added programs in a folder-built list are dropped at the next scan; the dialog shows which lists follow which folder. Lineup writes filler lists in Tunarr without a click, but only lists it made from folders.
+
+## D47. A channel's station IDs are the station-ID lists in its Tunarr filler
+
+- **Status:** Explicit: the owner asked to "assign specific station IDs to the channels instead of having to add them as different items" and chose both behaviors: Tunarr airs them, and Lineup's ID tools use them (2026-10-07). Evidenced: `channelStationIds` in `lib/fillerRoles.ts`, the Station IDs section of `ChannelSettingsDialog`, `app/page.tsx`, tests in `tests/airtime.test.ts` and `tests/page.test.tsx`.
+- **Decision:**
+  - **No new storage.** A channel's own station IDs are the station-ID lists (by Lineup's role) in the channel's Tunarr `fillerCollections`. Ticking one in Channel Settings adds it there (weight 1, no cooldown), so Tunarr plays it in flex time that has no lists of its own, without a lineup item.
+  - **Lineup's ID tools follow the channel.** Open with a station ID, Open Breaks With Station IDs and the slot shortcut draw only from the channel's lists; a channel with none (or only empty ones) uses every station-ID list, as in D45.
+- **Consequence:** Tunarr picks channel filler at random by weight, so an ID in flex time isn't guaranteed to open a break; for that, the D45 tools still put an ID item in front of each break. Commercial breaks with their own filler lists don't draw from the channel's filler.
+
