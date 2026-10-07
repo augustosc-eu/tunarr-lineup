@@ -21,6 +21,8 @@ services:
     volumes:
       # Keep your existing Tunarr data directory here.
       - ./tunarr-data:/config/tunarr
+      # Optional: the filler media folder Lineup uploads into (see the lineup service).
+      # - ./filler-media:/media/lineup
     networks:
       - tunarr
 
@@ -55,10 +57,17 @@ services:
       # - LINEUP_AI_PROVIDER=openai
       # - LINEUP_AI_BASE_URL=http://ollama:11434/v1
       # - LINEUP_AI_MODEL=llama3.1
+      # Optional: upload station IDs, commercials and promos from Setup → Filler
+      # Folders. The same host folder must be mounted into Tunarr; these say
+      # where each container sees it. The folder must be writable by uid 1000.
+      # - LINEUP_MEDIA_DIR=/media
+      # - LINEUP_MEDIA_TUNARR_DIR=/media/lineup
+      # - LINEUP_MEDIA_MAX_MB=4096
     volumes:
       # Saved programming templates. A named volume, so the container's
       # non-root user owns it.
       - lineup-data:/data
+      # - ./filler-media:/media
     ports:
       # Lineup can rewrite channel programming. Use "127.0.0.1:3000:3000"
       # to keep it reachable from this machine only.

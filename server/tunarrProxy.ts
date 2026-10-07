@@ -4,6 +4,7 @@ import { handleAdminRoute, matchAdminRoute, type AdminRoute } from './admin.js';
 import { createAiConfig, type AiConfig } from './ai.js';
 import { handleLineupRoute, matchLineupRoute, type LineupRoute } from './lineupRoutes.js';
 import { createFillerRoleStore, type FillerRoleStore } from './fillerRoleStore.js';
+import { createMediaFolder, type MediaFolder } from './mediaFolder.js';
 import { createTemplateStore, type TemplateStore } from './templateStore.js';
 import { handleContentRoute, matchContentRoute, NOT_SAVEABLE, type ContentRoute } from './content.js';
 import { channelLogo, type ExternalImageFetcher } from './logos.js';
@@ -43,6 +44,8 @@ export type ProxyConfig = {
   templates?: TemplateStore;
   /** What each filler list is for (LINEUP_DATA_DIR/filler-roles.json). */
   fillerRoles?: FillerRoleStore;
+  /** Video files for filler lists (LINEUP_MEDIA_DIR), or why it is off. Unset: off. */
+  mediaFolder?: MediaFolder | { off: string };
   /** AI programming assistant (LINEUP_AI_*), or why it is off. */
   ai?: AiConfig | { off: string };
 };
@@ -123,6 +126,7 @@ export function createProxyConfig(env: Record<string, string | undefined>): Prox
     externalLogos: env.LINEUP_EXTERNAL_LOGOS?.trim().toLowerCase() !== 'false',
     templates: createTemplateStore(path.resolve(env.LINEUP_DATA_DIR?.trim() || 'data')),
     fillerRoles: createFillerRoleStore(path.resolve(env.LINEUP_DATA_DIR?.trim() || 'data')),
+    mediaFolder: createMediaFolder(env),
     ai: createAiConfig(env),
   };
 }
@@ -193,7 +197,7 @@ function header(headers: ProxyRequest['headers'], name: string) {
   return Array.isArray(value) ? value[0] : value;
 }
 
-function isCrossOrigin(headers: ProxyRequest['headers']) {
+export function isCrossOrigin(headers: ProxyRequest['headers']) {
   const origin = header(headers, 'origin');
   if (!origin) return false;
   let originHost: string;
@@ -301,8 +305,8 @@ async function handleContent(request: ProxyRequest, config: ProxyConfig, url: UR
     }
   }
   const target = config.target;
-  // Saved templates, filler roles and the AI status are Lineup's own; everything else reads Tunarr.
-  const needsTunarr = kind !== 'lineup' || route.name === 'ai-template';
+  // Saved templates, filler roles, media files and the AI status are Lineup's own; everything else reads Tunarr.
+  const needsTunarr = kind !== 'lineup' || route.name === 'ai-template' || route.name === 'filler-sync' || route.name === 'filler-folder-add';
   if (!target && needsTunarr) {
     const error = notConfigured(config);
     return fail(503, error.code, error.message);

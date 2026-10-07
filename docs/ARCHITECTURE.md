@@ -44,6 +44,7 @@ server implements those paths.
 | `app/components/NewChannelDialog.tsx` | New or duplicated channel: name, number (next free by default), group, transcode profile or channel to copy. |
 | `app/components/SmartCollectionsManager.tsx` | Smart collections: rule rows (`RULE_FIELDS`), match all/any, keywords, preview count and sample, create, edit, delete. |
 | `app/components/MediaSourcesDialog.tsx` | Media sources: libraries with on/off switches, refresh, scan, remove; add Plex, Jellyfin, Emby or local folders. |
+| `app/components/FillerFoldersDialog.tsx` | Filler folders: upload, move and delete files in the media folder's role folders; shows what Lineup follows in Tunarr, adds folders with a role, and runs the automatic pickup every 8 s while open. `app/useFillerSpots.ts` runs it once when the desk loads. |
 | `app/components/TranscodeProfilesDialog.tsx` | Transcode profiles: edit the allowlisted fields, duplicate, delete. |
 | `app/components/TemplatesDialog.tsx` | Programming templates: gallery (groups by country, search, My templates), the AI panel, day plan (`DayGrid`), role sources (defaults, suggested smart collections with match counts, library shows), commercials/promos lists, target channel, save/edit/delete/duplicate. |
 | `app/components/TemplateEditor.tsx` | Template editor: details, day plan mode, blocks (start, role, ad level), roles (label, hint, order, suggestion kind and genres), start-time grid, lateness, commercial style. |
@@ -71,9 +72,10 @@ server implements those paths.
 | `server/admin.ts` | Tunarr setup routes: `matchAdminRoute`, `handleAdminRoute`, `newChannel`, `validateChannelCreate`, `TRANSCODE_FIELDS`, `validateTranscodeChanges`, `manageableSources`, `validateMediaSourceAdd`, `validateSmartCollection`. |
 | `server/templateSchema.ts` | Template types and `validateTemplate` (ids, names, roles and suggestions, day plans, ad style, pad/lateness, role defaults reduced to plain source fields). Pure; the browser imports it. |
 | `server/templateStore.ts` | Saved templates in `LINEUP_DATA_DIR/templates.json`: serialized, atomic writes; unreadable files are reported, never overwritten. |
-| `server/lineupRoutes.ts` | Lineup's own routes: `/templates`, `/filler-roles` and `/ai` (`matchLineupRoute`, `handleLineupRoute`). |
+| `server/lineupRoutes.ts` | Lineup's own routes: `/templates`, `/filler-roles`, `/media-folder` and `/ai` (`matchLineupRoute`, `handleLineupRoute`). |
+| `server/mediaFolder.ts` | The media folder (`LINEUP_MEDIA_DIR`): role subfolders, safe file names (`mediaFileName`), streamed uploads that never overwrite, move and delete. Node built-ins. |
 | `server/jsonFile.ts` | One JSON file in `LINEUP_DATA_DIR`: serialized, atomic writes; a file that can't be parsed is reported, never overwritten. Used by both stores. |
-| `server/fillerRoles.ts` / `server/fillerRoleStore.ts` | Filler-list roles (`station-id`, `commercials`, `promos`, `bumpers`, `other`) and their store, `LINEUP_DATA_DIR/filler-roles.json`. |
+| `server/fillerRoles.ts` / `server/fillerRoleStore.ts` | Filler-list roles (`station-id`, `commercials`, `promos`, `bumpers`, `other`) and their store, `LINEUP_DATA_DIR/filler-roles.json`, which also keeps the folder (library) each folder-built list follows, folders waiting for their first list, and libraries never to pick up again. |
 | `lib/fillerRoles.ts` | Role labels, `guessRole` from list names, `spotLength` (`:30`), `spotBreakdown`. |
 | `lib/airKinds.ts` | Station-log view: `airKind` per row, `hourSummaries`, `stripSegments`, `estimateBreakFill` (labeled estimate). Station-ID edits (`pickStationId`, `makeBreakWithId`, `openBreaksWithIds`) are in `lib/broadcast.ts`. |
 | `app/useFillerSpots.ts` | Loads filler lists, roles and list programs for the day view (spot index, station IDs, break rundowns). |
@@ -258,6 +260,7 @@ no-query rule and JSON body parsing, then `handleContentRoute`.
 | `/filler-lists`, `/custom-shows` | GET, POST | List summaries (id, name, count, `synced`); create with `validateFillerListBody` (at least one full content program) or `validateCustomShowBody` (condensed content entries; sync fields null) |
 | `/filler-lists/:id`, `/custom-shows/:id` | PUT, DELETE | Update or delete. Custom-show updates re-read the show and re-send its sync settings, because Tunarr clears sync unless `enableSync` is set. |
 | `/filler-lists/:id/programs`, `/custom-shows/:id/programs` | GET | Contents |
+| `/filler-lists/from-library` | POST | `buildFromLibrary` after `validateFromLibrary`: `{ mediaSourceId, libraryId, name }` creates a list, `{ …, listId }` replaces that list's programs (name kept); optional `role`. Pages `POST /api/programs/search` for the library (100 at a time, up to `MAX_LIST_ITEMS`), keeps playable items as full content programs (`libraryEntries`), then `POST`s or `PUT`s the filler list. Stores the role and the list↔library link in `filler-roles.json`; a store failure comes back as `storeError`, since the list already exists. `409 library_empty` when Tunarr has indexed nothing there yet. |
 | `/smart-collections` | GET | `GET /api/smart_collections` → `{ id, name }` |
 | `/channels/:id/settings` | GET, PUT | `GET /api/channels/:id` → `channelSettings` (only `CHANNEL_SETTING_FIELDS`). PUT validates with `validateChannelSettings`, then under `withChannelLock` re-reads the channel, merges only the allowed fields, drops read-only fields (`programCount`, `sessions`, `fallback`, `transcoding`), and `PUT`s the whole channel. |
 
@@ -268,7 +271,16 @@ plus `icon` (logo path, corner, width), `watermark`, `offline`, `streamMode`
 addresses must be `http(s)` URLs or Tunarr `/images/…` paths.
 
 `nodeAdapter` reads request bodies for POST and PUT (up to 20 MiB), and sends
-`204` responses without a body or `Content-Length`.
+`204` responses without a body or `Content-Length`. The one exception is a
+media upload (`PUT /api/tunarr/media-folder/:role/:file`): `planUpload` checks
+it before any body is read (media folder on, Origin, no query, a valid role and
+file name, `application/octet-stream` or `video/*`, a `Content-Length` within
+`LINEUP_MEDIA_MAX_MB`, no chunked encoding), then `MediaFolder.save` streams it to
+a dot-named temporary file and hard-links it into place (rename after an
+existence check on shares without hard links), so nothing is overwritten and a
+broken upload leaves nothing behind. Refusals answer with `Connection: close`.
+When the media folder is on, the server's `requestTimeout` is 4 hours instead of
+Node's 5 minutes so large uploads finish.
 
 ### Tunarr setup (`server/admin.ts`)
 
@@ -309,6 +321,12 @@ pipeline as the content routes but answer from the companion.
 | `/templates/:id` | PUT, DELETE | Replace or delete a saved template |
 | `/filler-roles` | GET | `{ [fillerListId]: role }` from `filler-roles.json` (works without `TUNARR_URL`) |
 | `/filler-roles/:id` | PUT, DELETE | Set (`{ role }`, one of `station-id`, `commercials`, `promos`, `bumpers`, `other`) or clear a list's role. `:id` must be a UUID; up to 1,000 entries |
+| `/media-folder` | GET | `{ enabled: false, message }`, or `{ enabled, maxBytes, folders: [{ role, folder, files: [{ name, size, modifiedAt }], tunarr }] }`. `tunarr` is the role folder's library (`roleLibraries` matches a local source library's `externalKey` to `LINEUP_MEDIA_TUNARR_DIR/<folder>`), or null; without Tunarr the files still list, with `tunarrError`. Absolute paths are never returned. |
+| `/filler-folders` | GET | `{ links, pending, ignored }` from `filler-roles.json` |
+| `/filler-folders/sync` | POST | `syncFillerFolders` (one run per server at a time). 1) If no local source reads the media folder's role folders, creates them and adds them as one local source (`Lineup media folder`, `other_videos`); Tunarr scans it on its own. 2) Re-reads every followed list whose library's `lastScannedAt` is newer than the link's `builtAt` and isn't scanning; a list deleted in Tunarr (404) is unfollowed and its library ignored. 3) Makes a list for each enabled, unfollowed, unignored library with a role: an upload role folder (`Station IDs (folder)`), a pending folder (its stored name), or a library whose name passes `folderRole` (whole words of the last path segment). A library found empty is not searched again until its next scan (in memory). Returns `{ connected, created, updated, errors }`. Needs `TUNARR_URL`. |
+| `/filler-folders/add` | POST | `{ path, role }`: adds a local source for the folder (checked by `validateMediaSourceAdd`) and records its library as pending, so the next sync after Tunarr's scan makes its list. Needs `TUNARR_URL`. |
+| `/media-folder/:role/:file` | DELETE | Deletes the file. Upload (PUT) is handled by `nodeAdapter` (above). `:role` is a filler role; `:file` must pass `mediaFileName` (one segment, video extension, no leading dot or reserved characters) |
+| `/media-folder/:role/:file/move` | POST | `{ role }`: moves the file to another role folder without overwriting |
 | `/ai` | GET | `{ enabled, provider, model }`, or `{ enabled: false, message }` saying what to set |
 | `/ai/template` | POST | `{ prompt (≤ 2000 chars), channelId?, includeLibrary, baseTemplate? }`. `gatherContext` reads smart collections, custom shows and filler lists, and optionally the library (shows and movies via `POST /api/programs/search`, up to 600 and 300) and the channel's programming (a most-aired summary). `callModel` sends `SYSTEM_PROMPT` plus `buildUserMessage`; the model must call `propose_schedule` (`PROPOSAL_SCHEMA`). `resolveProposal` converts blocks, keeps role sources only when the id is in the catalog, drops suggestions `rulesToFilter` rejects, picks lists only from known ids, and validates the result with an `ai-…` id. Provider errors become `ai_auth`, `ai_rate_limited`, `ai_timeout`, `ai_unreachable` or `ai_invalid`. |
 
@@ -488,7 +506,7 @@ position) and downloads it via a `Blob` object URL. The filename gets an
 
 ## 9. Persistence
 
-- **Tunarr** holds all channel data. The companion's only stored state is saved templates (`LINEUP_DATA_DIR/templates.json`) and filler-list roles (`filler-roles.json`); in memory it keeps channel locks and the logo cache.
+- **Tunarr** holds all channel data. The companion's only stored state is saved templates (`LINEUP_DATA_DIR/templates.json`) and filler-list roles and folder links (`filler-roles.json`), plus the video files users upload to the media folder (`LINEUP_MEDIA_DIR`, when set); in memory it keeps channel locks and the logo cache.
 - **The browser** keeps per-channel drafts (unsaved order and edit list) in IndexedDB (database `tunarr-lineup`, store `drafts`, key `channelId`). Each draft is tied to the programming version it was made against and is dropped once that version is gone.
   - If IndexedDB is unavailable or fails, an in-memory store is used and `draftStore().persistent` is false.
   - Drafts are per browser; they are not shared between devices.
@@ -524,6 +542,7 @@ userinfo.
 | `TUNARR_TIMEOUT_MS`, `TUNARR_SAVE_TIMEOUT_MS` | `createProxyConfig` | Upstream timeouts |
 | `LINEUP_EXTERNAL_LOGOS` | `createProxyConfig` | `false` stops fetching channel logos from public sites |
 | `LINEUP_DATA_DIR` | `createProxyConfig` → `createTemplateStore` | Saved templates folder (default `./data`, `/data` in Docker) |
+| `LINEUP_MEDIA_DIR`, `LINEUP_MEDIA_TUNARR_DIR`, `LINEUP_MEDIA_MAX_MB` | `createMediaFolder` | The media folder as Lineup sees it (uploads off when unset), as Tunarr sees it (default: the same), and the upload size limit (default 4096 MB) |
 | `LINEUP_AI_PROVIDER`, `LINEUP_AI_API_KEY` (or `ANTHROPIC_API_KEY`/`OPENAI_API_KEY`), `LINEUP_AI_MODEL`, `LINEUP_AI_BASE_URL`, `LINEUP_AI_TIMEOUT_MS` | `createAiConfig` | AI assistant provider (off when unset) |
 | `LINEUP_PASSWORD`, `LINEUP_USERNAME` | `createAuthConfig` | Optional sign-in |
 | `LINEUP_ALLOWED_HOSTS` | `createHostPolicy` | Host names answered without sign-in, besides IPs and `localhost` |

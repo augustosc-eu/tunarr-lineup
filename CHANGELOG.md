@@ -6,6 +6,11 @@ change behavior.
 
 ## [Unreleased]
 
+### Filler folders
+
+- **Setup → Filler Folders…** turns folders of video files into filler lists with their role (Station IDs, Commercials, Promos, Bumpers, Other), automatically: when the desk loads and while the dialog is open, Lineup makes lists for folders named for a role (any Tunarr library: "Commercials", "station-ids"…) and for folders added with a role, and refreshes each list after every newer Tunarr scan. Lists deleted in Tunarr aren't made again. Other libraries get a one-time **Make filler list**.
+- **Uploads:** with `LINEUP_MEDIA_DIR` set (and the same folder mounted into Tunarr, `LINEUP_MEDIA_TUNARR_DIR`), upload videos from the desk into one folder per role, move them between roles, or delete them. Lineup adds the folder to Tunarr itself. Uploads stream to disk, never overwrite, and are limited by `LINEUP_MEDIA_MAX_MB` (default 4096).
+
 ## [0.2.0] - 2026-10-07
 
 ### Station IDs, commercials and flex time

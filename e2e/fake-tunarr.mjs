@@ -1,6 +1,8 @@
 // A small, stateful stand-in for Tunarr's channel API, used by the end-to-end
 // suite. It implements only the endpoints Lineup's proxy calls, plus /__test/*
 // hooks the tests use to reset state or simulate edits made elsewhere.
+import { createHash } from 'node:crypto';
+import { readdirSync } from 'node:fs';
 import http from 'node:http';
 
 const PORT = Number(process.env.FAKE_TUNARR_PORT) || 18000;
@@ -119,6 +121,22 @@ function guide(channel, lineup, from, to) {
   return programs;
 }
 
+// Like Tunarr, a local source gets one library per folder, named after its path.
+// The fake "indexes" a folder by listing it, so uploads through Lineup show up.
+const pathId = (text) => {
+  const hex = createHash('sha1').update(text).digest('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+};
+const folderPrograms = (folder) => {
+  let names = [];
+  try {
+    names = readdirSync(folder).filter((name) => !name.startsWith('.'));
+  } catch {
+    // A folder Tunarr can't see is simply empty.
+  }
+  return names.map((name) => ({ uuid: pathId(`${folder}/${name}`), type: 'other_video', title: name.replace(/\.[^.]+$/, ''), duration: 30_000 }));
+};
+
 const send = (res, status, body, type = 'application/json') => {
   res.writeHead(status, { 'content-type': type });
   res.end(type === 'application/json' ? JSON.stringify(body) : body);
@@ -164,8 +182,15 @@ http.createServer(async (req, res) => {
   if (path === '/api/media-sources' && req.method === 'POST') {
     const body = JSON.parse(await readBody(req));
     const id = `3c3c3c3c-1a2b-4c3d-8e9f-${String(state.mediaSources.length + 10).padStart(12, '0')}`;
-    state.mediaSources.push({ ...body, id, libraries: [] });
+    const libraries = body.type === 'local' ? body.paths.map((folder) => ({ id: pathId(`${id}:${folder}`), name: folder, externalKey: folder, mediaType: body.mediaType, enabled: true, lastScannedAt: Date.now() })) : [];
+    state.mediaSources.push({ ...body, id, libraries });
     return send(res, 201, { id });
+  }
+  const scan = /^\/api\/media-sources\/([^/]+)\/libraries\/[^/]+\/scan$/.exec(path);
+  if (scan && req.method === 'POST') {
+    // Tunarr rescans a whole local source; the fake finishes at once.
+    for (const item of state.mediaSources.find((source) => source.id === scan[1])?.libraries ?? []) item.lastScannedAt = Date.now() + 1;
+    return send(res, 202, '', 'text/plain');
   }
   const sourceRefresh = /^\/api\/media-sources\/([^/]+)\/libraries\/refresh$/.exec(path);
   if (sourceRefresh) {
@@ -192,6 +217,11 @@ http.createServer(async (req, res) => {
   if (path === '/api/media-sources') return send(res, 200, state.mediaSources);
   if (path === '/api/programs/search' && req.method === 'POST') {
     const body = JSON.parse(await readBody(req));
+    const localLibrary = state.mediaSources.flatMap((source) => (source.type === 'local' ? source.libraries : [])).find((item) => item.id === body.libraryId);
+    if (localLibrary) {
+      const programs = folderPrograms(localLibrary.externalKey);
+      return send(res, 200, { results: programs.slice(body.page * body.limit, (body.page + 1) * body.limit), page: body.page, totalHits: programs.length });
+    }
     const filters = body.query?.filter?.children ?? (body.query?.filter ? [body.query.filter] : []);
     if (filters.some((node) => node.fieldSpec?.key === 'type' && node.fieldSpec.value?.[0] === 'show')) {
       const shows = [{ uuid: ids.show, type: 'show', title: 'Rotation Show', year: 2001, genres: [{ name: 'Comedy' }], grandchildCount: 2, mediaSourceId: ids.source, libraryId: ids.library }];

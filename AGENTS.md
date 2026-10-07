@@ -61,7 +61,7 @@ Chromium with `npx playwright install chromium`. CI runs all of them
    - Channel routes live in `server/tunarrProxy.ts` (`matchRoute`). Library, list and
      channel-settings routes live in `server/content.ts` (`matchContentRoute`). Setup
      routes (channels, transcode profiles, media sources, smart collections) live in
-     `server/admin.ts` (`matchAdminRoute`). Lineup's own routes (saved templates, filler-list roles, AI)
+     `server/admin.ts` (`matchAdminRoute`). Lineup's own routes (saved templates, filler-list roles, the media folder, AI)
      live in `server/lineupRoutes.ts` (`matchLineupRoute`); templates are always checked
      with `validateTemplate` (`server/templateSchema.ts`). Every route is explicit, IDs are validated,
      and no raw Tunarr request is accepted: search filters and smart-collection filters
@@ -89,6 +89,10 @@ Chromium with `npx playwright install chromium`. CI runs all of them
      collections. Media-server addresses and tokens are write-only: they go to Tunarr
      and are never returned. Don't add endpoints that create or upload media files,
      edit Tunarr's global settings (FFmpeg paths, HDHomeRun, XMLTV), or reveal secrets.
+     The one exception (owner decision, 2026-10-07): video uploads into the companion's
+     own media folder (`LINEUP_MEDIA_DIR`, `server/mediaFolder.ts`), which Tunarr reads
+     as a local source. Files there can be moved between role folders or deleted;
+     nothing is overwritten, and nothing is written anywhere else.
 4. **Every save is conditional.**
    - The client sends `If-Match` with `programmingVersion(lineup, schedule)` of what it
      loaded (`server/lineupVersion.ts`, shared with the browser).
@@ -113,7 +117,8 @@ Chromium with `npx playwright install chromium`. CI runs all of them
    `LINEUP_DATA_DIR/templates.json` (`server/templateStore.ts`) and filler-list roles in
    `LINEUP_DATA_DIR/filler-roles.json` (`server/fillerRoleStore.ts`, owner decision
    2026-10-07), both through `server/jsonFile.ts`: atomic writes, and a file it can't
-   parse is never overwritten.
+   parse is never overwritten. When `LINEUP_MEDIA_DIR` is set, it also holds the
+   filler videos users upload there.
 8. **Keep the desk TV/remote-operable.** Every action must be reachable without a
    mouse: arrow keys, Enter/OK, Escape/Back, PageUp/PageDown or CH±, the menus and
    the `?` shortcut list. Don't add hover-only or drag-only features.
@@ -144,15 +149,15 @@ Chromium with `npx playwright install chromium`. CI runs all of them
   `programInfo.ts` for titles, artwork and logo URLs.
 - **Put HTTP and validation logic in `server/`:** `tunarrProxy.ts` (framework-free),
   `content.ts`, `admin.ts`, `logos.ts`, `smartCollection.ts`, `templateSchema.ts`,
-  `templateStore.ts`, `fillerRoles.ts`, `fillerRoleStore.ts`, `jsonFile.ts`, `lineupRoutes.ts`, `ai.ts`, `upstream.ts`,
+  `templateStore.ts`, `fillerRoles.ts`, `fillerRoleStore.ts`, `mediaFolder.ts`, `jsonFile.ts`, `lineupRoutes.ts`, `ai.ts`, `upstream.ts`,
   `slotSchedule.ts`, `lineupVersion.ts`, `auth.ts`, `hosts.ts` and `app.ts`. `lib/` and
   `app/` may import pure modules from `server/` (`lineupVersion`, `slotSchedule`,
   `smartCollection`, `templateSchema`, `fillerRoles`) but never Node APIs (`logos.ts`,
-  `jsonFile.ts` and the stores use Node built-ins).
+  `jsonFile.ts`, `mediaFolder.ts` and the stores use Node built-ins).
 - **Keep `app/page.tsx` for UI state and rendering,** and `app/components/` for larger
   UI pieces: `MenuBar`, `MoveDialog`, `ScheduleEditor`, `InsertDialog`,
   `LibraryBrowser`, `ListsManager`, `ChannelSettingsDialog`, `NewChannelDialog`,
-  `SmartCollectionsManager`, `MediaSourcesDialog`, `TranscodeProfilesDialog`,
+  `SmartCollectionsManager`, `MediaSourcesDialog`, `FillerFoldersDialog`, `TranscodeProfilesDialog`,
   `TemplatesDialog` (gallery, AI panel), `TemplateEditor`, `EventDialog`, `DayStrip`.
   `app/useFillerSpots.ts` loads filler lists, their roles and spots for the day view.
 - **Add or update tests** for any behavior change.
