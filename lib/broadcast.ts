@@ -190,3 +190,60 @@ export const isCommercialBreak = (item: LineupItem | undefined) =>
 export function makeRedirect(channel: { id: string; number: number; name: string }, duration: number): LineupItem {
   return { type: 'redirect', channel: channel.id, channelNumber: channel.number, channelName: channel.name, duration: Math.round(duration) };
 }
+
+/**
+ * The station ID to air next: the one used least in the lineup so far, so IDs
+ * rotate the way a station's continuity does. Ties go to list order.
+ */
+export function pickStationId<T extends { id: string }>(ids: T[], lineup: LineupItem[], extraUses: Map<string, number> = new Map()): T | undefined {
+  if (!ids.length) return undefined;
+  const uses = new Map<string, number>();
+  for (const item of lineup) if (item.id) uses.set(item.id, (uses.get(item.id) ?? 0) + 1);
+  let best = ids[0];
+  let bestUses = Infinity;
+  for (const id of ids) {
+    const count = (uses.get(id.id) ?? 0) + (extraUses.get(id.id) ?? 0);
+    if (count < bestUses) {
+      best = id;
+      bestUses = count;
+    }
+  }
+  return best;
+}
+
+/**
+ * A commercial break that opens with a station ID: the ID as a real program
+ * (Tunarr's flex picks filler at random, so it can't promise what plays first),
+ * then flex time filled from the lists. The ID's length comes out of the break,
+ * so the break still ends when it was meant to.
+ */
+export function makeBreakWithId(duration: number, fillerListIds: string[], id: { id: string; duration: number }, repeatCooldownMs = 0): LineupItem[] {
+  const rest = Math.round(duration - id.duration);
+  const opener: LineupItem = { type: 'content', id: id.id, duration: id.duration };
+  return rest >= 1000 ? [opener, makeCommercialBreak(rest, fillerListIds, repeatCooldownMs)] : [opener];
+}
+
+/**
+ * Puts a rotating station ID in front of every commercial break that doesn't
+ * already open with one. Breaks are shortened by the ID's length when they
+ * have room, so programs keep their air times.
+ */
+export function openBreaksWithIds(lineup: LineupItem[], ids: Array<{ id: string; duration: number }>, isId: (item: LineupItem) => boolean) {
+  const next: LineupItem[] = [];
+  const used = new Map<string, number>();
+  let added = 0;
+  lineup.forEach((item, index) => {
+    if (isCommercialBreak(item) && !(index > 0 && isId(lineup[index - 1]))) {
+      const id = pickStationId(ids, lineup, used);
+      if (id) {
+        next.push({ type: 'content', id: id.id, duration: id.duration });
+        used.set(id.id, (used.get(id.id) ?? 0) + 1);
+        added += 1;
+        next.push(item.duration - id.duration >= 1000 ? { ...item, duration: Math.round(item.duration - id.duration) } : item);
+        return;
+      }
+    }
+    next.push(item);
+  });
+  return added ? { lineup: next, added } : null;
+}

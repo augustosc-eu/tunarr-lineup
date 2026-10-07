@@ -2,11 +2,14 @@
 
 import { useEffect, useState } from 'react';
 import { STREAM_MODE_LABELS, type ChannelSettings, type ListSummary, type TranscodeProfile, type Watermark } from '../../lib/library';
+import { roleOf, ROLE_LABELS, type FillerRoles } from '../../lib/fillerRoles';
 import { channelLogoUrl } from '../../lib/programInfo';
 import { tunarrApi } from '../../lib/tunarrClient';
 
 type Props = {
   channelId: string;
+  /** Roles Lineup keeps for filler lists, shown next to each list. */
+  fillerRoles?: FillerRoles;
   onClose: () => void;
   onSaved: (settings: ChannelSettings, startTimeChanged: boolean) => void;
 };
@@ -25,7 +28,7 @@ const toLocalInput = (ms: number) => {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 };
 
-export function ChannelSettingsDialog({ channelId, onClose, onSaved }: Props) {
+export function ChannelSettingsDialog({ channelId, fillerRoles = {}, onClose, onSaved }: Props) {
   const [original, setOriginal] = useState<ChannelSettings | null>(null);
   const [form, setForm] = useState<ChannelSettings | null>(null);
   const [fillerLists, setFillerLists] = useState<ListSummary[]>([]);
@@ -149,13 +152,13 @@ export function ChannelSettingsDialog({ channelId, onClose, onSaved }: Props) {
           </>}
           {tab === 'filler' && <>
           <h3 className="section-title">Commercials during flex time</h3>
-          <p className="subtle">When this channel has flex time, Tunarr fills it from these filler lists, picking by weight.</p>
+          <p className="subtle">Flex time is airtime Tunarr leaves open: flex items in the lineup, slot padding, and breaks without their own lists. Tunarr fills it from these filler lists, picking by weight; with none, it shows the offline screen.</p>
           <div className="candidate-list filler-collections">
             {!collections.length && <p className="subtle candidate-empty">No filler. Flex time shows the offline screen.</p>}
             {collections.map((collection, index) => (
               <div className="candidate filler-row" key={`${collection.id}-${index}`}>
                 <select aria-label={`Filler list ${index + 1}`} value={collection.id} onChange={(event) => setCollections(collections.map((item, i) => (i === index ? { ...item, id: event.target.value } : item)))}>
-                  {fillerLists.map((list) => <option key={list.id} value={list.id}>{list.name}</option>)}
+                  {fillerLists.map((list) => { const role = roleOf(list, fillerRoles); return <option key={list.id} value={list.id}>{list.name}{role ? ` (${ROLE_LABELS[role]})` : ''}</option>; })}
                   {!fillerLists.some((list) => list.id === collection.id) && <option value={collection.id}>Missing list</option>}
                 </select>
                 <label>Weight <input type="number" min={0} step={1} aria-label={`Filler list ${index + 1} weight`} value={collection.weight} onChange={(event) => setCollections(collections.map((item, i) => (i === index ? { ...item, weight: Math.max(0, Number(event.target.value)) } : item)))} /> <small>{totalWeight ? `${Math.round((Math.max(0, collection.weight) / totalWeight) * 100)}%` : ''}</small></label>

@@ -2,6 +2,7 @@
 
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { ChannelSettingsDialog } from './components/ChannelSettingsDialog';
+import { DayStrip } from './components/DayStrip';
 import { EventDialog } from './components/EventDialog';
 import { InsertDialog } from './components/InsertDialog';
 import { LibraryBrowser, type LibraryPick } from './components/LibraryBrowser';
@@ -14,6 +15,9 @@ import { ScheduleEditor } from './components/ScheduleEditor';
 import { SmartCollectionsManager } from './components/SmartCollectionsManager';
 import { TemplatesDialog, type TemplateTarget } from './components/TemplatesDialog';
 import { TranscodeProfilesDialog } from './components/TranscodeProfilesDialog';
+import { spotTitle, useFillerSpots } from './useFillerSpots';
+import { airKind, estimateBreakFill, hourSummaries, KIND_BADGES, KIND_LABELS, stripSegments, type AirKind } from '../lib/airKinds';
+import type { FillerRole } from '../lib/fillerRoles';
 import {
   changedPositions,
   clockTimecode,
@@ -27,6 +31,8 @@ import {
   normalizeBlock,
   occurrenceStart,
   onAirPosition,
+  openBreaksWithIds,
+  pickStationId,
   removeBlock,
   setItemDuration,
   shiftBlock,
@@ -119,7 +125,6 @@ const dayPeriod = (ms: number) => {
   return 'Late night';
 };
 const errorMessage = (error: unknown, fallback: string) => (error instanceof Error && error.message ? error.message : fallback);
-const typeLabel = (type: string) => type.charAt(0).toUpperCase() + type.slice(1);
 
 function artTone(index: number) {
   return ['mint', 'coral', 'gold', 'blue', 'plum'][Math.max(0, index) % 5];
@@ -188,6 +193,39 @@ function ArtTile({ className, tone, title, src }: { className: string; tone: str
 }
 
 /** Minutes/seconds editor for flex, commercial breaks and redirects. */
+const KIND_GLYPHS: Record<AirKind, string> = {
+  program: '', break: '¢', flex: '░', 'station-id': 'ID', commercial: '¢', promo: '▸', bumper: '◆', filler: '▤', redirect: '↪',
+};
+
+/** The hour's log line: how its airtime splits between programs, commercials, IDs and flex. */
+function HourLog({ start, summary }: { start: number; summary: Partial<Record<AirKind, number>> }) {
+  const order: AirKind[] = ['program', 'break', 'commercial', 'station-id', 'promo', 'bumper', 'filler', 'flex', 'redirect'];
+  const parts = order.filter((kind) => (summary[kind] ?? 0) >= 1000);
+  const commercial = (['break', 'commercial', 'promo', 'bumper', 'filler'] as AirKind[]).reduce((sum, kind) => sum + (summary[kind] ?? 0), 0);
+  return (
+    <div className="hour-log" aria-label={`${clockTimecode(start).slice(0, 5)} hour`}>
+      <b>{clockTimecode(start).slice(0, 5)}</b>
+      {parts.map((kind) => <span key={kind} className={`kind-${kind}`}><i className="swatch" aria-hidden="true" />{KIND_LABELS[kind]} {durationTimecode(summary[kind] ?? 0)}</span>)}
+      {commercial > 0 && <span className="hour-load">{Math.round(commercial / 60_000)} min commercial time</span>}
+    </div>
+  );
+}
+
+/** A commercial break's estimated spots, under its row. */
+function BreakRundown({ start, lines }: { start: number; lines: ReturnType<typeof estimateBreakFill> }) {
+  const starts = lines.reduce<number[]>((list, line, index) => [...list, index ? list[index - 1] + lines[index - 1].duration : start], []);
+  return (
+    <ol className="rundown" aria-label="Estimated break rundown">
+      {!lines.length && <li className="rundown-empty">No spots known for this break’s filler lists.</li>}
+      {lines.map((line, index) => {
+        const at = starts[index];
+        return <li key={index} className={`kind-${line.kind}`}><time>{clockTimecode(at)}</time><em className="kind-badge">{KIND_BADGES[line.kind] || 'SPOT'}</em><span><b>{line.title}</b><small>{line.detail}</small></span><span className="duration">{durationTimecode(line.duration)}</span></li>;
+      })}
+      <li className="rundown-note">Estimated. Tunarr picks the spots when the break airs.</li>
+    </ol>
+  );
+}
+
 function LengthEditor({ duration, disabled, onApply }: { duration: number; disabled: boolean; onApply: (ms: number) => void }) {
   const [minutes, setMinutes] = useState(Math.floor(duration / 60_000));
   const [seconds, setSeconds] = useState(Math.round((duration % 60_000) / 1000));
@@ -229,6 +267,10 @@ export default function Home() {
   const [libraryPicker, setLibraryPicker] = useState<LibraryPicker | null>(null);
   const [insertOpen, setInsertOpen] = useState(false);
   const [listsOpen, setListsOpen] = useState<'filler' | 'custom' | null>(null);
+  // Lists → Station IDs… / Commercials… open the filler lists filtered to that role.
+  const [listsRole, setListsRole] = useState<FillerRole | undefined>(undefined);
+  // Station-log view: each commercial break expanded into its (estimated) spots.
+  const [showRundowns, setShowRundowns] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [setupDialog, setSetupDialog] = useState<'sources' | 'transcode' | 'smart' | null>(null);
   const [newChannel, setNewChannel] = useState<{ copyFrom: string } | null>(null);
@@ -253,6 +295,7 @@ export default function Home() {
   const scrolledToNow = useRef('');
 
   const live = mode === 'live';
+  const filler = useFillerSpots(live);
   const lineup = programming.lineup;
   const activeChannel = channels.find((channel) => channel.id === activeChannelId);
   const activeChannelIndex = channels.findIndex((channel) => channel.id === activeChannelId);
@@ -310,6 +353,13 @@ export default function Home() {
   const dayStartMs = dayFrom.getTime();
   const dayEndMs = dayTo.getTime();
   const totals = dayTotals(instances, dayStartMs, dayEndMs);
+  const kindOf = (row: Instance): AirKind => airKind(row.item, filler.spots, filler.roles);
+  const kindTotals = (() => {
+    const byKind: Partial<Record<AirKind, number>> = {};
+    for (const row of instances) byKind[kindOf(row)] = (byKind[kindOf(row)] ?? 0) + Math.max(0, Math.min(row.stop, dayEndMs) - Math.max(row.start, dayStartMs));
+    return byKind;
+  })();
+  const hours = hourSummaries(visibleInstances, kindOf, dayStartMs, dayEndMs);
   const canUndo = history.past.length > 0 && !grab;
   const canRedo = history.future.length > 0 && !grab;
   const describe = (target: Block = block, items: LineupItem[] = lineup) => {
@@ -961,6 +1011,22 @@ export default function Home() {
     setInsertOpen(false);
   };
 
+  /** Opens every commercial break with a rotating station ID (one undoable edit). */
+  const openBreaksWithStationIds = () => {
+    if (grab || slotPreview) return;
+    if (!filler.stationIds.length) {
+      notify('No station IDs yet. Tag a filler list as Station IDs in Lists → Station IDs…');
+      return;
+    }
+    const result = openBreaksWithIds(lineup, filler.stationIds, (item) => !!item.id && filler.spots.get(item.id) === 'station-id');
+    if (!result) {
+      notify('Every commercial break already opens with a station ID.');
+      return;
+    }
+    setProgramming((current) => ({ ...current, programs: { ...current.programs, ...Object.fromEntries(filler.stationIds.map((program) => [program.id, program])) } as Programming['programs'] }));
+    applyEdit(`Opened ${result.added} ${result.added === 1 ? 'break' : 'breaks'} with a station ID`, result.lineup, { start: block.start, end: block.start });
+  };
+
   /** Puts a date-specific event into the lineup and shows the day it airs. */
   const placeEventEdit = (placement: EventPlacement, label: string, meta: Record<string, ContentProgram>, date: string) => {
     if (Object.keys(meta).length) setProgramming((current) => ({ ...current, programs: { ...current.programs, ...meta } as Programming['programs'] }));
@@ -1127,7 +1193,7 @@ export default function Home() {
         return;
       }
       const onRow = (event.target as HTMLElement | null)?.classList?.contains('program') || event.target === document.body;
-      if (slotPreview && !['ArrowLeft', 'ArrowRight', 'n', 't', '?'].includes(key) && !back) return;
+      if (slotPreview && !['ArrowLeft', 'ArrowRight', 'n', 't', 'b', '?'].includes(key) && !back) return;
       if (slotPreview && back) { event.preventDefault(); discardSlotPreview(); return; }
       switch (key) {
         case 'ArrowDown':
@@ -1163,6 +1229,7 @@ export default function Home() {
             else if (blockSize > 1) { event.preventDefault(); select(selectedIndex, cursorStart); }
           } else if (!grab && key === 'n') goToNow();
           else if (!grab && key === 't') changeDate(inputDate(new Date()));
+          else if (key === 'b') setShowRundowns((open) => !open);
           else if (!grab && key === 'm' && selectedItem) setArrangeOpen(true);
           else if (!grab && !slotPreview && key === 'i' && activeChannel) setInsertOpen(true);
           else if (!grab && !slotPreview && key === 'e' && activeChannel && lineup.length) setEventOpen(true);
@@ -1214,6 +1281,7 @@ export default function Home() {
       'separator',
       { label: 'Insert…', shortcut: 'I', disabled: !activeChannel || !!grab || !!slotPreview, onSelect: () => setInsertOpen(true) },
       { label: 'Schedule Event…', shortcut: 'E', disabled: !activeChannel || !lineup.length || !!grab || !!slotPreview, onSelect: () => setEventOpen(true) },
+      { label: 'Open Breaks With Station IDs', disabled: !live || !activeChannel || !lineup.length || !!grab || !!slotPreview, onSelect: openBreaksWithStationIds },
       { label: 'Remove', shortcut: 'Del', disabled: !selectedItem || !!grab || !!slotPreview, onSelect: removeSelection },
       { label: 'Move or Swap…', shortcut: 'M', disabled: !selectedItem || !!grab, onSelect: () => setArrangeOpen(true) },
       { label: grab ? 'Drop Here' : 'Pick Up to Slide', shortcut: 'OK', disabled: !selectedItem, onSelect: () => (grab ? drop() : pickUp()) },
@@ -1223,6 +1291,7 @@ export default function Home() {
     { title: 'View', items: [
       { label: 'Go to Now', shortcut: 'N', disabled: !activeChannel, onSelect: goToNow },
       { label: 'Today', shortcut: 'T', onSelect: () => changeDate(inputDate(new Date())) },
+      { label: showRundowns ? 'Hide Break Rundowns' : 'Show Break Rundowns', shortcut: 'B', onSelect: () => setShowRundowns((open) => !open) },
       { label: 'Previous Day', shortcut: '←', onSelect: () => shiftDay(-1) },
       { label: 'Next Day', shortcut: '→', onSelect: () => shiftDay(1) },
     ] },
@@ -1240,7 +1309,9 @@ export default function Home() {
       { label: 'Delete Channel…', disabled: !live || !activeChannel || !!grab, onSelect: confirmDeleteChannel },
     ] },
     { title: 'Lists', items: [
-      { label: 'Filler Lists…', disabled: !live, onSelect: () => setListsOpen('filler') },
+      { label: 'Station IDs…', disabled: !live, onSelect: () => { setListsRole('station-id'); setListsOpen('filler'); } },
+      { label: 'Commercials…', disabled: !live, onSelect: () => { setListsRole('commercials'); setListsOpen('filler'); } },
+      { label: 'Filler Lists…', disabled: !live, onSelect: () => { setListsRole(undefined); setListsOpen('filler'); } },
       { label: 'Custom Shows…', disabled: !live, onSelect: () => setListsOpen('custom') },
       { label: 'Smart Collections…', disabled: !live, onSelect: () => setSetupDialog('smart') },
     ] },
@@ -1258,11 +1329,12 @@ export default function Home() {
   const selectedDetail = blockSize > 1
     ? `${durationTimecode(lineup.slice(block.start, block.end + 1).reduce((sum, item) => sum + Math.max(0, item.duration || 0), 0))} total`
     : selectedItem ? `${programDetail(selectedItem, programming.programs)} · ${durationTimecode(selectedItem.duration)}` : '';
+  const nextStationId = pickStationId(filler.stationIds, lineup);
+  const selectedKind: AirKind = selectedItem ? airKind(selectedItem, filler.spots, filler.roles) : 'program';
   const selectedArt = blockSize === 1 && selectedItem ? programArtwork(selectedItem, programming.programs, live) : undefined;
   const lastRowOfBlock = blockSize > 1 ? visibleInstances.find((row) => row.lineupIndex === block.end && selectedInstance && row.start >= selectedInstance.start) : selectedInstance;
   const busy = loading || channelsLoading || guideLoading;
   const connectionClass = live && connection.status === 'connected' ? 'live' : live && connection.status !== 'checking' ? 'offline' : '';
-  const sortedTotals = Object.entries(totals.byType).sort((a, b) => b[1] - a[1]);
 
   let sourceNote = '';
   if (slotPreview) sourceNote = '';
@@ -1350,9 +1422,20 @@ export default function Home() {
             <label className="search"><span>⌕</span><input aria-label="Search this day" placeholder="Search this day" value={search} onChange={(event) => setSearch(event.target.value)} />{search && <button aria-label="Clear search" onClick={() => setSearch('')}>×</button>}</label>
             <span className="day-count">{visibleInstances.length} {visibleInstances.length === 1 ? 'program' : 'programs'}</span>
           </div>
-          {totals.total > 0 && <div className="day-totals" aria-label="Airtime this day">
-            {sortedTotals.map(([type, ms]) => <span key={type} className={`total-chip type-${type}`}><b>{typeLabel(type)}</b> {durationTimecode(ms)} <small>{Math.round((ms / totals.total) * 100)}%</small></span>)}
-          </div>}
+          {totals.total > 0 && <DayStrip
+            segments={stripSegments(instances, kindOf, dayStartMs, dayEndMs)}
+            from={dayStartMs}
+            to={dayEndMs}
+            now={now}
+            totals={kindTotals}
+            onPick={(position) => {
+              const row = instances[position];
+              if (!row) return;
+              if (search) setSearch('');
+              if (row.lineupIndex >= 0 && !slotPreview) select(row.lineupIndex, row.start);
+              focusCursor.current = true;
+            }}
+          />}
 
           {slotPreview && <div className="preview-bar" role="region" aria-label="Schedule preview">
             <span><b>Schedule preview</b> Tunarr regenerated {slotPreview.lineup.length.toLocaleString('en')} lineup items from your edited slots. Nothing is saved yet.</span>
@@ -1369,9 +1452,17 @@ export default function Home() {
               const showPeriod = position === 0 || dayPeriod(visibleInstances[position - 1].start) !== period;
               const guideOnly = instance.lineupIndex < 0;
               const readOnly = guideOnly || !!slotPreview;
+              const kind = kindOf(instance);
+              const previous = position > 0 ? visibleInstances[position - 1] : undefined;
               const title = instance.title ?? programTitle(instance.item, viewPrograms);
-              const detail = guideOnly ? `${instance.item.type} · in Tunarr’s guide only` : programDetail(instance.item, viewPrograms);
-              const art = guideOnly ? undefined : programArtwork(instance.item, viewPrograms, live, 'thumbnail');
+              const detail = guideOnly ? `${kind === 'program' ? instance.item.type : KIND_LABELS[kind]} · added by Tunarr (guide only)` : programDetail(instance.item, viewPrograms);
+              const art = guideOnly || kind !== 'program' ? undefined : programArtwork(instance.item, viewPrograms, live, 'thumbnail');
+              const hourStart = new Date(instance.start).setMinutes(0, 0, 0);
+              const showHour = !previous || new Date(previous.start).setMinutes(0, 0, 0) !== hourStart;
+              const hour = showHour ? hours.get(Math.max(hourStart, dayStartMs)) : undefined;
+              const rundown = showRundowns && kind === 'break'
+                ? estimateBreakFill(instance.item, instance.stop - instance.start, filler.listSpots, instance.start, !!previous && kindOf(previous) === 'station-id')
+                : null;
               const isOnAir = position === onAir;
               const progress = isOnAir ? Math.min(100, Math.max(0, ((now - instance.start) / (instance.stop - instance.start)) * 100)) : 0;
               const classes = [
@@ -1382,10 +1473,13 @@ export default function Home() {
                 isOnAir ? 'on-air' : '',
                 !readOnly && changed.has(instance.lineupIndex) ? 'changed' : '',
                 grab && inBlock(instance.lineupIndex) ? 'grabbed' : '',
+                `kind-${kind}`,
+                guideOnly ? 'guide-only' : '',
               ].filter(Boolean).join(' ');
               return (
                 <Fragment key={`${instance.start}-${instance.lineupIndex}`}>
                   {showPeriod && <div className="timeline-label"><span>{period}</span><i /></div>}
+                  {hour && <HourLog start={hourStart} summary={hour.byKind} />}
                   <button
                     ref={(element) => { if (!element) return; rowRefs.current.set(position, element); return () => { if (rowRefs.current.get(position) === element) rowRefs.current.delete(position); }; }}
                     className={classes}
@@ -1402,11 +1496,12 @@ export default function Home() {
                     }}
                   >
                     <time>{clockTimecode(instance.start)}{isOnAir && <em className="on-air-tag">ON AIR</em>}</time>
-                    <ArtTile className="art" tone={artTone(instance.lineupIndex)} title={title} src={art} />
-                    <span className="program-copy"><b>{title}</b><small>{detail}</small></span>
+                    {kind === 'program' ? <ArtTile className="art" tone={artTone(instance.lineupIndex)} title={title} src={art} /> : <span className={`art kind-tile kind-${kind}`} aria-hidden="true">{KIND_GLYPHS[kind]}</span>}
+                    <span className="program-copy"><b>{KIND_BADGES[kind] && <em className="kind-badge">{KIND_BADGES[kind]}</em>}{title}</b><small>{detail}</small></span>
                     <span className="duration">{durationTimecode(instance.stop - instance.start)}</span><span className="grip" aria-hidden="true">{grab && inBlock(instance.lineupIndex) ? '⇕' : '⠿'}</span>
                     {isOnAir && <i className="now-line" style={{ top: `${progress}%` }} aria-hidden="true" />}
                   </button>
+                  {rundown && <BreakRundown start={instance.start} lines={rundown} />}
                 </Fragment>
               );
             })}
@@ -1431,7 +1526,7 @@ export default function Home() {
             <p className="hint">Back closes the preview. The edited slots are kept until you leave this channel.</p>
           </> : selectedItem ? <>
             <ArtTile className="poster" tone={artTone(selectedIndex)} title={selectedTitle} src={selectedArt} />
-            <span className="type-chip">{blockSize > 1 ? 'block' : selectedItem.type}</span>{grab && <span className="type-chip moving-chip">moving</span>}
+            <span className="type-chip">{blockSize > 1 ? 'block' : selectedKind === 'program' ? selectedItem.type : KIND_LABELS[selectedKind].replace(/s$/, '')}</span>{grab && <span className="type-chip moving-chip">moving</span>}
             <h2>{selectedTitle}</h2>
             <p className="subtle inspector-detail">{selectedDetail}</p>
             <div className="info-row"><span>Starts</span><b>{selectedInstance ? fullTimeLabel(selectedInstance.start) : 'Repeating lineup'}</b></div>
@@ -1533,6 +1628,7 @@ export default function Home() {
                 ['CH+ / CH−, PgUp / PgDn', 'Previous / next channel'],
                 ['N', 'Go to what is on air now'],
                 ['T', 'Today'],
+                ['B', 'Show or hide break rundowns'],
                 ['M', 'Move or swap…'],
                 ['I', 'Insert…'],
                 ['E', 'Schedule an event on a date…'],
@@ -1552,6 +1648,7 @@ export default function Home() {
       </div>}
 
       {slotEditor.open && slotEditor.channelId === activeChannelId && activeChannel && (slotEditor.loaded ? <ScheduleEditor
+        fillerRoles={filler.roles}
         channelLabel={`CH ${activeChannel.number} ${activeChannel.name}`}
         isNew={slotEditor.isNew}
         draft={slotEditor.draft}
@@ -1589,7 +1686,10 @@ export default function Home() {
         keepOnAir={canKeepOnAir ? { checked: keepOnAir, onChange: setKeepOnAir } : undefined}
         startFor={(where, added) => { const point = insertPoint(where, added); return point.start === null ? null : { start: point.start, passes: point.passes }; }}
         onBrowse={(where) => { setInsertOpen(false); setLibraryPicker({ purpose: 'insert', where }); }}
-        onInsert={(items, label, where) => insertAt(where, items, label)}
+        roles={filler.roles}
+        nextStationId={nextStationId}
+        stationIdTitle={nextStationId ? spotTitle(nextStationId) : undefined}
+        onInsert={(items, label, where, meta) => insertAt(where, items, label, meta)}
         onClose={() => setInsertOpen(false)}
       />}
 
@@ -1601,10 +1701,10 @@ export default function Home() {
         onClose={() => setLibraryPicker(null)}
       />}
 
-      {listsOpen && <ListsManager kind={listsOpen} onClose={() => setListsOpen(null)} onChanged={() => { if (slotEditor.open || catalog) loadCatalog(); }} />}
+      {listsOpen && <ListsManager kind={listsOpen} initialRole={listsRole} roles={filler.roles} onRoleChange={filler.setRole} onClose={() => setListsOpen(null)} onChanged={() => { filler.reload(); if (slotEditor.open || catalog) loadCatalog(); }} />}
 
       {eventOpen && activeChannel && <EventDialog channel={{ ...activeChannel, startTime: channelStart }} channels={channels} lineup={lineup} programs={programming.programs} date={selectedDate} generated={hasGeneratedSchedule(programming)} onClose={() => setEventOpen(false)} onPlace={placeEventEdit} />}
-      {templatesOpen && <TemplatesDialog channels={channels} activeChannel={activeChannel} activeHasSchedule={hasGeneratedSchedule(programming)} catalog={catalog} onClose={() => setTemplatesOpen(false)} onApply={applyTemplate} />}
+      {templatesOpen && <TemplatesDialog channels={channels} activeChannel={activeChannel} activeHasSchedule={hasGeneratedSchedule(programming)} catalog={catalog} fillerRoles={filler.roles} onClose={() => setTemplatesOpen(false)} onApply={applyTemplate} />}
       {setupDialog === 'smart' && <SmartCollectionsManager onClose={() => setSetupDialog(null)} onChanged={() => { if (slotEditor.open || catalog) loadCatalog(); }} />}
       {setupDialog === 'sources' && <MediaSourcesDialog onClose={() => setSetupDialog(null)} />}
       {setupDialog === 'transcode' && <TranscodeProfilesDialog onClose={() => setSetupDialog(null)} />}
@@ -1622,6 +1722,7 @@ export default function Home() {
       />}
 
       {settingsOpen && activeChannelId && <ChannelSettingsDialog
+        fillerRoles={filler.roles}
         channelId={activeChannelId}
         onClose={() => setSettingsOpen(false)}
         onSaved={(saved, startTimeChanged) => {

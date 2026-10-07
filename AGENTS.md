@@ -61,7 +61,7 @@ Chromium with `npx playwright install chromium`. CI runs all of them
    - Channel routes live in `server/tunarrProxy.ts` (`matchRoute`). Library, list and
      channel-settings routes live in `server/content.ts` (`matchContentRoute`). Setup
      routes (channels, transcode profiles, media sources, smart collections) live in
-     `server/admin.ts` (`matchAdminRoute`). Lineup's own routes (saved templates, AI)
+     `server/admin.ts` (`matchAdminRoute`). Lineup's own routes (saved templates, filler-list roles, AI)
      live in `server/lineupRoutes.ts` (`matchLineupRoute`); templates are always checked
      with `validateTemplate` (`server/templateSchema.ts`). Every route is explicit, IDs are validated,
      and no raw Tunarr request is accepted: search filters and smart-collection filters
@@ -110,8 +110,10 @@ Chromium with `npx playwright install chromium`. CI runs all of them
 7. **Server stays dependency-free.** The runtime Docker stage copies only `dist-server/`
    and `dist-local/`, with no `node_modules`. Use Node built-ins in `server/`, or update
    the Dockerfile deliberately. Its only stored state is saved templates in
-   `LINEUP_DATA_DIR/templates.json` (`server/templateStore.ts`): atomic writes, and a file
-   it can't parse is never overwritten.
+   `LINEUP_DATA_DIR/templates.json` (`server/templateStore.ts`) and filler-list roles in
+   `LINEUP_DATA_DIR/filler-roles.json` (`server/fillerRoleStore.ts`, owner decision
+   2026-10-07), both through `server/jsonFile.ts`: atomic writes, and a file it can't
+   parse is never overwritten.
 8. **Keep the desk TV/remote-operable.** Every action must be reachable without a
    mouse: arrow keys, Enter/OK, Escape/Back, PageUp/PageDown or CH±, the menus and
    the `?` shortcut list. Don't add hover-only or drag-only features.
@@ -137,19 +139,22 @@ Chromium with `npx playwright install chromium`. CI runs all of them
   undo/redo and rebasing, `draftStore.ts` for persistent drafts, `schedule.ts` for slot
   editing (seasons, linked slots), `templates.ts` (presets, ad styles, `templateToDraft`,
   `scheduleToTemplate`), `networkTemplates.ts` (the network catalog), `templateCatalog.ts`,
-  `events.ts` (placing events on dates), and `programInfo.ts` for titles, artwork and logo URLs.
+  `events.ts` (placing events on dates), `fillerRoles.ts` (filler-list roles, spot lengths),
+  `airKinds.ts` (station-log kinds: breaks, IDs, flex; hour summaries, break rundowns), and
+  `programInfo.ts` for titles, artwork and logo URLs.
 - **Put HTTP and validation logic in `server/`:** `tunarrProxy.ts` (framework-free),
   `content.ts`, `admin.ts`, `logos.ts`, `smartCollection.ts`, `templateSchema.ts`,
-  `templateStore.ts`, `lineupRoutes.ts`, `ai.ts`, `upstream.ts`,
+  `templateStore.ts`, `fillerRoles.ts`, `fillerRoleStore.ts`, `jsonFile.ts`, `lineupRoutes.ts`, `ai.ts`, `upstream.ts`,
   `slotSchedule.ts`, `lineupVersion.ts`, `auth.ts`, `hosts.ts` and `app.ts`. `lib/` and
   `app/` may import pure modules from `server/` (`lineupVersion`, `slotSchedule`,
-  `smartCollection`, `templateSchema`) but never Node APIs (`logos.ts` and
-  `templateStore.ts` use Node built-ins).
+  `smartCollection`, `templateSchema`, `fillerRoles`) but never Node APIs (`logos.ts`,
+  `jsonFile.ts` and the stores use Node built-ins).
 - **Keep `app/page.tsx` for UI state and rendering,** and `app/components/` for larger
   UI pieces: `MenuBar`, `MoveDialog`, `ScheduleEditor`, `InsertDialog`,
   `LibraryBrowser`, `ListsManager`, `ChannelSettingsDialog`, `NewChannelDialog`,
   `SmartCollectionsManager`, `MediaSourcesDialog`, `TranscodeProfilesDialog`,
-  `TemplatesDialog` (gallery, AI panel), `TemplateEditor`, `EventDialog`.
+  `TemplatesDialog` (gallery, AI panel), `TemplateEditor`, `EventDialog`, `DayStrip`.
+  `app/useFillerSpots.ts` loads filler lists, their roles and spots for the day view.
 - **Add or update tests** for any behavior change.
   - Unit and UI tests go in `tests/`. Proxy tests inject `fetchImpl`; UI tests mock
     `fetch` with a stateful fake companion (`tests/page.test.tsx`).

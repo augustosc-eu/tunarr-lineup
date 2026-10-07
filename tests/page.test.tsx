@@ -10,6 +10,10 @@ import { guideFor, mixedLineup, mixedPrograms } from './fixtures';
 type Reply = { status: number; body: unknown } | 'network-error';
 
 const FILLER_ID = 'f0000000-0000-4000-8000-0000000000f1';
+const ID_LIST = 'f0000000-0000-4000-8000-0000000000f2';
+const SPOT_ID = 'd0000000-0000-4000-8000-0000000000d1';
+const IDENT_A = 'd0000000-0000-4000-8000-0000000000a1';
+const IDENT_B = 'd0000000-0000-4000-8000-0000000000a2';
 const CUSTOM_ID = 'c0000000-0000-4000-8000-0000000000c1';
 const PROFILE_ID = 'p0000000-0000-4000-8000-000000000001';
 const PROFILE_720 = 'p0000000-0000-4000-8000-000000000002';
@@ -38,12 +42,20 @@ const today = () => {
 };
 
 /** A stateful fake of the companion's /api/tunarr routes. */
-function fakeCompanion(options: { schedule?: { type: string; slots: unknown[]; [key: string]: unknown }; health?: Reply; programming?: Reply; lineupStatus?: number; lineup?: LineupItem[]; startTime?: number } = {}) {
+function fakeCompanion(options: { schedule?: { type: string; slots: unknown[]; [key: string]: unknown }; health?: Reply; programming?: Reply; lineupStatus?: number; lineup?: LineupItem[]; startTime?: number; stationIds?: boolean } = {}) {
   const startTime = options.startTime ?? dayRange(today()).from.getTime() - 60 * 60_000;
   const state = {
     lineup: options.lineup ?? (mixedLineup() as LineupItem[]),
     previewedSlots: undefined as unknown,
-    fillerLists: [{ id: FILLER_ID, name: 'Station Ads', contentCount: 3, synced: false }] as Array<{ id: string; name: string; contentCount?: number; synced: boolean }>,
+    fillerLists: [{ id: FILLER_ID, name: 'Station Ads', contentCount: 3, synced: false }, ...(options.stationIds ? [{ id: ID_LIST, name: 'Channel 3 idents', contentCount: 2, synced: false }] : [])] as Array<{ id: string; name: string; contentCount?: number; synced: boolean }>,
+    fillerRoles: (options.stationIds ? { [ID_LIST]: 'station-id' } : {}) as Record<string, string>,
+    listPrograms: {
+      [FILLER_ID]: [{ type: 'content', id: SPOT_ID, duration: 30_000, program: { type: 'other_video', title: 'Cola Spot' } }],
+      [ID_LIST]: [
+        { type: 'content', id: IDENT_A, duration: 10_000, program: { type: 'other_video', title: 'Ident Sunrise' } },
+        { type: 'content', id: IDENT_B, duration: 10_000, program: { type: 'other_video', title: 'Ident Night' } },
+      ],
+    } as Record<string, unknown[]>,
     templates: [] as unknown[],
     sources: [{ id: 'src-1', name: 'Plex', type: 'plex', libraries: [{ id: 'lib-movies', name: 'Movies', mediaType: 'movies', enabled: true }] }] as Array<{ id: string; name: string; type: string; libraries: unknown[] }>,
     settings: { id: 'chan-news', name: 'Newsroom', number: 3, streamMode: 'hls', transcodeConfigId: 'p0000000-0000-4000-8000-000000000001', icon: { path: '' }, fillerCollections: [] as unknown[], fillerRepeatCooldown: 30000, disableFillerOverlay: false, guideMinimumDuration: 30000, guideFlexTitle: '', groupTitle: 'tunarr', startTime },
@@ -114,6 +126,15 @@ function fakeCompanion(options: { schedule?: { type: string; slots: unknown[]; [
     if (url.pathname === '/api/tunarr/custom-shows') return reply({ status: 200, body: [{ id: CUSTOM_ID, name: 'Marathon', contentCount: 2, synced: false }] });
     if (url.pathname === '/api/tunarr/smart-collections') return reply({ status: 200, body: [] });
     if (url.pathname === '/api/tunarr/filler-lists' && method === 'GET') return reply({ status: 200, body: state.fillerLists });
+    const listPrograms = /^\/api\/tunarr\/filler-lists\/([^/]+)\/programs$/.exec(url.pathname);
+    if (listPrograms) return reply({ status: 200, body: state.listPrograms[listPrograms[1]] ?? [] });
+    if (url.pathname === '/api/tunarr/filler-roles') return reply({ status: 200, body: state.fillerRoles });
+    const role = /^\/api\/tunarr\/filler-roles\/([^/]+)$/.exec(url.pathname);
+    if (role) {
+      if (method === 'DELETE') delete state.fillerRoles[role[1]];
+      else state.fillerRoles[role[1]] = (JSON.parse(String(init!.body)) as { role: string }).role;
+      return reply({ status: 200, body: { ...state.fillerRoles } });
+    }
     if (url.pathname === '/api/tunarr/filler-lists' && method === 'POST') {
       const created = JSON.parse(String(init!.body)) as { name: string; programs: unknown[] };
       state.fillerLists.push({ id: 'f0000000-0000-4000-8000-0000000000f9', name: created.name, contentCount: created.programs.length, synced: false });
@@ -581,9 +602,11 @@ describe('programming desk tools', () => {
     await screen.findAllByText('Alpha Movie');
     expect(screen.getByText('ON AIR')).toBeTruthy();
     expect(document.querySelector('.program.on-air .now-line')).toBeTruthy();
-    const totals = screen.getByLabelText('Airtime this day');
-    expect(within(totals).getByText('Content')).toBeTruthy();
-    expect(within(totals).getByText('Flex')).toBeTruthy();
+    const totals = screen.getByRole('group', { name: 'Airtime this day' });
+    expect(within(totals).getByText('Programs')).toBeTruthy();
+    // The fixture's flex plays from filler lists: a commercial break, not plain flex.
+    expect(within(totals).getByText('Commercial breaks')).toBeTruthy();
+    expect(within(totals).getByText('Redirects')).toBeTruthy();
   });
 
   it('exports the day as a program log', async () => {
@@ -928,7 +951,9 @@ describe('full lineup editing', () => {
     fireEvent.keyDown(document.body, { key: 'i' });
     const insert = await screen.findByRole('dialog', { name: 'Insert into the lineup' });
     fireEvent.click(within(insert).getByRole('radio', { name: 'Commercial break' }));
-    fireEvent.click(await within(insert).findByLabelText(/Station Ads/));
+    // "Station Ads" reads as a commercials list, so it is picked already.
+    await waitFor(() => expect((within(insert).getByLabelText(/Station Ads/) as HTMLInputElement).checked).toBe(true));
+    expect(within(insert).getByText(/Tag a filler list as Station IDs/)).toBeTruthy();
     fireEvent.change(within(insert).getByLabelText('Length minutes'), { target: { value: '3' } });
     fireEvent.click(within(insert).getByRole('radio', { name: /Before/ }));
     fireEvent.click(within(insert).getByRole('button', { name: 'Insert' }));
@@ -1248,5 +1273,83 @@ describe('AI programming, saved templates and events', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Place event' }));
     expect(await screen.findByText(/Scheduled “Cup final” for/)).toBeTruthy();
     expect(screen.getAllByText(/Movie Night/).length).toBeGreaterThan(0);
+  });
+});
+
+describe('station IDs, commercials and flex time', () => {
+  const posted = (requests: ReturnType<typeof fakeCompanion>['requests']) => (requests.find((r) => r.method === 'POST' && r.path.endsWith('/programming'))!.body as { lineup: LineupItem[] }).lineup;
+  const menu = (title: string, item: RegExp) => {
+    fireEvent.click(screen.getByRole('menuitem', { name: title }));
+    fireEvent.click(screen.getByRole('menuitem', { name: item }));
+  };
+
+  it('marks breaks, filler and redirects in the day view and expands a break rundown', async () => {
+    fakeCompanion({ stationIds: true });
+    render(<Home />);
+    await screen.findAllByText('Alpha Movie');
+    expect(document.querySelector('.program.kind-break .kind-badge')?.textContent).toBe('BREAK');
+    expect(document.querySelector('.program.kind-redirect')).toBeTruthy();
+    expect(document.querySelector('.program.kind-program')).toBeTruthy();
+    expect(document.querySelector('.hour-log')).toBeTruthy();
+    expect(screen.queryByRole('list', { name: 'Estimated break rundown' })).toBeNull();
+    fireEvent.keyDown(document.body, { key: 'b' });
+    const rundowns = await screen.findAllByRole('list', { name: 'Estimated break rundown' });
+    expect(within(rundowns[0]).getByText(/Tunarr picks the spots/)).toBeTruthy();
+    fireEvent.keyDown(document.body, { key: 'b' });
+    expect(screen.queryByRole('list', { name: 'Estimated break rundown' })).toBeNull();
+  });
+
+  it('tags a filler list as station IDs from Lists → Station IDs…', async () => {
+    const { requests } = fakeCompanion();
+    render(<Home />);
+    await screen.findAllByText('Alpha Movie');
+    menu('Lists', /^Station IDs/);
+    const dialog = await screen.findByRole('dialog', { name: 'Station IDs' });
+    expect(within(dialog).getByRole('radio', { name: 'Station IDs' }).getAttribute('aria-checked')).toBe('true');
+    expect(within(dialog).getByText(/No lists tagged Station IDs yet/)).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'All' }));
+    fireEvent.click(await within(dialog).findByRole('option', { name: /Station Ads/ }));
+    expect(await within(dialog).findByText(/1 spot ·/)).toBeTruthy();
+    expect(within(dialog).getByText(':30 spot')).toBeTruthy();
+    fireEvent.change(within(dialog).getByLabelText('On-air role'), { target: { value: 'station-id' } });
+    await waitFor(() => expect(requests.some((r) => r.method === 'PUT' && r.path === `/api/tunarr/filler-roles/${FILLER_ID}`)).toBe(true));
+    expect(requests.find((r) => r.method === 'PUT' && r.path.startsWith('/api/tunarr/filler-roles/'))!.body).toEqual({ role: 'station-id' });
+  });
+
+  it('inserts a commercial break that opens with a rotating station ID', async () => {
+    const { requests } = fakeCompanion({ stationIds: true });
+    render(<Home />);
+    await pickAlpha();
+    fireEvent.keyDown(document.body, { key: 'i' });
+    const insert = await screen.findByRole('dialog', { name: 'Insert into the lineup' });
+    fireEvent.click(within(insert).getByRole('radio', { name: 'Commercial break' }));
+    const withId = await within(insert).findByLabelText(/Open with a station ID/) as HTMLInputElement;
+    expect(withId.checked).toBe(true);
+    fireEvent.change(within(insert).getByLabelText('Length minutes'), { target: { value: '2' } });
+    fireEvent.click(within(insert).getByRole('button', { name: 'Insert' }));
+    expect(await screen.findByText(/^Inserted a commercial break with a station ID at /)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Save lineup' }));
+    await waitFor(() => expect(count(requests, 'POST', '/api/tunarr/channels/chan-news/programming')).toBe(1));
+    const lineup = posted(requests);
+    expect(lineup[1]).toEqual({ type: 'content', id: IDENT_A, duration: 10_000 });
+    expect(lineup[2]).toMatchObject({ type: 'flex', duration: 2 * 60_000 - 10_000, fillerConfig: { fillerListIds: [FILLER_ID] } });
+  });
+
+  it('opens every existing break with a station ID in one undoable edit', async () => {
+    const { requests } = fakeCompanion({ stationIds: true });
+    render(<Home />);
+    await screen.findAllByText('Alpha Movie');
+    await waitFor(() => expect(requests.some((r) => r.path === `/api/tunarr/filler-lists/${ID_LIST}/programs`)).toBe(true));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    menu('Edit', /^Open Breaks With Station IDs/);
+    expect(await screen.findByText(/^Opened 1 break with a station ID/)).toBeTruthy();
+    expect(document.querySelector('.program.kind-station-id')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Save lineup' }));
+    await waitFor(() => expect(count(requests, 'POST', '/api/tunarr/channels/chan-news/programming')).toBe(1));
+    const lineup = posted(requests);
+    expect(lineup[1]).toEqual({ type: 'content', id: IDENT_A, duration: 10_000 });
+    // The break keeps its other fields and gives up the ID's length, so later programs keep their times.
+    expect(lineup[2]).toEqual({ type: 'flex', duration: 10 * 60_000 - 10_000, persisted: true, fillerConfig: { fillerListIds: ['8f3c1b2a-0000-4000-8000-000000000001'], origin: 'flex' } });
+    expect(lineup).toHaveLength(7);
   });
 });

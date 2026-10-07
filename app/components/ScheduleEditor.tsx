@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { roleOf, ROLE_LABELS, type FillerRoles } from '../../lib/fillerRoles';
 import {
   catalogOptions,
   changeSlotSource,
@@ -49,6 +50,8 @@ type Props = {
   draft: ScheduleDraftState;
   changed: boolean;
   catalog: SlotCatalog | null;
+  /** Roles Lineup keeps for filler lists, for labels and the station-ID shortcut. */
+  fillerRoles?: FillerRoles;
   currentChannelId: string;
   busy: boolean;
   error: string;
@@ -70,7 +73,8 @@ const MINUTE = 60_000;
 const minutes = (ms: unknown) => (Number.isFinite(Number(ms)) ? String(Math.round((Number(ms) / MINUTE) * 100) / 100) : '');
 const LIBRARY_SHOW = '__library-show__';
 
-function SlotCommercials({ slot, fillerLists, onChange }: { slot: Slot; fillerLists: Array<{ id: string; name: string }>; onChange: (slot: Slot) => void }) {
+function SlotCommercials({ slot, fillerLists, roles = {}, onChange }: { slot: Slot; fillerLists: Array<{ id: string; name: string }>; roles?: FillerRoles; onChange: (slot: Slot) => void }) {
+  const idList = fillerLists.find((list) => roleOf(list, roles) === 'station-id');
   const fillers = Array.isArray(slot.filler) ? (slot.filler as SlotFiller[]) : [];
   const midRoll = slot.midRoll as MidRoll | undefined;
   const setFillers = (next: SlotFiller[]) => {
@@ -90,7 +94,7 @@ function SlotCommercials({ slot, fillerLists, onChange }: { slot: Slot; fillerLi
       {fillers.map((filler, index) => (
         <div className="commercial-row" key={index}>
           <select aria-label={`Commercial list ${index + 1}`} value={filler.fillerListId} onChange={(event) => setFillers(fillers.map((item, i) => (i === index ? { ...item, fillerListId: event.target.value } : item)))}>
-            {fillerLists.map((list) => <option key={list.id} value={list.id}>{list.name}</option>)}
+            {fillerLists.map((list) => { const role = roleOf(list, roles); return <option key={list.id} value={list.id}>{list.name}{role ? ` (${ROLE_LABELS[role]})` : ''}</option>; })}
             {!fillerLists.some((list) => list.id === filler.fillerListId) && <option value={filler.fillerListId}>Missing list</option>}
           </select>
           <span className="checklist inline" role="group" aria-label={`Where commercial list ${index + 1} plays`}>
@@ -108,7 +112,8 @@ function SlotCommercials({ slot, fillerLists, onChange }: { slot: Slot; fillerLi
         </div>
       ))}
       <div className="commercial-tools">
-        <button disabled={!fillerLists.length} onClick={() => setFillers([...fillers, { types: ['pre'], fillerListId: fillerLists[0].id, fillerOrder: 'shuffle_prefer_short' }])}>Add commercials</button>
+        <button disabled={!fillerLists.length} onClick={() => setFillers([...fillers, { types: ['pre'], fillerListId: (fillerLists.find((list) => roleOf(list, roles) === 'commercials') ?? fillerLists[0]).id, fillerOrder: 'shuffle_prefer_short' }])}>Add commercials</button>
+        {idList && !fillers.some((filler) => filler.fillerListId === idList.id) && <button onClick={() => setFillers([{ types: ['pre'], fillerListId: idList.id, fillerOrder: 'uniform' }, ...fillers])} title="Tunarr decides the order of spots inside a break">Add station IDs to breaks</button>}
         <label><input type="checkbox" checked={!!midRoll} onChange={(event) => setMidRoll(event.target.checked ? structuredClone(DEFAULT_MID_ROLL) : undefined)} /> Mid-roll breaks inside programs</label>
       </div>
       {midRoll && <div className="commercial-row">
@@ -368,7 +373,7 @@ export function ScheduleEditor(props: Props) {
                     setSlots(draft.slots.map((item, position) => (position === index || group?.members.includes(position) ? { ...item, direction: event.target.value } : item)));
                   }}><option value="asc">First to last</option><option value="desc">Last to first</option></select></div>}
                   {slotCanLink(slot) && <SlotLinking slots={draft.slots} index={index} groups={groups} time={time} onChange={setSlots} />}
-                  <div className="slot-section column"><b>Commercials</b><SlotCommercials slot={slot} fillerLists={catalog?.fillerLists ?? []} onChange={(updated) => update(index, () => updated)} /></div>
+                  <div className="slot-section column"><b>Commercials</b><SlotCommercials slot={slot} fillerLists={catalog?.fillerLists ?? []} roles={props.fillerRoles} onChange={(updated) => update(index, () => updated)} /></div>
                 </div>}
               </div>
             );

@@ -59,7 +59,9 @@ see [Run with Docker Compose](#run-with-docker-compose-recommended).
   **Remove** (or `Delete`) takes items out. Flex, breaks and redirects have an adjustable length in the inspector. Every edit is in the edit list and the stored draft. The dialog says when inserted items will air. Because a manual lineup repeats from the channel's start time, a longer lineup moves later passes; tick **Keep what's on air in place** to have the companion move the start time on save so the current pass keeps its times.
 - **Library browser.** Browse or search any media source and library Tunarr has indexed (Plex, Jellyfin, Emby, local folders), and drill into shows and seasons. Libraries of up to 1,000 items are listed in episode order (by the number in each title, whatever its language) and searched by number as you type: "capitulo 2" finds "Chapter 2". Picks are listed before you insert them.
 - **Commercials and filler.**
-  - **Lists → Filler Lists…** creates and edits filler lists (commercials, bumpers, station IDs). **Lists → Custom Shows…** manages custom shows.
+  - **Lists → Filler Lists…** creates and edits filler lists (commercials, bumpers, station IDs). **Lists → Station IDs…** and **Commercials…** show them by on-air role, which Lineup keeps for each list. **Lists → Custom Shows…** manages custom shows.
+  - Commercial breaks can open with a rotating station ID; **Edit → Open Breaks With Station IDs** adds one to every break.
+  - The day view reads like a station log: breaks, station IDs, spots, flex time and redirects are marked, each hour shows its commercial load, a day strip shows the whole day, and **View → Show Break Rundowns** (`B`) estimates each break's spots.
   - **Channel → Channel Settings…** sets which filler lists play during a channel's flex time (weights and cooldowns), plus the channel's name, number, group, guide flex title and start time.
   - Slots can carry their own commercials: before or after each program, at the start or end of the slot, or as mid-roll breaks inside programs.
 - **Slot schedules.**
@@ -148,6 +150,7 @@ accident.
 | `GET /api/tunarr/media-sources/manage`, `POST …/add`, `DELETE …/:id`, `POST …/:id/refresh`, `PUT …/:id/libraries/:libraryId`, `POST …/:id/libraries/:libraryId/scan` | Tunarr's media-source API (Jellyfin and Emby sign-in goes through Tunarr's `/api/jellyfin/login` / `/api/emby/login`; addresses, tokens, accounts and folder paths are never returned) |
 | `POST /api/tunarr/smart-collections/create`, `POST …/preview`, `GET`/`PUT`/`DELETE …/:id` | Tunarr's smart-collection API and `POST /api/programs/search` for previews (rules are turned into Tunarr's filter by the companion) |
 | `GET`/`POST /api/tunarr/templates`, `PUT`/`DELETE …/:id` | Lineup's own saved templates (`LINEUP_DATA_DIR/templates.json`); not Tunarr |
+| `GET /api/tunarr/filler-roles`, `PUT`/`DELETE …/:id` | Lineup's own filler-list roles (`LINEUP_DATA_DIR/filler-roles.json`); not Tunarr |
 | `GET /api/tunarr/ai`, `POST /api/tunarr/ai/template` | Lineup's AI assistant: status, and a template from `{ prompt, channelId?, includeLibrary, baseTemplate? }`. Reads context from Tunarr (search, lists, channel programming) and calls the configured AI provider |
 | `GET /api/tunarr/programs/:id/artwork/:type` | `GET {TUNARR_URL}/api/programs/:id/artwork/:type` (image types only; `:id` must be a UUID; `:type` is `poster`, `thumbnail`, `landscape` or `banner`) |
 
@@ -263,7 +266,7 @@ Server environment variables:
 | `TUNARR_TIMEOUT_MS` | `10000` | Upstream timeout for reads |
 | `TUNARR_SAVE_TIMEOUT_MS` | `30000` | Upstream timeout for saves |
 | `LINEUP_EXTERNAL_LOGOS` | `true` | Set to `false` to stop the companion fetching channel logos hosted on public sites |
-| `LINEUP_DATA_DIR` | `./data` (`/data` in Docker) | Where saved templates are kept (`templates.json`) |
+| `LINEUP_DATA_DIR` | `./data` (`/data` in Docker) | Where saved templates (`templates.json`) and filler-list roles (`filler-roles.json`) are kept |
 | `LINEUP_AI_PROVIDER` | (auto) | `anthropic` or `openai` (any OpenAI-compatible API, including Ollama) |
 | `LINEUP_AI_API_KEY` | (none) | API key; `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` also work |
 | `LINEUP_AI_MODEL` | `claude-sonnet-5-5` for Anthropic | Model name (required for OpenAI-compatible providers) |

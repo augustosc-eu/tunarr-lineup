@@ -71,7 +71,12 @@ server implements those paths.
 | `server/admin.ts` | Tunarr setup routes: `matchAdminRoute`, `handleAdminRoute`, `newChannel`, `validateChannelCreate`, `TRANSCODE_FIELDS`, `validateTranscodeChanges`, `manageableSources`, `validateMediaSourceAdd`, `validateSmartCollection`. |
 | `server/templateSchema.ts` | Template types and `validateTemplate` (ids, names, roles and suggestions, day plans, ad style, pad/lateness, role defaults reduced to plain source fields). Pure; the browser imports it. |
 | `server/templateStore.ts` | Saved templates in `LINEUP_DATA_DIR/templates.json`: serialized, atomic writes; unreadable files are reported, never overwritten. |
-| `server/lineupRoutes.ts` | Lineup's own routes: `/templates` and `/ai` (`matchLineupRoute`, `handleLineupRoute`). |
+| `server/lineupRoutes.ts` | Lineup's own routes: `/templates`, `/filler-roles` and `/ai` (`matchLineupRoute`, `handleLineupRoute`). |
+| `server/jsonFile.ts` | One JSON file in `LINEUP_DATA_DIR`: serialized, atomic writes; a file that can't be parsed is reported, never overwritten. Used by both stores. |
+| `server/fillerRoles.ts` / `server/fillerRoleStore.ts` | Filler-list roles (`station-id`, `commercials`, `promos`, `bumpers`, `other`) and their store, `LINEUP_DATA_DIR/filler-roles.json`. |
+| `lib/fillerRoles.ts` | Role labels, `guessRole` from list names, `spotLength` (`:30`), `spotBreakdown`. |
+| `lib/airKinds.ts` | Station-log view: `airKind` per row, `hourSummaries`, `stripSegments`, `estimateBreakFill` (labeled estimate). Station-ID edits (`pickStationId`, `makeBreakWithId`, `openBreaksWithIds`) are in `lib/broadcast.ts`. |
+| `app/useFillerSpots.ts` | Loads filler lists, roles and list programs for the day view (spot index, station IDs, break rundowns). |
 | `server/ai.ts` | AI assistant: `createAiConfig` (`LINEUP_AI_*`), `gatherContext` (library, lists, channel summary from Tunarr), `SYSTEM_PROMPT`, `PROPOSAL_SCHEMA`, `callModel` (Anthropic Messages with a forced tool, or OpenAI-compatible function calling with a JSON-text fallback), `resolveProposal`. |
 | `server/smartCollection.ts` | Smart-collection rules ↔ Tunarr search filters: `RULE_FIELDS`, `rulesToFilter`, `filterToRules`, `describeRules`. Pure; the browser imports it. |
 | `server/logos.ts` | Channel logos: `channelLogo`, `logoSource`, `fetchPublicImage`, `isPublicAddress`, in-memory cache. Uses Node built-ins. |
@@ -302,6 +307,8 @@ pipeline as the content routes but answer from the companion.
 | --- | --- | --- |
 | `/templates` | GET, POST | List saved templates; create one (the server assigns a `my-…` id, so a saved template can't shadow a built-in one) after `validateTemplate` |
 | `/templates/:id` | PUT, DELETE | Replace or delete a saved template |
+| `/filler-roles` | GET | `{ [fillerListId]: role }` from `filler-roles.json` (works without `TUNARR_URL`) |
+| `/filler-roles/:id` | PUT, DELETE | Set (`{ role }`, one of `station-id`, `commercials`, `promos`, `bumpers`, `other`) or clear a list's role. `:id` must be a UUID; up to 1,000 entries |
 | `/ai` | GET | `{ enabled, provider, model }`, or `{ enabled: false, message }` saying what to set |
 | `/ai/template` | POST | `{ prompt (≤ 2000 chars), channelId?, includeLibrary, baseTemplate? }`. `gatherContext` reads smart collections, custom shows and filler lists, and optionally the library (shows and movies via `POST /api/programs/search`, up to 600 and 300) and the channel's programming (a most-aired summary). `callModel` sends `SYSTEM_PROMPT` plus `buildUserMessage`; the model must call `propose_schedule` (`PROPOSAL_SCHEMA`). `resolveProposal` converts blocks, keeps role sources only when the id is in the catalog, drops suggestions `rulesToFilter` rejects, picks lists only from known ids, and validates the result with an `ai-…` id. Provider errors become `ai_auth`, `ai_rate_limited`, `ai_timeout`, `ai_unreachable` or `ai_invalid`. |
 
@@ -481,7 +488,7 @@ position) and downloads it via a `Blob` object URL. The filename gets an
 
 ## 9. Persistence
 
-- **Tunarr** holds all channel data. The companion's only stored state is saved templates (`LINEUP_DATA_DIR/templates.json`); in memory it keeps channel locks and the logo cache.
+- **Tunarr** holds all channel data. The companion's only stored state is saved templates (`LINEUP_DATA_DIR/templates.json`) and filler-list roles (`filler-roles.json`); in memory it keeps channel locks and the logo cache.
 - **The browser** keeps per-channel drafts (unsaved order and edit list) in IndexedDB (database `tunarr-lineup`, store `drafts`, key `channelId`). Each draft is tied to the programming version it was made against and is dropped once that version is gone.
   - If IndexedDB is unavailable or fails, an in-memory store is used and `draftStore().persistent` is false.
   - Drafts are per browser; they are not shared between devices.

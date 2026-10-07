@@ -265,6 +265,7 @@ on the `broadcast-programming` branch.
   - **slot commercials**: `filler` entries (pre, post, head, tail, mid, fallback) and `midRoll` breaks
   - **channel flex filler**: `fillerCollections` with weights and cooldowns
 - **Reason:** not recorded beyond reusing Tunarr's mechanisms, so playout behaves exactly as Tunarr's own UI would configure it.
+- **Amended by D45:** filler lists now carry a role (station IDs, commercials, promos, bumpers) kept by Lineup.
 
 ## D31. Content routes are explicit and sanitized
 
@@ -386,3 +387,12 @@ on the `broadcast-programming` branch.
 - **Alternatives considered:** hiding the menu bar on phones, as before, left most commands unreachable. A separate mobile route would duplicate the desk and drift from it.
 - **Consequence:** drag and drop doesn't work with touch; touch users move programs with Earlier/Later and Move or swap.
 
+## D45. Station IDs, commercials and flex time read like a station log
+
+- **Status:** Explicit: the owner asked to "manage station IDs, manage commercials, flex time, and flex time visible in the programming", as close to a real station as possible (2026-10-07). Choices made with the owner: roles stored by Lineup; flex time means Tunarr's flex (no new mechanics); every visibility option; station IDs open each commercial break. Evidenced: `lib/airKinds.ts`, `lib/fillerRoles.ts`, `server/fillerRoleStore.ts`, `app/useFillerSpots.ts`, `DayStrip`, tests in `tests/airtime.test.ts`.
+- **Decision:**
+  - **Roles are Lineup's own metadata.** Each filler list can be tagged Station IDs, Commercials, Promos, Bumpers or Other in `LINEUP_DATA_DIR/filler-roles.json` (`/filler-roles` routes). Tunarr's lists have no such field, and encoding it in list names would rename the user's data in Tunarr. Untagged lists get a guess from their name (`guessRole`), shown as a suggestion only. This is the companion's second piece of stored state (invariant 7).
+  - **A station ID is a real program before the break.** A Tunarr flex break picks spots from its lists at random, so it can't promise what plays first. Inserting a break "with a station ID", or **Edit → Open Breaks With Station IDs**, puts a content item from a station-ID list in front of the flex break and takes the ID's length out of the break, so programs keep their air times. IDs rotate (least used first). Slots get an **Add station IDs to breaks** shortcut (`pre` filler); there Tunarr decides the order inside a break.
+  - **The day view is a log.** Each row is classified (`airKind`): program, commercial break, flex, station ID, commercial, promo, bumper, filler, redirect, with its own colour, tile and badge. Rows Tunarr's guide adds on its own (slot filler, padding) keep their kind and title. Each clock hour gets a summary line; a day strip shows the whole day; **View → Show Break Rundowns** (`B`) lists a plausible fill for each break.
+- **Honesty:** rundowns are estimates labeled as such (`estimateBreakFill`); Tunarr chooses the actual spots at air time.
+- **Consequence:** the day view reads programs of every filler list (up to 40, or only tagged ones beyond that) once per session to recognise spots.

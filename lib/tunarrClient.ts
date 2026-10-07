@@ -2,6 +2,7 @@
 // knows or contacts the Tunarr server's own address.
 import type { Channel, ChannelLineup, ManualProgrammingRequest, Programming } from './lineup';
 import type { RuleSet } from '../server/smartCollection';
+import type { FillerRole, FillerRoles } from '../server/fillerRoles';
 import type { Template } from '../server/templateSchema';
 import type { ChannelSettings, ContentProgram, ListSummary, ManagedSource, MediaSource, NamedItem, NewMediaSource, SearchResult, SmartCollectionView, TranscodeProfile } from './library';
 import type { SchedulePreview, Slot, SlotSchedule } from './schedule';
@@ -147,6 +148,8 @@ export const tunarrApi = {
   deleteSmartCollection: (id: string) => request<unknown>(`/api/tunarr/smart-collections/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   previewSmartCollection: (body: { keywords?: string } & RuleSet) =>
     request<{ totalHits: number; sample: Array<{ id?: string; title: string; type?: string; year?: number }> }>('/api/tunarr/smart-collections/preview', jsonBody('POST', body)),
+  fillerRoles: () => request<FillerRoles>('/api/tunarr/filler-roles'),
+  setFillerRole: (listId: string, role: FillerRole | null) => request<FillerRoles>(`/api/tunarr/filler-roles/${encodeURIComponent(listId)}`, role ? jsonBody('PUT', { role }) : { method: 'DELETE' }),
   savedTemplates: () => request<Template[]>('/api/tunarr/templates'),
   createTemplate: (template: Omit<Template, 'id'> & { id?: string }) => request<Template>('/api/tunarr/templates', jsonBody('POST', template)),
   updateTemplate: (id: string, template: Template) => request<Template>(`/api/tunarr/templates/${encodeURIComponent(id)}`, jsonBody('PUT', template)),

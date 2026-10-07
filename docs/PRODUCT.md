@@ -68,12 +68,15 @@ In every non-connected case the user can **Check again** or choose **Use demo da
 - **Pick a day:** ← / Today / → buttons, or the date picker.
 - **Read the timeline:** rows grouped into Morning, Afternoon, Evening and Late night.
   - Each row shows its start as `HH:MM:SS`, artwork (or a letter tile), title, detail, and duration as `H:MM:SS`.
-  - The header shows the channel's item count and cycle length; a totals row shows airtime per item type for the day.
+  - The header shows the channel's item count and cycle length; a **day strip** shows the whole day coloured by kind (programs, commercial breaks, station IDs, promos, flex time, redirects) with the on-air point, and totals per kind. Clicking a segment jumps to its row.
+  - **Station-log rows:** commercial breaks, flex time, station IDs, commercials, promos, bumpers, filler and redirects each have their own colour, tile and badge (BREAK, FLEX, ID, SPOT, PROMO…), so open airtime is never mistaken for a program. Spots are recognised by the filler list they belong to and its role.
+  - **Hour lines:** each clock hour opens with a summary: programs, commercials, IDs and flex time in that hour, and its total commercial minutes.
+  - **Break rundowns:** **View → Show Break Rundowns** (or `B`) lists under each break the spots that could fill it, an ID first when the break has one, and any time left as flex. It is labeled as an estimate: Tunarr picks the spots when the break airs.
 - **See what's on air:** on today's schedule, the program airing now is marked **ON AIR** with a red line at the current second, and the view opens scrolled to it. **Now** (or `N`) jumps there from any day.
 - **Search** filters the visible day.
 - **Selecting a row** shows the inspector with type, title, detail, start, end, lineup position (`#k of N`) and, when on air, the time left.
 - **A yellow note** explains when times come from projection instead of Tunarr's guide: outside the guide window, guide not loaded, guide stale, or unsaved changes.
-- **Guide-only rows** that Tunarr's guide contains but the lineup does not (for example padding flex) appear greyed out and can't be selected.
+- **Guide-only rows** that Tunarr's guide contains but the lineup does not (slot filler, padding flex) can't be selected, but keep their kind and title, so slot commercials and flex time show where they air.
 
 ### 3. Rearrange
 
@@ -123,6 +126,9 @@ Edits mark the lineup unsaved:
 ### 4b. Filler lists, custom shows and channel commercials
 
 - **Lists → Filler Lists… / Custom Shows…:** create, rename, delete, and add or remove programs (custom shows can also be reordered). Filler lists are where commercials, bumpers and station IDs live. A filler list needs at least one program. Custom shows synced from a Plex playlist keep their sync.
+- **Lists → Station IDs… / Commercials…** open the filler lists filtered by **on-air role** (Station IDs, Commercials, Promos, Bumpers, Other). Each list's role is kept by Lineup, not Tunarr, and is saved as soon as it's chosen; untagged lists show a guess from their name. Spots show broadcast lengths (`:10`, `:30`) and each list a length mix ("4 × :30").
+- **Station IDs open commercial breaks.** Inserting a commercial break offers **Open with a station ID** (on when a station-ID list exists): the next ID in rotation airs first and its length comes out of the break. **Edit → Open Breaks With Station IDs** does the same for every break in the lineup that lacks one, as one undoable edit. In slots, **Add station IDs to breaks** adds the ID list before each program.
+- **Flex time** is Tunarr's: airtime the lineup leaves open (flex items, slot padding, breaks). Tunarr fills it from the channel's filler lists, or shows the offline screen; the day view marks it as FLEX.
 - **Channel → Channel Settings…** (tabs):
   - **General:** name, number, group, guide title for flex time, minimum guide entry length, lineup start time (shifts the whole schedule, with a warning), hidden channel, on demand.
   - **Logo & watermark:** logo address and corner, on-screen watermark (image, corner, size, margins, opacity, duration), and the offline screen.

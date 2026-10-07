@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { durationTimecode } from '../../lib/broadcast';
+import { FILLER_ROLES, guessRole, roleOf, ROLE_LABELS, ROLE_SPOT_LABELS, spotBreakdown, spotLength, type FillerRole, type FillerRoles } from '../../lib/fillerRoles';
 import type { ContentProgram, ListSummary } from '../../lib/library';
 import { tunarrApi } from '../../lib/tunarrClient';
 import { LibraryBrowser } from './LibraryBrowser';
@@ -11,7 +12,14 @@ type Props = {
   onClose: () => void;
   /** Called after any list is created, changed or deleted. */
   onChanged?: () => void;
+  /** Filler only: the role Lineup keeps for each list (station IDs, commercials…). */
+  roles?: FillerRoles;
+  onRoleChange?: (listId: string, role: FillerRole | null) => Promise<void>;
+  /** Filler only: open filtered to one role (Lists → Station IDs… / Commercials…). */
+  initialRole?: FillerRole;
 };
+
+const TITLES: Partial<Record<FillerRole, string>> = { 'station-id': 'Station IDs', commercials: 'Commercials' };
 
 type Editing = { id: string | null; name: string; programs: ContentProgram[]; loaded: boolean; synced: boolean };
 
@@ -25,8 +33,11 @@ const describe = (program: ContentProgram) => {
 };
 const errorText = (error: unknown) => (error instanceof Error ? error.message : 'Something went wrong.');
 
-export function ListsManager({ kind, onClose, onChanged }: Props) {
-  const noun = kind === 'filler' ? 'filler list' : 'custom show';
+export function ListsManager({ kind, onClose, onChanged, roles = {}, onRoleChange, initialRole }: Props) {
+  const noun = kind === 'filler' ? (initialRole === 'station-id' ? 'station ID list' : initialRole === 'commercials' ? 'commercial list' : 'filler list') : 'custom show';
+  const [filter, setFilter] = useState<FillerRole | 'all'>(kind === 'filler' && initialRole ? initialRole : 'all');
+  // A new list's role is stored once Tunarr has given it an id.
+  const [pendingRole, setPendingRole] = useState<FillerRole | ''>('');
   const [lists, setLists] = useState<ListSummary[] | null>(null);
   const [editing, setEditing] = useState<Editing | null>(null);
   const [dirty, setDirty] = useState(false);
@@ -79,6 +90,8 @@ export function ListsManager({ kind, onClose, onChanged }: Props) {
       } else {
         const created = await (kind === 'filler' ? tunarrApi.createFillerList(editing.name, programs) : tunarrApi.createCustomShow(editing.name, programs));
         setEditing((current) => (current ? { ...current, id: created.id } : current));
+        if (kind === 'filler' && pendingRole && onRoleChange) await onRoleChange(created.id, pendingRole).catch((reason) => setError(`The list was created, but its role wasn’t saved: ${errorText(reason)}`));
+        setPendingRole('');
       }
       setDirty(false);
       await loadLists();
@@ -107,6 +120,22 @@ export function ListsManager({ kind, onClose, onChanged }: Props) {
   };
 
   const total = editing?.programs.reduce((sum, program) => sum + program.duration, 0) ?? 0;
+  const shown = kind === 'filler' && filter !== 'all' ? lists?.filter((list) => roleOf(list, roles) === filter) : lists;
+  const editingRole = editing?.id ? roles[editing.id] ?? '' : pendingRole;
+  const changeRole = async (role: FillerRole | '') => {
+    if (!editing) return;
+    if (!editing.id) {
+      setPendingRole(role);
+      return;
+    }
+    if (!onRoleChange) return;
+    setError('');
+    try {
+      await onRoleChange(editing.id, role || null);
+    } catch (reason) {
+      setError(errorText(reason));
+    }
+  };
   const canSave = !!editing && editing.name.trim().length > 0 && dirty && !busy && (kind !== 'filler' || editing.programs.length > 0);
 
   return (
@@ -120,26 +149,39 @@ export function ListsManager({ kind, onClose, onChanged }: Props) {
       <section className="modal lists-modal" role="dialog" aria-modal="true" aria-labelledby="lists-title">
         <button className="modal-close" aria-label="Close" onClick={onClose}>×</button>
         <p className="eyebrow">{kind === 'filler' ? 'FILLER LISTS' : 'CUSTOM SHOWS'}</p>
-        <h2 id="lists-title">{kind === 'filler' ? 'Filler lists (commercials, bumpers, station IDs)' : 'Custom shows'}</h2>
+        <h2 id="lists-title">{kind === 'filler' ? (initialRole && TITLES[initialRole]) || 'Filler lists (commercials, bumpers, station IDs)' : 'Custom shows'}</h2>
+        {kind === 'filler' && <div className="segmented role-filter" role="radiogroup" aria-label="Show lists for">
+          {(['all', ...FILLER_ROLES] as const).map((role) => <button key={role} role="radio" aria-checked={filter === role} className={filter === role ? 'primary' : ''} onClick={() => setFilter(role)}>{role === 'all' ? 'All' : ROLE_LABELS[role]}</button>)}
+        </div>}
         <div className="lists-layout">
           <div className="lists-index">
-            <button className="wide primary" onClick={() => { setEditing({ id: null, name: '', programs: [], loaded: true, synced: false }); setDirty(true); setConfirmDelete(false); }}>New {noun}</button>
+            <button className="wide primary" onClick={() => { setEditing({ id: null, name: '', programs: [], loaded: true, synced: false }); setPendingRole(filter === 'all' ? '' : filter); setDirty(true); setConfirmDelete(false); }}>New {noun}</button>
             <div className="candidate-list" role="listbox" aria-label={kind === 'filler' ? 'Filler lists' : 'Custom shows'}>
               {lists === null && <p className="subtle candidate-empty">Loading…</p>}
-              {lists?.length === 0 && <p className="subtle candidate-empty">None yet.</p>}
-              {lists?.map((list) => (
-                <button key={list.id} role="option" aria-selected={editing?.id === list.id} className={`list-entry ${editing?.id === list.id ? 'active' : ''}`} onClick={() => void select(list)}>
-                  <b>{list.name}</b><small>{list.contentCount ?? '—'} items{list.synced ? ' · synced from Plex' : ''}</small>
-                </button>
-              ))}
+              {shown?.length === 0 && <p className="subtle candidate-empty">{lists?.length && filter !== 'all' ? `No lists tagged ${ROLE_LABELS[filter]} yet. Pick a list under All and set its role.` : 'None yet.'}</p>}
+              {shown?.map((list) => {
+                const role = kind === 'filler' ? roleOf(list, roles) : undefined;
+                return (
+                  <button key={list.id} role="option" aria-selected={editing?.id === list.id} className={`list-entry ${editing?.id === list.id ? 'active' : ''}`} onClick={() => void select(list)}>
+                    <b>{list.name}</b><small>{role && <span className={`role-chip kind-${role === 'station-id' ? 'station-id' : role === 'commercials' ? 'commercial' : role === 'promos' ? 'promo' : role === 'bumpers' ? 'bumper' : 'filler'}`}>{ROLE_SPOT_LABELS[role]}{!roles[list.id] ? '?' : ''}</span>}{list.contentCount ?? '—'} items{list.synced ? ' · synced from Plex' : ''}</small>
+                  </button>
+                );
+              })}
             </div>
           </div>
           <div className="lists-editor">
             {!editing ? <p className="subtle">Choose a {noun} to edit, or create a new one.</p> : <>
               <label className="field"><span>Name</span><input aria-label="List name" value={editing.name} onChange={(event) => change({ name: event.target.value })} /></label>
+              {kind === 'filler' && <label className="field"><span>On-air role</span>
+                <select aria-label="On-air role" value={editingRole} disabled={!!editing.id && !onRoleChange} onChange={(event) => void changeRole(event.target.value as FillerRole | '')}>
+                  <option value="">Not set{guessRole(editing.name) ? ` (looks like ${ROLE_LABELS[guessRole(editing.name)!]})` : ''}</option>
+                  {FILLER_ROLES.map((role) => <option key={role} value={role}>{ROLE_LABELS[role]}</option>)}
+                </select>
+                <small className="subtle">{editing.id ? 'Kept by Lineup, not Tunarr; saved as soon as you choose.' : 'Saved with the new list.'} Station IDs open commercial breaks; the day view marks each spot by its role.</small>
+              </label>}
               {editing.synced && <div className="warning"><b>Synced from a Plex playlist</b><span>Tunarr may replace manual changes the next time it syncs this show.</span></div>}
               <div className="list-toolbar">
-                <span>{editing.programs.length.toLocaleString('en')} programs · {durationTimecode(total)}</span>
+                <span>{editing.programs.length.toLocaleString('en')} {kind === 'filler' ? (editing.programs.length === 1 ? 'spot' : 'spots') : 'programs'} · {durationTimecode(total)}{kind === 'filler' && editing.programs.length > 0 && <small className="spot-mix"> · {spotBreakdown(editing.programs.map((program) => program.duration)).map((entry) => `${entry.count} × ${entry.length}`).join(', ')}</small>}</span>
                 <button onClick={() => setBrowsing(true)}>Add programs…</button>
               </div>
               <div className="candidate-list list-items">
@@ -148,7 +190,7 @@ export function ListsManager({ kind, onClose, onChanged }: Props) {
                 {editing.programs.map((program, index) => (
                   <div className="candidate" key={`${program.id}-${index}`}>
                     <span className="slot-index">{index + 1}</span>
-                    <span><b>{describe(program)}</b><small>{durationTimecode(program.duration)}</small></span>
+                    <span><b>{describe(program)}</b><small>{kind === 'filler' ? `${spotLength(program.duration)} spot` : durationTimecode(program.duration)}</small></span>
                     <span className="candidate-actions">
                       {kind === 'custom' && <><button aria-label={`Move ${describe(program)} up`} disabled={index === 0} onClick={() => move(index, -1)}>↑</button><button aria-label={`Move ${describe(program)} down`} disabled={index === editing.programs.length - 1} onClick={() => move(index, 1)}>↓</button></>}
                       <button aria-label={`Remove ${describe(program)}`} onClick={() => change({ programs: editing.programs.filter((_, i) => i !== index) })}>Remove</button>

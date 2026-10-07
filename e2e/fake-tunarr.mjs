@@ -25,12 +25,15 @@ const ids = {
   movieA: '4d4d4d4d-1a2b-4c3d-8e9f-000000000001',
   movieB: '4d4d4d4d-1a2b-4c3d-8e9f-000000000002',
   ads: '5e5e5e5e-1a2b-4c3d-8e9f-000000000001',
+  ident: '4d4d4d4d-1a2b-4c3d-8e9f-000000000003',
   profile: '6f6f6f6f-1a2b-4c3d-8e9f-000000000001',
 };
 
 const libraryMovies = [
   { uuid: ids.movieA, type: 'movie', title: 'Zulu Dawn', year: 1979, duration: 90 * MINUTE },
   { uuid: ids.movieB, type: 'movie', title: 'Yankee Doodle Dandy', year: 1942, duration: 120 * MINUTE },
+  // A ten-second clip, for station-ID lists.
+  { uuid: ids.ident, type: 'movie', title: 'Desk Ident', year: 2026, duration: 10_000 },
 ];
 
 const program = (id, title, extra = {}) => ({ type: 'content', id, duration: 30 * MINUTE, program: { title, type: 'movie', year: 2001, ...extra } });

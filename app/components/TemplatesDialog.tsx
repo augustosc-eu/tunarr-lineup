@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Channel } from '../../lib/lineup';
+import type { FillerRole, FillerRoles } from '../../lib/fillerRoles';
 import { catalogOptions, DAY_MS, draftFromSchedule, ORDER_LABELS, showOption, type ScheduleDraftState, type SlotCatalog, type SlotSchedule, type SourceOption } from '../../lib/schedule';
 import { BUILT_IN_TEMPLATES, inGroup, matchesSearch, TEMPLATE_GROUPS, type TemplateGroup } from '../../lib/templateCatalog';
 import { AD_LEVELS, blankTemplate, dayRows, daySegments, defaultSource, isWeekly, roleUsage, scheduleToTemplate, templateToDraft, type Template } from '../../lib/templates';
@@ -18,6 +19,8 @@ type Props = {
   /** The active channel's programming has a generated schedule (time or random slots). */
   activeHasSchedule: boolean;
   catalog: SlotCatalog | null;
+  /** Roles Lineup keeps for filler lists; they win over guessing from list names. */
+  fillerRoles?: FillerRoles;
   onClose: () => void;
   /** Opens the resulting draft in the slot editor (after creating a channel when asked). */
   onApply: (draft: ScheduleDraftState, target: TemplateTarget, template: Template) => Promise<void>;
@@ -70,6 +73,14 @@ export function DayGrid({ template }: { template: Pick<Template, 'days' | 'roles
 }
 
 const guessList = (lists: Array<{ id: string; name: string }>, pattern: RegExp) => lists.find((list) => pattern.test(list.name))?.id ?? '';
+/** The first list tagged with one of `wanted` (in that order of preference). */
+const listByRole = (lists: Array<{ id: string }>, roles: FillerRoles, wanted: FillerRole[]) => {
+  for (const role of wanted) {
+    const found = lists.find((list) => roles[list.id] === role);
+    if (found) return found.id;
+  }
+  return '';
+};
 
 /** "Show genre is Drama or Crime", without the playable-type rule every suggestion has. */
 const suggestionText = (rules: NonNullable<Template['roles'][number]['suggest']>) => {
@@ -79,7 +90,7 @@ const suggestionText = (rules: NonNullable<Template['roles'][number]['suggest']>
 
 type Editing = { template: Template; busy: boolean; error: string };
 
-export function TemplatesDialog({ channels, activeChannel, activeHasSchedule, catalog, onClose, onApply }: Props) {
+export function TemplatesDialog({ channels, activeChannel, activeHasSchedule, catalog, fillerRoles = {}, onClose, onApply }: Props) {
   const [saved, setSaved] = useState<Template[]>([]);
   const [drafts, setDrafts] = useState<Template[]>([]);
   const [savedError, setSavedError] = useState('');
@@ -145,8 +156,8 @@ export function TemplatesDialog({ channels, activeChannel, activeHasSchedule, ca
   };
   const choose = (roleId: string, value: string) => setChoices((current) => ({ ...current, [`${template.id}:${roleId}`]: value }));
   const lists = listChoice[template.id] ?? {};
-  const commercialsId = lists.commercials ?? guessList(fillerLists, /commercial|comercial|\bads?\b|tanda|\bcm\b|anuncio|pubblicit|spot/i);
-  const promosId = lists.promos ?? guessList(fillerLists, /promo|bumper|station|\bids?\b|ident|trailer|cortina/i);
+  const commercialsId = lists.commercials ?? (listByRole(fillerLists, fillerRoles, ['commercials']) || guessList(fillerLists, /commercial|comercial|\bads?\b|tanda|\bcm\b|anuncio|pubblicit|spot/i));
+  const promosId = lists.promos ?? (listByRole(fillerLists, fillerRoles, ['promos', 'station-id', 'bumpers']) || guessList(fillerLists, /promo|bumper|station|\bids?\b|ident|trailer|cortina/i));
   const setLists = (patch: { commercials?: string; promos?: string }) => setListChoice((current) => ({ ...current, [template.id]: { commercials: commercialsId, promos: promosId, ...patch } }));
   const filledRoles = template.roles.filter((item) => usage.has(item.id) && choiceFor(item.id));
   const toCreate = filledRoles.filter((item) => choiceFor(item.id) === SUGGEST);

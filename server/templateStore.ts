@@ -1,20 +1,14 @@
 // Saved programming templates, kept by the companion in one JSON file
 // (LINEUP_DATA_DIR/templates.json) so they're shared by every browser that
-// uses this Lineup: the TV, a laptop, a phone. This is the companion's only
-// stored state; Tunarr still holds all channel data.
+// uses this Lineup: the TV, a laptop, a phone. Tunarr still holds all channel
+// data; the only other stored state is filler-list roles (fillerRoleStore.ts).
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
-import path from 'node:path';
+import { createJsonFile, StoreError } from './jsonFile.js';
 import { validateTemplate, type Template } from './templateSchema.js';
 
+export { StoreError };
 export const MAX_SAVED_TEMPLATES = 300;
 const FILE = 'templates.json';
-
-export class StoreError extends Error {
-  constructor(readonly status: number, readonly code: string, message: string) {
-    super(message);
-  }
-}
 
 export type TemplateStore = {
   readonly location: string;
@@ -25,49 +19,20 @@ export type TemplateStore = {
 };
 
 export function createTemplateStore(dir: string): TemplateStore {
-  const file = path.join(dir, FILE);
-  // Writes are serialized so two saves can't interleave and lose one.
-  let queue: Promise<unknown> = Promise.resolve();
-  const serialize = <T>(task: () => Promise<T>) => {
-    const run = queue.then(task, task);
-    queue = run.catch(() => undefined);
-    return run;
-  };
+  const file = createJsonFile(dir, FILE, 'saved templates');
 
   async function read(): Promise<Template[]> {
-    let raw: string;
-    try {
-      raw = await readFile(file, 'utf8');
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
-      throw new StoreError(500, 'store_unreadable', 'Saved templates could not be read.');
-    }
-    let data: unknown;
-    try {
-      data = JSON.parse(raw);
-    } catch {
-      // Never overwrite a file we can't parse; the user may want to recover it.
-      throw new StoreError(500, 'store_corrupt', `The saved templates file (${FILE}) is not valid JSON. Fix or move it, then try again.`);
-    }
+    const data = await file.read();
     const items = Array.isArray((data as { templates?: unknown })?.templates) ? (data as { templates: unknown[] }).templates : [];
     return items.map((item) => validateTemplate(item)).flatMap((result) => ('template' in result ? [{ ...result.template, custom: true }] : []));
   }
 
-  async function write(templates: Template[]) {
-    try {
-      await mkdir(dir, { recursive: true });
-      const tmp = `${file}.${randomUUID()}.tmp`;
-      await writeFile(tmp, `${JSON.stringify({ version: 1, templates }, null, 2)}\n`, 'utf8');
-      await rename(tmp, file);
-    } catch {
-      throw new StoreError(500, 'store_unwritable', `Templates could not be saved. Check that LINEUP_DATA_DIR (${dir}) is writable.`);
-    }
-  }
+  const write = (templates: Template[]) => file.write({ version: 1, templates });
 
   return {
-    location: file,
-    list: () => serialize(read),
-    save: (template) => serialize(async () => {
+    location: file.location,
+    list: () => file.serialize(read),
+    save: (template) => file.serialize(async () => {
       const templates = await read();
       const index = templates.findIndex((item) => item.id === template.id);
       if (index < 0 && templates.length >= MAX_SAVED_TEMPLATES) throw new StoreError(409, 'too_many_templates', `You can keep up to ${MAX_SAVED_TEMPLATES} templates.`);
@@ -77,7 +42,7 @@ export function createTemplateStore(dir: string): TemplateStore {
       await write(templates);
       return saved;
     }),
-    remove: (id) => serialize(async () => {
+    remove: (id) => file.serialize(async () => {
       const templates = await read();
       const next = templates.filter((item) => item.id !== id);
       if (next.length === templates.length) return false;

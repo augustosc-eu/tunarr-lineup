@@ -214,7 +214,7 @@ test('creates a filler list from the library', async ({ page }) => {
   await library.getByRole('button', { name: 'Add Yankee Doodle Dandy (1942)' }).click();
   await library.getByRole('button', { name: 'Add 1' }).click();
   await manager.getByRole('button', { name: 'Create filler list' }).click();
-  await expect(manager.getByRole('option', { name: /Bumpers/ })).toBeVisible();
+  await expect(manager.getByRole('listbox', { name: 'Filler lists' }).getByRole('option', { name: /Bumpers/ })).toBeVisible();
   const lists = (await fullState(page)).fillerLists;
   expect(lists.map((list) => [list.name, list.programs.length])).toEqual([['Station Ads', 1], ['Bumpers', 1]]);
 });
@@ -509,4 +509,47 @@ test('keeps what is on air in place while inserting, by moving the start time on
   expect((await fullState(page)).channels.find((channel) => channel.id === NEWS)!.startTime).toBe(startTime - 2 * 60_000);
   await page.reload();
   await expect(page.locator('.program.on-air time')).toContainText(before);
+});
+
+test('tags a station-ID list, opens a commercial break with an ID and shows the log', async ({ page }) => {
+  await page.getByRole('menuitem', { name: 'Lists' }).click();
+  await page.getByRole('menuitem', { name: /^Station IDs/ }).click();
+  const manager = page.getByRole('dialog', { name: 'Station IDs' });
+  await manager.getByRole('button', { name: 'New station ID list' }).click();
+  await manager.getByLabel('List name').fill('Desk Idents');
+  await expect(manager.getByLabel('On-air role')).toHaveValue('station-id');
+  await manager.getByRole('button', { name: 'Add programs…' }).click();
+  const library = page.getByRole('dialog', { name: 'Add to Desk Idents' });
+  await library.getByRole('button', { name: 'Add Desk Ident (2026)' }).click();
+  await library.getByRole('button', { name: 'Add 1' }).click();
+  await expect(manager.getByText(':10 spot')).toBeVisible();
+  await manager.getByRole('button', { name: 'Create station id list' }).click();
+  await expect(manager.getByRole('option', { name: /Desk Idents/ })).toBeVisible();
+  await manager.getByRole('button', { name: 'Done' }).click();
+
+  await page.locator('.program', { hasText: 'Bravo Report' }).first().click();
+  await page.keyboard.press('i');
+  const insert = page.getByRole('dialog', { name: 'Insert into the lineup' });
+  await insert.getByRole('radio', { name: 'Commercial break', exact: true }).click();
+  await expect(insert.getByLabel(/Station Ads/)).toBeChecked();
+  await expect(insert.getByLabel(/Open with a station ID/)).toBeChecked();
+  await insert.getByLabel('Length minutes').fill('2');
+  await insert.getByRole('button', { name: 'Insert' }).click();
+  await expect(page.locator('.program.kind-station-id', { hasText: 'Desk Ident' }).first()).toBeVisible();
+  await expect(page.locator('.program.kind-break').first()).toContainText('BREAK');
+  await expect(page.locator('.program.kind-flex').first()).toContainText('FLEX');
+  await expect(page.locator('.hour-log').first()).toBeVisible();
+  await expect(page.getByRole('group', { name: 'Airtime this day' })).toContainText('Station IDs');
+
+  await page.keyboard.press('b');
+  await expect(page.getByRole('list', { name: 'Estimated break rundown' }).first()).toContainText('No spot fits');
+  await page.keyboard.press('Control+s');
+  await expect(page.getByRole('button', { name: 'Saved', exact: true })).toBeVisible();
+  const saved = (await fakeState(page)).lineups[NEWS] as unknown as Array<Record<string, unknown>>;
+  expect(saved.slice(3, 5)).toEqual([
+    { type: 'content', id: '4d4d4d4d-1a2b-4c3d-8e9f-000000000003', duration: 10_000 },
+    { type: 'flex', duration: 110_000, fillerConfig: { fillerListIds: [ADS], fillerRepeatCooldownMs: 0, origin: 'flex' } },
+  ]);
+  // No page-width overflow with the strip, hour logs and rundowns on screen.
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });

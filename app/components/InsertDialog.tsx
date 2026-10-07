@@ -1,9 +1,10 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { durationTimecode, makeCommercialBreak, makeFlex, makeRedirect } from '../../lib/broadcast';
+import { durationTimecode, makeBreakWithId, makeCommercialBreak, makeFlex, makeRedirect } from '../../lib/broadcast';
 import { airTimeLabel, type EventSnap, type InsertWhere } from '../../lib/events';
-import type { ListSummary } from '../../lib/library';
+import { roleOf, ROLE_SPOT_LABELS, spotLength, type FillerRoles } from '../../lib/fillerRoles';
+import type { ContentProgram, ListSummary } from '../../lib/library';
 import type { Channel, LineupItem } from '../../lib/lineup';
 import { tunarrApi } from '../../lib/tunarrClient';
 
@@ -25,7 +26,12 @@ type Props = {
   /** Offered once the lineup has repeated: move the start time on save so what's on air keeps its time. */
   keepOnAir?: { checked: boolean; onChange: (checked: boolean) => void };
   onBrowse: (where: InsertWhere) => void;
-  onInsert: (items: LineupItem[], label: string, where: InsertWhere) => void;
+  /** Filler-list roles, to sort the break's lists and pre-pick the commercials. */
+  roles?: FillerRoles;
+  /** The station ID a new break would open with (rotated), if any list holds IDs. */
+  nextStationId?: ContentProgram;
+  stationIdTitle?: string;
+  onInsert: (items: LineupItem[], label: string, where: InsertWhere, meta?: Record<string, ContentProgram>) => void;
   onClose: () => void;
 };
 
@@ -44,7 +50,7 @@ function DurationField({ label, value, onChange }: { label: string; value: numbe
   );
 }
 
-export function InsertDialog({ live, anchorLabel, channels, currentChannelId, date, time: initialTime, startFor, keepOnAir, onBrowse, onInsert, onClose }: Props) {
+export function InsertDialog({ live, anchorLabel, channels, currentChannelId, date, time: initialTime, startFor, keepOnAir, roles = {}, nextStationId, stationIdTitle, onBrowse, onInsert, onClose }: Props) {
   const [kind, setKind] = useState<Kind>(live ? 'programs' : 'flex');
   const [placement, setPlacement] = useState<'before' | 'after' | 'time'>('after');
   const [day, setDay] = useState(date);
@@ -54,6 +60,7 @@ export function InsertDialog({ live, anchorLabel, channels, currentChannelId, da
   const [fillerLists, setFillerLists] = useState<ListSummary[] | null>(null);
   const [chosenLists, setChosenLists] = useState<string[]>([]);
   const [cooldown, setCooldown] = useState(0);
+  const [withId, setWithId] = useState(!!nextStationId);
   const targets = channels.filter((channel) => channel.id !== currentChannelId);
   const [redirectTo, setRedirectTo] = useState(targets[0]?.id ?? '');
   const [error, setError] = useState('');
@@ -62,10 +69,17 @@ export function InsertDialog({ live, anchorLabel, channels, currentChannelId, da
     if (!live) return;
     let cancelled = false;
     tunarrApi.fillerLists()
-      .then((lists) => { if (!cancelled) setFillerLists(lists); })
+      .then((lists) => {
+        if (cancelled) return;
+        // Commercial lists first, pre-picked, the way a break is usually built.
+        const rank = (list: ListSummary) => ['commercials', 'promos', 'bumpers', 'station-id', 'other', undefined].indexOf(roleOf(list, roles));
+        const sorted = [...lists].sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
+        setFillerLists(sorted);
+        setChosenLists((current) => (current.length ? current : sorted.filter((list) => roleOf(list, roles) === 'commercials').map((list) => list.id)));
+      })
       .catch((reason) => { if (!cancelled) setError(reason instanceof Error ? reason.message : 'Could not load filler lists.'); });
     return () => { cancelled = true; };
-  }, [live]);
+  }, [live, roles]);
 
   const kinds: Array<[Kind, string, boolean]> = [
     ['programs', 'Programs from the library', live],
@@ -89,7 +103,10 @@ export function InsertDialog({ live, anchorLabel, channels, currentChannelId, da
     }
     if (!(duration >= 1000)) return;
     if (kind === 'flex') onInsert([makeFlex(duration)], 'flex time', where);
-    if (kind === 'break' && chosenLists.length) onInsert([makeCommercialBreak(duration, chosenLists, cooldown * MINUTE)], 'a commercial break', where);
+    if (kind === 'break' && chosenLists.length) {
+      if (withId && nextStationId) onInsert(makeBreakWithId(duration, chosenLists, nextStationId, cooldown * MINUTE), 'a commercial break with a station ID', where, { [nextStationId.id]: nextStationId });
+      else onInsert([makeCommercialBreak(duration, chosenLists, cooldown * MINUTE)], 'a commercial break', where);
+    }
     if (kind === 'redirect') {
       const channel = targets.find((item) => item.id === redirectTo);
       if (channel) onInsert([makeRedirect(channel, duration)], `a redirect to CH ${channel.number}`, where);
@@ -139,9 +156,12 @@ export function InsertDialog({ live, anchorLabel, channels, currentChannelId, da
             {fillerLists === null && !error && <p className="subtle">Loading filler lists…</p>}
             {fillerLists?.length === 0 && <p className="subtle">No filler lists yet. Create one from Lists → Filler Lists…</p>}
             {fillerLists?.map((list) => (
-              <label key={list.id}><input type="checkbox" checked={chosenLists.includes(list.id)} onChange={(event) => setChosenLists((current) => (event.target.checked ? [...current, list.id] : current.filter((id) => id !== list.id)))} /> {list.name}{list.contentCount != null ? <small> · {list.contentCount} items</small> : null}</label>
+              <label key={list.id}><input type="checkbox" checked={chosenLists.includes(list.id)} onChange={(event) => setChosenLists((current) => (event.target.checked ? [...current, list.id] : current.filter((id) => id !== list.id)))} /> {list.name}{roleOf(list, roles) ? <small className="role-chip">{ROLE_SPOT_LABELS[roleOf(list, roles)!]}</small> : null}{list.contentCount != null ? <small> · {list.contentCount} items</small> : null}</label>
             ))}
           </div>
+          {nextStationId
+            ? <label className="keep-on-air"><input type="checkbox" checked={withId} onChange={(event) => setWithId(event.target.checked)} /> Open with a station ID <small>“{stationIdTitle ?? 'Station ID'}” ({spotLength(nextStationId.duration)}) airs first; its length comes out of the break. IDs rotate from your Station IDs lists.</small></label>
+            : <p className="subtle">Tag a filler list as Station IDs (Lists → Station IDs…) to open breaks with an ID.</p>}
           <label className="field"><span>Don’t repeat the same filler within (minutes)</span><input type="number" min={0} step={1} value={cooldown} onChange={(event) => setCooldown(Math.max(0, Number(event.target.value)))} /></label>
         </>}
         {kind === 'redirect' && <label className="field"><span>Redirect to</span>

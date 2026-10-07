@@ -1,7 +1,9 @@
-// Lineup's own routes (not Tunarr's): saved programming templates and the
-// AI programming assistant. They share the proxy's pipeline (method allowlist,
+// Lineup's own routes (not Tunarr's): saved programming templates, filler-list
+// roles and the AI programming assistant. They share the proxy's pipeline (method allowlist,
 // Origin check, JSON bodies, optional sign-in) but answer from the companion.
 import { aiFailure, buildUserMessage, callModel, gatherContext, MAX_PROMPT_CHARS, resolveProposal, SYSTEM_PROMPT, type AiConfig } from './ai.js';
+import { isFillerRole } from './fillerRoles.js';
+import type { FillerRoleStore } from './fillerRoleStore.js';
 import { validateTemplate } from './templateSchema.js';
 import { newTemplateId, StoreError, type TemplateStore } from './templateStore.js';
 import type { ProxyConfig, ProxyResponse, TunarrTarget } from './tunarrProxy.js';
@@ -10,13 +12,19 @@ import { fail, json, UpstreamError } from './upstream.js';
 export type LineupRoute =
   | { name: 'templates'; methods: string[] }
   | { name: 'template'; methods: string[]; id: string }
+  | { name: 'filler-roles'; methods: string[] }
+  | { name: 'filler-role'; methods: string[]; id: string }
   | { name: 'ai-status'; methods: string[] }
   | { name: 'ai-template'; methods: string[] };
 
 const TEMPLATE_ID = /^[a-z0-9][a-z0-9-]{0,47}$/;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export function matchLineupRoute(path: string): LineupRoute | { invalid: string } | null {
   if (path === '/templates') return { name: 'templates', methods: ['GET', 'POST'] };
+  if (path === '/filler-roles') return { name: 'filler-roles', methods: ['GET'] };
+  const role = /^\/filler-roles\/([^/]+)$/.exec(path);
+  if (role) return UUID.test(role[1]) ? { name: 'filler-role', methods: ['PUT', 'DELETE'], id: role[1] } : { invalid: 'Filler list id is not valid.' };
   if (path === '/ai') return { name: 'ai-status', methods: ['GET'] };
   if (path === '/ai/template') return { name: 'ai-template', methods: ['POST'] };
   const match = /^\/templates\/([^/]+)$/.exec(path);
@@ -33,8 +41,20 @@ type Context = { config: ProxyConfig; target: TunarrTarget | null; method: strin
 
 export async function handleLineupRoute(route: LineupRoute, { config, target, method, body }: Context): Promise<ProxyResponse> {
   const store = config.templates as TemplateStore | undefined;
+  const roles = config.fillerRoles as FillerRoleStore | undefined;
   try {
     switch (route.name) {
+      case 'filler-roles': {
+        if (!roles) return fail(503, 'store_off', 'Filler roles are not available on this server.');
+        return json(200, await roles.list());
+      }
+      case 'filler-role': {
+        if (!roles) return fail(503, 'store_off', 'Filler roles are not available on this server.');
+        if (method === 'DELETE') return json(200, await roles.remove(route.id));
+        const role = isObject(body) ? body.role : undefined;
+        if (!isFillerRole(role)) return fail(400, 'invalid_request', 'Send { "role" } with station-id, commercials, promos, bumpers or other.');
+        return json(200, await roles.set(route.id, role));
+      }
       case 'templates': {
         if (!store) return fail(503, 'store_off', 'Saving templates is not available on this server.');
         if (method === 'GET') return json(200, await store.list());

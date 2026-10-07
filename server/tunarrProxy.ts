@@ -3,6 +3,7 @@ import path from 'node:path';
 import { handleAdminRoute, matchAdminRoute, type AdminRoute } from './admin.js';
 import { createAiConfig, type AiConfig } from './ai.js';
 import { handleLineupRoute, matchLineupRoute, type LineupRoute } from './lineupRoutes.js';
+import { createFillerRoleStore, type FillerRoleStore } from './fillerRoleStore.js';
 import { createTemplateStore, type TemplateStore } from './templateStore.js';
 import { handleContentRoute, matchContentRoute, NOT_SAVEABLE, type ContentRoute } from './content.js';
 import { channelLogo, type ExternalImageFetcher } from './logos.js';
@@ -40,6 +41,8 @@ export type ProxyConfig = {
   fetchExternalImage?: ExternalImageFetcher;
   /** Saved programming templates (LINEUP_DATA_DIR). */
   templates?: TemplateStore;
+  /** What each filler list is for (LINEUP_DATA_DIR/filler-roles.json). */
+  fillerRoles?: FillerRoleStore;
   /** AI programming assistant (LINEUP_AI_*), or why it is off. */
   ai?: AiConfig | { off: string };
 };
@@ -119,6 +122,7 @@ export function createProxyConfig(env: Record<string, string | undefined>): Prox
     saveTimeoutMs: positiveInt(env.TUNARR_SAVE_TIMEOUT_MS, DEFAULT_SAVE_TIMEOUT_MS),
     externalLogos: env.LINEUP_EXTERNAL_LOGOS?.trim().toLowerCase() !== 'false',
     templates: createTemplateStore(path.resolve(env.LINEUP_DATA_DIR?.trim() || 'data')),
+    fillerRoles: createFillerRoleStore(path.resolve(env.LINEUP_DATA_DIR?.trim() || 'data')),
     ai: createAiConfig(env),
   };
 }
@@ -297,7 +301,7 @@ async function handleContent(request: ProxyRequest, config: ProxyConfig, url: UR
     }
   }
   const target = config.target;
-  // Saved templates and the AI status are Lineup's own; everything else reads Tunarr.
+  // Saved templates, filler roles and the AI status are Lineup's own; everything else reads Tunarr.
   const needsTunarr = kind !== 'lineup' || route.name === 'ai-template';
   if (!target && needsTunarr) {
     const error = notConfigured(config);
