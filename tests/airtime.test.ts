@@ -4,7 +4,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { airKind, estimateBreakFill, hourSummaries, stripSegments, type ListSpots, type SpotIndex } from '../lib/airKinds';
 import { makeBreakWithId, makeCommercialBreak, makeFlex, openBreaksWithIds, pickStationId } from '../lib/broadcast';
-import { guessRole, roleOf, spotBreakdown, spotLength } from '../lib/fillerRoles';
+import { channelStationIds, guessRole, roleOf, spotBreakdown, spotLength } from '../lib/fillerRoles';
 import type { Instance, LineupItem } from '../lib/lineup';
 import { createFillerRoleStore } from '../server/fillerRoleStore';
 import { createProxyConfig, handleTunarrApi, type ProxyRequest } from '../server/tunarrProxy';
@@ -136,5 +136,18 @@ describe('filler role store and routes', () => {
     expect((await handleTunarrApi(req('POST', '/filler-roles', {}), config)).status).toBe(405);
     expect((await handleTunarrApi({ ...req('PUT', `/filler-roles/${IDS}`, { role: 'promos' }), headers: { host: 'lineup.local', origin: 'https://evil.example', 'content-type': 'application/json' } }, config)).status).toBe(403);
     expect(parse(await handleTunarrApi(req('DELETE', `/filler-roles/${IDS}`), config))).toEqual({});
+  });
+});
+
+describe('channelStationIds', () => {
+  const byList = { shared: ['a', 'b'], newsroom: ['n'], empty: [] as string[] };
+
+  it('uses only the channel’s own station-ID lists', () => {
+    expect(channelStationIds(byList, ['commercials', 'newsroom', 'newsroom'])).toEqual({ ids: ['n'], own: true });
+  });
+
+  it('falls back to every station-ID list when the channel has none with IDs', () => {
+    expect(channelStationIds(byList, [])).toEqual({ ids: ['a', 'b', 'n'], own: false });
+    expect(channelStationIds(byList, ['empty', 'commercials'])).toEqual({ ids: ['a', 'b', 'n'], own: false });
   });
 });
