@@ -59,8 +59,9 @@ see [Run with Docker Compose](#run-with-docker-compose-recommended).
   **Remove** (or `Delete`) takes items out. Flex, breaks and redirects have an adjustable length in the inspector. Every edit is in the edit list and the stored draft. The dialog says when inserted items will air. Because a manual lineup repeats from the channel's start time, a longer lineup moves later passes; tick **Keep what's on air in place** to have the companion move the start time on save so the current pass keeps its times.
 - **Library browser.** Browse or search any media source and library Tunarr has indexed (Plex, Jellyfin, Emby, local folders), and drill into shows and seasons. Libraries of up to 1,000 items are listed in episode order (by the number in each title, whatever its language) and searched by number as you type: "capitulo 2" finds "Chapter 2". Picks are listed before you insert them.
 - **Commercials and filler.**
+  - **Setup → Filler Folders…** keeps station IDs, commercials, promos and bumpers as video files in folders, and Lineup picks them up by itself: the upload folder (one subfolder per role; upload, move or delete files from the desk), folders you add with a role, and any Tunarr library named for a role ("Commercials", "station-ids"). Each becomes a filler list with its role, and the list follows its folder after every Tunarr scan. See [Filler folders](#filler-folders) for the Docker setup.
   - **Lists → Filler Lists…** creates and edits filler lists (commercials, bumpers, station IDs). **Lists → Station IDs…** and **Commercials…** show them by on-air role, which Lineup keeps for each list. **Lists → Custom Shows…** manages custom shows.
-  - Commercial breaks can open with a rotating station ID; **Edit → Open Breaks With Station IDs** adds one to every break.
+  - Commercial breaks can open with a rotating station ID; **Edit → Open Breaks With Station IDs** adds one to every break. Each channel has its own IDs: name the file for the channel (`EL 7 ID.mp4`), or tick a list in Channel Settings → Commercials → **Station IDs**. **Insert → Station ID** places one of the channel's IDs anywhere, and the ID tools use only that channel's.
   - The day view reads like a station log: breaks, station IDs, spots, flex time and redirects are marked, each hour shows its commercial load, a day strip shows the whole day, and **View → Show Break Rundowns** (`B`) estimates each break's spots.
   - **Channel → Channel Settings…** sets which filler lists play during a channel's flex time (weights and cooldowns), plus the channel's name, number, group, guide flex title and start time.
   - Slots can carry their own commercials: before or after each program, at the start or end of the slot, or as mid-roll breaks inside programs.
@@ -151,6 +152,9 @@ accident.
 | `POST /api/tunarr/smart-collections/create`, `POST …/preview`, `GET`/`PUT`/`DELETE …/:id` | Tunarr's smart-collection API and `POST /api/programs/search` for previews (rules are turned into Tunarr's filter by the companion) |
 | `GET`/`POST /api/tunarr/templates`, `PUT`/`DELETE …/:id` | Lineup's own saved templates (`LINEUP_DATA_DIR/templates.json`); not Tunarr |
 | `GET /api/tunarr/filler-roles`, `PUT`/`DELETE …/:id` | Lineup's own filler-list roles (`LINEUP_DATA_DIR/filler-roles.json`); not Tunarr |
+| `POST /api/tunarr/filler-lists/from-library` | Builds a filler list from everything Tunarr indexed in one library (`POST {TUNARR_URL}/api/programs/search`, then Tunarr's filler-list API) and follows that library from then on |
+| `GET /api/tunarr/filler-folders`, `POST …/sync`, `POST …/add` | Automatic pickup: which lists follow which folders; `sync` adds the upload folder to Tunarr, makes lists for folders named for a role and refreshes followed lists after a newer scan; `add` adds a folder on the Tunarr server with a role (`POST {TUNARR_URL}/api/media-sources`) |
+| `GET /api/tunarr/media-folder`, `PUT`/`DELETE …/:role/:file`, `POST …/:role/:file/move` | Lineup's media folder (`LINEUP_MEDIA_DIR`): list, upload (raw video bytes, streamed to disk), delete and move files between role folders |
 | `GET /api/tunarr/ai`, `POST /api/tunarr/ai/template` | Lineup's AI assistant: status, and a template from `{ prompt, channelId?, includeLibrary, baseTemplate? }`. Reads context from Tunarr (search, lists, channel programming) and calls the configured AI provider |
 | `GET /api/tunarr/programs/:id/artwork/:type` | `GET {TUNARR_URL}/api/programs/:id/artwork/:type` (image types only; `:id` must be a UUID; `:type` is `poster`, `thumbnail`, `landscape` or `banner`) |
 
@@ -267,6 +271,9 @@ Server environment variables:
 | `TUNARR_SAVE_TIMEOUT_MS` | `30000` | Upstream timeout for saves |
 | `LINEUP_EXTERNAL_LOGOS` | `true` | Set to `false` to stop the companion fetching channel logos hosted on public sites |
 | `LINEUP_DATA_DIR` | `./data` (`/data` in Docker) | Where saved templates (`templates.json`) and filler-list roles (`filler-roles.json`) are kept |
+| `LINEUP_MEDIA_DIR` | (none: uploads off) | The media folder for filler videos, as Lineup sees it. Must also be mounted into Tunarr |
+| `LINEUP_MEDIA_TUNARR_DIR` | same as `LINEUP_MEDIA_DIR` | The same folder as Tunarr sees it, e.g. `/media/lineup` |
+| `LINEUP_MEDIA_MAX_MB` | `4096` | Largest file Lineup accepts, in MB |
 | `LINEUP_AI_PROVIDER` | (auto) | `anthropic` or `openai` (any OpenAI-compatible API, including Ollama) |
 | `LINEUP_AI_API_KEY` | (none) | API key; `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` also work |
 | `LINEUP_AI_MODEL` | `claude-sonnet-5-5` for Anthropic | Model name (required for OpenAI-compatible providers) |
@@ -276,6 +283,33 @@ Server environment variables:
 | `LINEUP_USERNAME` | `lineup` | Sign-in user name |
 | `LINEUP_ALLOWED_HOSTS` | (none) | Extra host names Lineup answers to without sign-in, e.g. `nas.local,.home.example` (`*` for any); IP addresses and `localhost` always work |
 | `STATIC_DIR` | `dist-local` | Directory holding the built interface |
+
+## Filler folders
+
+**Setup → Filler Folders…** turns folders of video files into filler lists, without a button per list. Lineup checks when the desk opens and every few seconds while the dialog is open:
+
+- **Tunarr libraries named for a role** ("Commercials", "Station IDs", `/media/promos`, "bumpers"; whole words of the name) get a filler list with that role after their scan. Plex, Jellyfin, Emby and local libraries all count. Other libraries are listed under **Other libraries** with a one-time **Make filler list**.
+- **Folders on the Tunarr server** can be added with a role (a path as Tunarr sees it, e.g. `/media/commercials`); their list appears after Tunarr's scan.
+- **Followed lists stay in step:** after every Tunarr scan that's newer than the list, its programs are replaced with the folder's. Delete a list in Tunarr and Lineup stops following that folder for good (Make filler list follows it again).
+- **The upload folder** lets you add files from the desk. It needs one folder mounted into both containers. `docker-compose.example.yml` already has it: a `lineup-media` volume at `/media/lineup` in Tunarr and Lineup, with `LINEUP_MEDIA_DIR=/media/lineup`. For an existing compose file, the dialog shows these lines with a **Copy lines** button:
+
+```yaml
+services:
+  tunarr:
+    volumes:
+      - lineup-media:/media/lineup
+  lineup:
+    environment:
+      - LINEUP_MEDIA_DIR=/media/lineup
+    volumes:
+      - lineup-media:/media/lineup
+volumes:
+  lineup-media:
+```
+
+To keep the videos in a host folder you can browse (e.g. `./filler-media:/media/lineup` in both), make it writable by the Lineup container's user first: `sudo chown 1000:1000 filler-media`. If Tunarr sees the folder at a different path than Lineup, set `LINEUP_MEDIA_TUNARR_DIR` to Tunarr's path.
+
+Lineup creates `station-ids`, `commercials`, `promos`, `bumpers` and `other-filler` inside it and adds them to Tunarr by itself. Uploading starts a scan, and each role's list follows. Uploads never overwrite a file and are written under a temporary name until complete. Anyone who can open Lineup can upload, so turn on sign-in (`LINEUP_PASSWORD`) if others can reach it.
 
 ## AI setup
 

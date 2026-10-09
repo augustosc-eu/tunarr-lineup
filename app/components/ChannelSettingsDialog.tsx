@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { STREAM_MODE_LABELS, type ChannelSettings, type ListSummary, type TranscodeProfile, type Watermark } from '../../lib/library';
-import { roleOf, ROLE_LABELS, type FillerRoles } from '../../lib/fillerRoles';
+import { listsWithRole, roleOf, ROLE_LABELS, type FillerRoles } from '../../lib/fillerRoles';
 import { channelLogoUrl } from '../../lib/programInfo';
 import { tunarrApi } from '../../lib/tunarrClient';
 
@@ -64,6 +64,10 @@ export function ChannelSettingsDialog({ channelId, fillerRoles = {}, onClose, on
     return out;
   })();
   const changed = Object.keys(changes).length > 0;
+  const idLists = listsWithRole(fillerLists, fillerRoles, 'station-id');
+  // A station-ID list in the channel's filler is the channel's own: Tunarr airs it in
+  // flex time, and Lineup opens this channel's breaks with it.
+  const toggleIdList = (id: string, on: boolean) => setCollections(on ? [...collections, { id, weight: 1, cooldownSeconds: 0 }] : collections.filter((item) => item.id !== id));
   const totalWeight = collections.reduce((sum, item) => sum + Math.max(0, item.weight), 0);
   const watermark: Watermark = { ...DEFAULT_WATERMARK, ...(form?.watermark ?? {}) };
   const setWatermark = (patch: Partial<Watermark>) => set('watermark', { ...watermark, ...patch });
@@ -151,6 +155,14 @@ export function ChannelSettingsDialog({ channelId, fillerRoles = {}, onClose, on
             <p className="subtle">Edit what a profile does (resolution, bitrates, hardware acceleration) in Setup → Transcode Profiles…. Direct modes skip transcoding, so the profile only applies to HLS and MPEG-TS.</p>
           </>}
           {tab === 'filler' && <>
+          <h3 className="section-title">Station IDs</h3>
+          <p className="subtle">IDs named for this channel (“{form.name} ID.mp4”) are its own automatically: Insert → Station ID lists them, and Lineup opens this channel’s breaks with them. Tick a list here to give the channel the whole list, minus IDs named for other channels; Tunarr also airs a ticked list in flex time along with the filler below.</p>
+          <div className="checklist" role="group" aria-label="This channel’s station IDs">
+            {!idLists.length && <p className="subtle">No station-ID lists yet. Upload IDs in Setup → Filler Folders…, or tag a list in Lists → Station IDs….</p>}
+            {idLists.map((list) => (
+              <label key={list.id}><input type="checkbox" checked={collections.some((item) => item.id === list.id)} onChange={(event) => toggleIdList(list.id, event.target.checked)} /> {list.name} <small>{list.contentCount === undefined ? '—' : `${list.contentCount} ${list.contentCount === 1 ? 'ID' : 'IDs'}`}</small></label>
+            ))}
+          </div>
           <h3 className="section-title">Commercials during flex time</h3>
           <p className="subtle">Flex time is airtime Tunarr leaves open: flex items in the lineup, slot padding, and breaks without their own lists. Tunarr fills it from these filler lists, picking by weight; with none, it shows the offline screen.</p>
           <div className="candidate-list filler-collections">

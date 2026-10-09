@@ -7,8 +7,9 @@ import { roleOf, ROLE_SPOT_LABELS, spotLength, type FillerRoles } from '../../li
 import type { ContentProgram, ListSummary } from '../../lib/library';
 import type { Channel, LineupItem } from '../../lib/lineup';
 import { tunarrApi } from '../../lib/tunarrClient';
+import { spotTitle } from '../useFillerSpots';
 
-type Kind = 'programs' | 'break' | 'flex' | 'redirect';
+type Kind = 'programs' | 'station-id' | 'break' | 'flex' | 'redirect';
 
 type Props = {
   live: boolean;
@@ -31,6 +32,11 @@ type Props = {
   /** The station ID a new break would open with (rotated), if any list holds IDs. */
   nextStationId?: ContentProgram;
   stationIdTitle?: string;
+  /** The IDs are this channel's own (named for it, or its ticked lists in Channel Settings). */
+  ownStationIds?: boolean;
+  /** Every station ID this channel can air, for inserting one by hand. */
+  stationIds?: ContentProgram[];
+  channelName?: string;
   onInsert: (items: LineupItem[], label: string, where: InsertWhere, meta?: Record<string, ContentProgram>) => void;
   onClose: () => void;
 };
@@ -50,7 +56,7 @@ function DurationField({ label, value, onChange }: { label: string; value: numbe
   );
 }
 
-export function InsertDialog({ live, anchorLabel, channels, currentChannelId, date, time: initialTime, startFor, keepOnAir, roles = {}, nextStationId, stationIdTitle, onBrowse, onInsert, onClose }: Props) {
+export function InsertDialog({ live, anchorLabel, channels, currentChannelId, date, time: initialTime, startFor, keepOnAir, roles = {}, nextStationId, stationIdTitle, ownStationIds, stationIds = [], channelName = 'this channel', onBrowse, onInsert, onClose }: Props) {
   const [kind, setKind] = useState<Kind>(live ? 'programs' : 'flex');
   const [placement, setPlacement] = useState<'before' | 'after' | 'time'>('after');
   const [day, setDay] = useState(date);
@@ -61,6 +67,8 @@ export function InsertDialog({ live, anchorLabel, channels, currentChannelId, da
   const [chosenLists, setChosenLists] = useState<string[]>([]);
   const [cooldown, setCooldown] = useState(0);
   const [withId, setWithId] = useState(!!nextStationId);
+  const [chosenId, setChosenId] = useState(nextStationId?.id ?? stationIds[0]?.id ?? '');
+  const stationId = stationIds.find((program) => program.id === chosenId);
   const targets = channels.filter((channel) => channel.id !== currentChannelId);
   const [redirectTo, setRedirectTo] = useState(targets[0]?.id ?? '');
   const [error, setError] = useState('');
@@ -83,6 +91,7 @@ export function InsertDialog({ live, anchorLabel, channels, currentChannelId, da
 
   const kinds: Array<[Kind, string, boolean]> = [
     ['programs', 'Programs from the library', live],
+    ['station-id', 'Station ID', live && stationIds.length > 0],
     ['break', 'Commercial break', live],
     ['flex', 'Flex time', true],
     ['redirect', 'Redirect to channel', targets.length > 0],
@@ -92,13 +101,17 @@ export function InsertDialog({ live, anchorLabel, channels, currentChannelId, da
   const at = new Date(`${day}T${time}:00`).getTime();
   const where: InsertWhere | null = placement !== 'time' ? placement : Number.isFinite(at) ? { at, snap } : null;
   // Library programs are picked next, so their length isn't known yet.
-  const known = kind === 'programs' ? null : duration;
+  const known = kind === 'programs' ? null : kind === 'station-id' ? (stationId?.duration ?? 0) : duration;
   const point = where ? startFor(where, known ?? 0) : null;
 
   const insert = () => {
     if (!where) return;
     if (kind === 'programs') {
       onBrowse(where);
+      return;
+    }
+    if (kind === 'station-id') {
+      if (stationId) onInsert([{ type: 'content', id: stationId.id, duration: stationId.duration }], `the station ID “${spotTitle(stationId)}”`, where, { [stationId.id]: stationId });
       return;
     }
     if (!(duration >= 1000)) return;
@@ -112,7 +125,7 @@ export function InsertDialog({ live, anchorLabel, channels, currentChannelId, da
       if (channel) onInsert([makeRedirect(channel, duration)], `a redirect to CH ${channel.number}`, where);
     }
   };
-  const ready = !!where && (kind === 'programs' || (duration >= 1000 && (kind !== 'break' || chosenLists.length > 0) && (kind !== 'redirect' || !!redirectTo)));
+  const ready = !!where && (kind === 'programs' || (kind === 'station-id' ? !!stationId : duration >= 1000 && (kind !== 'break' || chosenLists.length > 0) && (kind !== 'redirect' || !!redirectTo)));
 
   return (
     <div className="overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
@@ -148,7 +161,15 @@ export function InsertDialog({ live, anchorLabel, channels, currentChannelId, da
         {keepOnAir && <label className="keep-on-air"><input type="checkbox" checked={keepOnAir.checked} onChange={(event) => keepOnAir.onChange(event.target.checked)} /> Keep what’s on air in place <small>When you save, the channel’s start time moves so the program on now and the rest of this pass keep their times.</small></label>}
 
         {kind === 'programs' && <p className="subtle">Choose movies, episodes, whole seasons or shows, or other videos from your libraries. They are added to this lineup in the order you pick them.</p>}
-        {kind !== 'programs' && <DurationField label="Length" value={duration} onChange={setDuration} />}
+        {kind === 'station-id' && <>
+          <p className="subtle">{ownStationIds ? `${channelName}’s station IDs: the ones named for it (“${channelName} ID.mp4”) and its lists ticked in Channel Settings → Commercials.` : `${channelName} has no station IDs of its own yet, so these are the ones named for no channel. Name an ID for the channel (“${channelName} ID.mp4”) to make it this channel’s.`}</p>
+          <div className="checklist" role="radiogroup" aria-label="Station ID to insert">
+            {stationIds.map((program) => (
+              <label key={program.id}><input type="radio" name="station-id" checked={chosenId === program.id} onChange={() => setChosenId(program.id)} /> {spotTitle(program)} <small>{spotLength(program.duration)}{program.id === nextStationId?.id ? ' · next in rotation' : ''}</small></label>
+            ))}
+          </div>
+        </>}
+        {kind !== 'programs' && kind !== 'station-id' && <DurationField label="Length" value={duration} onChange={setDuration} />}
         {kind === 'flex' && <p className="subtle">Open airtime. Tunarr plays the channel’s filler or offline screen.</p>}
         {kind === 'break' && <>
           <p className="subtle">Flex time filled from the filler lists you choose, like a commercial break.</p>
@@ -160,7 +181,7 @@ export function InsertDialog({ live, anchorLabel, channels, currentChannelId, da
             ))}
           </div>
           {nextStationId
-            ? <label className="keep-on-air"><input type="checkbox" checked={withId} onChange={(event) => setWithId(event.target.checked)} /> Open with a station ID <small>“{stationIdTitle ?? 'Station ID'}” ({spotLength(nextStationId.duration)}) airs first; its length comes out of the break. IDs rotate from your Station IDs lists.</small></label>
+            ? <label className="keep-on-air"><input type="checkbox" checked={withId} onChange={(event) => setWithId(event.target.checked)} /> Open with a station ID <small>“{stationIdTitle ?? 'Station ID'}” ({spotLength(nextStationId.duration)}) airs first; its length comes out of the break. IDs rotate from {ownStationIds ? `${channelName}’s own station IDs` : 'the station IDs named for no channel'}.</small></label>
             : <p className="subtle">Tag a filler list as Station IDs (Lists → Station IDs…) to open breaks with an ID.</p>}
           <label className="field"><span>Don’t repeat the same filler within (minutes)</span><input type="number" min={0} step={1} value={cooldown} onChange={(event) => setCooldown(Math.max(0, Number(event.target.value)))} /></label>
         </>}
