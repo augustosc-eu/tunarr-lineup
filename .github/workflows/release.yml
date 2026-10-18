@@ -1,8 +1,10 @@
 name: Release
 
-# Publishing a GitHub release (tag vX.Y.Z) builds the companion image for
+# Publishing a GitHub release (tag vYEAR.MONTH.N, e.g. v2026.10.3: no leading
+# zero on the month, so it stays valid semver) builds the companion image for
 # amd64 and arm64 and pushes it to GitHub Container Registry as
-# ghcr.io/<owner>/<repo>:X.Y.Z, :X.Y and :latest.
+# ghcr.io/<owner>/<repo>:2026.10.3, :2026.10 (that month's latest) and :latest.
+# Rebuilding an old tag by hand leaves :latest alone.
 
 on:
   release:
@@ -10,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing release tag to (re)build, e.g. v0.1.0
+        description: Existing release tag to (re)build, e.g. v2026.10.1
         required: true
 
 permissions:
@@ -39,7 +41,7 @@ jobs:
           tags: |
             type=semver,pattern={{version}},value=${{ github.event.release.tag_name || inputs.tag }}
             type=semver,pattern={{major}}.{{minor}},value=${{ github.event.release.tag_name || inputs.tag }}
-            type=raw,value=latest,enable=${{ !github.event.release.prerelease }}
+            type=raw,value=latest,enable=${{ github.event_name == 'release' && !github.event.release.prerelease }}
           labels: |
             org.opencontainers.image.title=Tunarr Lineup
             org.opencontainers.image.description=A Mac OS 9-styled, TV-remote-friendly programming desk for Tunarr channels
