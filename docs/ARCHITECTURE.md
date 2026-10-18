@@ -173,6 +173,7 @@ which is set to the same rule for the page itself).
 | `/api/tunarr/channels/:id/schedule` | GET | `GET /api/channels/:id/schedule` (materialized: slots carry show, custom-show, channel and list names) |
 | `/api/tunarr/channels/:id/schedule-preview` | POST | `GET …/programming`, then `POST /api/channels/:id/schedule-slots` (random) or `/schedule-time-slots` (time) with the merged schedule. Generates only; saves nothing |
 | `/api/tunarr/programs/:id/artwork/:type` | GET | `GET /api/programs/:id/artwork/:type?fallbackArtworkTypes=<other types>` |
+| `/api/tunarr/channels/:id/recreate` | GET, POST | `server/recreateChannel.ts`, because Tunarr can't drop a slot schedule. GET (`findRedirectsTo`) reads `GET /api/channels` and each other channel's `…/programming`, and returns `{ redirects: [{ id, number, name }] }` for those whose lineup items or redirect slots point here. POST (`recreateChannel`), under `withChannelLock`: version check (412), `GET /api/channels/:id`, then `POST /api/channels` `{type:'new'}` with the old channel's fields minus `NOT_SAVEABLE` on a free number, `POST …/programming` on the new channel with the old lineup (`keep`, zero-length items dropped) or nothing (`empty`), `DELETE` the old channel, and `PUT` the new one back to the old number. A failure before the delete removes the new channel. Returns `{ id, number, name, previousId, numberError? }` |
 | `/api/tunarr/channels/:id/logo` | GET | `GET /api/channels/:id`, then the logo (see *Channel logos* below). Only a `v` query parameter (cache buster, `[a-z0-9]{0,16}`) is accepted. `204` when there is no usable logo |
 
 ### Request pipeline (`handleTunarrApi`)
@@ -190,6 +191,7 @@ which is set to the same rule for the page itself).
    - **`programming` with `type: 'time' | 'random'`:** `{ schedule: { slots, timeZoneOffset? }, seed?, discardCount? }`, with the seed checked by `validateSeed`.
    - **Both programming saves** require `If-Match` (`parseIfMatch`), else `428 precondition_required`.
    - **`schedule-preview`:** the body is `{ slots, timeZoneOffset? }`.
+   - **`recreate`:** the body is exactly `{ lineup: 'keep' | 'empty' }` (`validateRecreate`) and needs `If-Match`, else `428`.
 7. **No target:** `503` (`not_configured` or `invalid_config`). Health uses `{status:'not_configured', error}`.
 8. **Upstream call:** `fetchUpstream`, shared by `callTunarr` (JSON) and `fetchArtwork` (images).
 
@@ -436,6 +438,8 @@ activate, and Escape/Back to close. Outside clicks close menus.
 4. **Re-read.** `loadProgramming(id, date, { keepSelection, rebase: { saved: request.lineup, history } })` re-reads programming, then `rebaseHistory` maps every snapshot onto the fresh objects (position by position, checked with `itemIdentity`). If the lineups don't line up, for example because zero-length items were dropped, the edit list starts fresh with a notice.
 5. **Failure.** A "Not saved: …" toast; edits are kept.
 
+**Reset Channel** (`confirmResetChannel`) is the same conditional save with `lineup: []`, sent with `base.version` after a confirmation. On success it closes the slot editor, deletes the channel's draft and reloads without `rebase`, so the edit list starts fresh. A 412 uses `showConflict`. On a channel with a slot schedule, the confirmation first loads `channelRedirects` (`withRedirectNote`) and offers two actions: **Reset and remove schedule** (`recreateWithoutSchedule(…, 'empty')`, the `recreate` route) and **Empty lineup only** (the empty save, `ConfirmDialog.alternate`), which Tunarr refills at its next regeneration (D48). After a recreate the desk deletes the old id's draft and reloads the channel list on the new id.
+
 ### Drafts (`lib/draftStore.ts`)
 
 Drafts store order as indices into the loaded lineup, followed by `extras`
@@ -458,7 +462,7 @@ still be undone after a save.
    - settings and slots, with sources from `catalogOptions` and `showOption` (library shows)
    - per-slot options behind **More**: seasons for show slots (`SlotSeasons`, which loads seasons with a season search scoped to the show's media source and library, or counts them from `descendants`), direction, linked slots (`SlotLinking`, using `linkCandidates`, `linkSlot` and `linkGroups`), and commercials (`SlotCommercials`)
    - extra movies
-   - **Detach to manual lineup** (`detachToManual`), which saves the current base lineup as a manual lineup
+   - **Detach to manual lineup** (`detachToManual`), which recreates the channel with Tunarr's current lineup and no schedule (`recreateWithoutSchedule(…, 'keep')`), after naming the channels that redirect to it
 2. **Preview.** `previewSlots` calls `tunarrApi.previewSchedule(id, draft)` and switches to preview mode.
    - The timeline renders `scheduleForDay(null, preview.lineup, preview.startTime, date)` with `viewPrograms` (the programs merged with the preview's).
    - Rows are read-only, a sticky `.preview-bar` and the inspector offer save, edit and discard, and keyboard edits are disabled (Back discards).

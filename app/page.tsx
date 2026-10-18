@@ -75,6 +75,8 @@ type ConfirmDialog = {
   confirmLabel: string;
   cancelLabel?: string;
   onConfirm: () => void;
+  /** A second, lesser choice shown between Cancel and the main action. */
+  alternate?: { label: string; onSelect: () => void };
 };
 
 /** A block picked up with OK/Enter and slid with the arrow keys. */
@@ -957,33 +959,52 @@ export default function Home() {
     commit();
   };
 
+  /**
+   * Tunarr can't drop a slot schedule from a channel, so leaving one means a
+   * fresh channel with the same settings (the companion's recreate route). Asks
+   * which channels redirect here first, because they lose those redirects.
+   */
+  const withRedirectNote = (channelId: string, open: (note: string) => void) => {
+    setSaving(true);
+    tunarrApi.channelRedirects(channelId)
+      .then(({ redirects }) => open(redirects.length
+        ? ` ${redirects.map((channel) => `CH ${channel.number} ${channel.name}`).join(', ')} ${redirects.length === 1 ? 'redirects' : 'redirect'} to this channel. Tunarr turns those redirects into off-air time when the old channel goes, so point them at this channel again afterwards.`
+        : ''))
+      .catch((error) => { noteFailure(error); open(' Lineup couldn’t check which channels redirect here; any that do lose those redirects.'); })
+      .finally(() => setSaving(false));
+  };
+
+  const recreateWithoutSchedule = (channel: Channel, version: string, lineup: 'keep' | 'empty') => {
+    setSaving(true);
+    tunarrApi.recreateChannel(channel.id, lineup, version)
+      .then(async (result) => {
+        setSlotEditor(closedSlotEditor);
+        await draftStore().delete(channel.id).catch(() => {});
+        setDraftMarks((marks) => ({ ...marks, [channel.id]: false }));
+        notify(result.numberError ?? (lineup === 'keep' ? `Detached CH ${result.number} ${result.name}. It now has a manual lineup.` : `Reset CH ${result.number} ${result.name}. Its lineup and slot schedule are gone.`));
+        await loadChannels(selectedDate, result.id);
+      })
+      .catch((error) => {
+        if (error instanceof TunarrApiError && error.code === 'lineup_changed') showConflict(channel.id, 'the change');
+        else notify(`Not changed: ${errorMessage(error, 'Could not recreate the channel.')}`);
+        noteFailure(error);
+      })
+      .finally(() => setSaving(false));
+  };
+
+  const recreateNote = 'Tunarr can’t remove a slot schedule from a channel, so Lineup makes a new channel with the same number, name, logo and settings, then deletes this one. Its internal Tunarr id changes.';
+
   /** Keeps the channel's current lineup as a manual lineup, so Tunarr stops generating it. */
   const detachToManual = () => {
-    if (!base || !activeChannelId) return;
-    const channelId = activeChannelId;
+    const channel = activeChannel;
+    if (!base || !channel) return;
     const version = base.version;
-    const { request } = buildManualSave(base.lineup);
-    setConfirmDialog({
+    withRedirectNote(channel.id, (note) => setConfirmDialog({
       title: 'Detach from the slot schedule?',
-      body: 'The lineup Tunarr has now is kept as a manual lineup and the slot schedule is dropped. Tunarr will stop regenerating this channel. Unsaved lineup edits are not included.',
+      body: `The lineup Tunarr has now becomes a manual lineup and the slot schedule is dropped, so Tunarr stops regenerating this channel. ${recreateNote}${note} Unsaved lineup edits are not included.`,
       confirmLabel: 'Detach',
-      onConfirm: () => {
-        setSaving(true);
-        tunarrApi.saveProgramming(channelId, request, version)
-          .then(async () => {
-            setSlotEditor(closedSlotEditor);
-            await draftStore().delete(channelId).catch(() => {});
-            notify('Detached. This channel now has a manual lineup.');
-            await loadProgramming(channelId, selectedDate);
-          })
-          .catch((error) => {
-            if (error instanceof TunarrApiError && error.code === 'lineup_changed') showConflict(channelId, 'the change');
-            else notify(`Not saved: ${errorMessage(error, 'Could not detach the schedule.')}`);
-            noteFailure(error);
-          })
-          .finally(() => setSaving(false));
-      },
-    });
+      onConfirm: () => recreateWithoutSchedule(channel, version, 'keep'),
+    }));
   };
 
   const discardSlotPreview = () => setSlotEditor((current) => ({ ...current, preview: null, previewOf: '', showingPreview: false }));
@@ -1278,6 +1299,54 @@ export default function Home() {
     });
   };
 
+  /**
+   * Empties the channel's lineup with the ordinary conditional save. A manual
+   * save keeps Tunarr's slot schedule, which would refill the lineup, so a
+   * scheduled channel is offered a recreate without it as well.
+   */
+  const confirmResetChannel = () => {
+    const channel = activeChannel;
+    if (!channel || !base) return;
+    const channelId = channel.id;
+    const version = base.version;
+    const lost = `Every program, break, flex and redirect in this channel’s lineup is removed in Tunarr${dirty ? ', and your unsaved edits are lost' : ''}.`;
+    const emptyLineup = () => {
+      setSaving(true);
+      tunarrApi.saveProgramming(channelId, { type: 'manual', lineup: [], append: false }, version)
+        .then(async () => {
+          setSlotEditor(closedSlotEditor);
+          await draftStore().delete(channelId).catch(() => {});
+          setDraftMarks((marks) => ({ ...marks, [channelId]: false }));
+          notify(`Reset CH ${channel.number} ${channel.name}. Its lineup is empty.`);
+          await loadProgramming(channelId, selectedDate);
+          void tunarrApi.channels().then((list) => setChannels([...list].sort((a, b) => a.number - b.number))).catch(noteFailure);
+        })
+        .catch((error) => {
+          if (error instanceof TunarrApiError && error.code === 'lineup_changed') showConflict(channelId, 'the reset');
+          else notify(`Not reset: ${errorMessage(error, 'Could not reset the channel.')}`);
+          noteFailure(error);
+        })
+        .finally(() => setSaving(false));
+    };
+    if (!hasGeneratedSchedule(programming)) {
+      setConfirmDialog({
+        title: `Reset CH ${channel.number} ${channel.name}?`,
+        body: `${lost} The channel’s name, number, logo and settings stay. Programs stay in your libraries. This can’t be undone.`,
+        confirmLabel: 'Reset channel',
+        onConfirm: emptyLineup,
+      });
+      return;
+    }
+    const summary = scheduleSummary(programming.schedule);
+    withRedirectNote(channelId, (note) => setConfirmDialog({
+      title: `Reset CH ${channel.number} ${channel.name}?`,
+      body: `${lost} This channel is generated from ${summary}. “Reset and remove schedule” clears both for good. ${recreateNote}${note} “Empty lineup only” keeps the channel as it is, but Tunarr rebuilds the lineup from the schedule at its next library scan or start-time change. Programs stay in your libraries. This can’t be undone.`,
+      confirmLabel: 'Reset and remove schedule',
+      alternate: { label: 'Empty lineup only', onSelect: emptyLineup },
+      onConfirm: () => recreateWithoutSchedule(channel, version, 'empty'),
+    }));
+  };
+
   const menus: Menu[] = [
     { title: 'File', items: [
       { label: 'Save Lineup', shortcut: '⌘S', disabled: !dirty || saving || !!grab, onSelect: save },
@@ -1319,6 +1388,7 @@ export default function Home() {
       'separator',
       { label: 'New Channel…', disabled: !live || !!grab, onSelect: () => guardUnsaved(() => setNewChannel({ copyFrom: '' })) },
       { label: 'Duplicate Channel…', disabled: !live || !activeChannelId || !!grab, onSelect: () => guardUnsaved(() => setNewChannel({ copyFrom: activeChannelId })) },
+      { label: 'Reset Channel…', disabled: !live || !activeChannel || !base || loading || saving || !!grab || !!slotPreview || !base.lineup.length, onSelect: confirmResetChannel },
       { label: 'Delete Channel…', disabled: !live || !activeChannel || !!grab, onSelect: confirmDeleteChannel },
     ] },
     { title: 'Lists', items: [
@@ -1621,6 +1691,7 @@ export default function Home() {
           <p className="subtle" id="confirm-body">{confirmDialog.body}</p>
           <div className="dialog-actions">
             <button autoFocus onClick={() => setConfirmDialog(null)}>{confirmDialog.cancelLabel ?? 'Cancel'}</button>
+            {confirmDialog.alternate && <button onClick={() => { const action = confirmDialog.alternate!.onSelect; setConfirmDialog(null); action(); }}>{confirmDialog.alternate.label}</button>}
             <button className="primary" onClick={() => { const action = confirmDialog.onConfirm; setConfirmDialog(null); action(); }}>{confirmDialog.confirmLabel}</button>
           </div>
         </section>

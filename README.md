@@ -67,7 +67,7 @@ see [Run with Docker Compose](#run-with-docker-compose-recommended).
   - Slots can carry their own commercials: before or after each program, at the start or end of the slot, or as mid-roll breaks inside programs.
 - **Slot schedules.**
   - **Channel → Create / Edit Slot Schedule…** builds a random- or time-slot schedule from any source: shows from the library, movies, custom shows, filler lists, smart collections, or redirects to other channels.
-  - You can change every schedule setting, convert between random and time slots, add movies to the movie pool, or **Detach to manual lineup**.
+  - You can change every schedule setting, convert between random and time slots, add movies to the movie pool, or **Detach to manual lineup**. Tunarr can't remove a schedule from a channel, so removing one (Detach, or Reset and remove schedule) makes a new channel with the same number, name, logo and settings and deletes the old one. The channel gets a new internal Tunarr id, and other channels' redirects to it become off-air time; Lineup names those channels before you confirm.
   - **More** on a slot sets which seasons a show slot plays (all, only some, or all but some), the play direction, and **linked slots**: slots of the same source that share one episode list, so the 8 pm slot picks up where the 6 pm slot stopped. In time-slot schedules a linked slot can instead rerun what the group played.
 - **Programming templates.** **Channel → Programming Templates…** starts a schedule from a daypart plan:
   - **General:** general entertainment, kids & cartoons, movie channel, music videos, 24-hour news.
@@ -89,6 +89,7 @@ see [Run with Docker Compose](#run-with-docker-compose-recommended).
 - **Smart collections.** **Lists → Smart Collections…** builds saved searches from rules (genre, studio, actor, year, length, added in the last N weeks…), previews how many programs match, and saves them for slots to play.
 - **Channels.**
   - **Channel → New Channel… / Duplicate Channel… / Delete Channel…** (delete asks first).
+  - **Channel → Reset Channel…** empties the channel's lineup in Tunarr after asking, and keeps the channel and its settings. For a channel with a slot schedule you choose: **Reset and remove schedule** clears both for good, or **Empty lineup only** keeps the schedule, and Tunarr rebuilds the lineup from it at the next library scan or start-time change.
   - **Channel → Channel Settings…** has tabs for General (name, number, group, start time, hidden, on demand), Logo & watermark (logo address, on-screen watermark, offline screen), Streaming (stream format, transcode profile, subtitles) and Commercials.
   - **Logos** show in the channel list and the schedule header. They are loaded by the companion, from Tunarr for uploaded logos or from the public site a logo links to. Channels without a usable logo show their number.
 - **Setup.**

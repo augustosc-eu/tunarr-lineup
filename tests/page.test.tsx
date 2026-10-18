@@ -158,6 +158,18 @@ function fakeCompanion(options: { schedule?: { type: string; slots: unknown[]; [
     }
     const match = /^\/api\/tunarr\/channels\/([^/]+)\/(programming|lineup|schedule|schedule-preview)$/.exec(url.pathname);
     if (match?.[2] === 'schedule') return reply({ status: 200, body: { schedule: options.schedule } });
+    const recreate = /^\/api\/tunarr\/channels\/([^/]+)\/recreate$/.exec(url.pathname);
+    if (recreate && method === 'GET') return reply({ status: 200, body: { redirects: [{ id: 'chan-movies', number: 7, name: 'Movie Night' }] } });
+    if (recreate) {
+      // Like the companion: a new channel, same number and name, no schedule.
+      const ifMatch = String((init?.headers as Record<string, string>)['if-match'] ?? '').replaceAll('"', '');
+      if (ifMatch !== programmingVersion(state.lineup, options.schedule)) return reply({ status: 412, body: { error: { code: 'lineup_changed', message: 'Changed.' } } });
+      const channel = channels.find((item) => item.id === recreate[1])!;
+      channel.id = `${channel.id}-new`;
+      options.schedule = undefined;
+      if ((JSON.parse(String(init!.body)) as { lineup: string }).lineup === 'empty') state.lineup = [];
+      return reply({ status: 200, body: { id: channel.id, number: channel.number, name: channel.name, previousId: recreate[1] } });
+    }
     if (match?.[2] === 'schedule-preview') {
       const { slots } = JSON.parse(String(init!.body)) as { slots: unknown[] };
       state.previewedSlots = slots;
@@ -1095,6 +1107,85 @@ describe('channels and Tunarr setup', () => {
     await waitFor(() => expect(count(requests, 'DELETE', '/api/tunarr/channels/chan-news')).toBe(1));
     expect(await screen.findByText('Deleted CH 3 Newsroom')).toBeTruthy();
     await waitFor(() => expect(screen.queryByRole('button', { name: /Newsroom/ })).toBeNull());
+  });
+
+  it('resets a channel to an empty lineup only after confirming', async () => {
+    const { requests, state } = fakeCompanion();
+    render(<Home />);
+    await pickAlpha();
+    fireEvent.click(screen.getByRole('button', { name: /Later/ }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Channel' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /Reset Channel/ }));
+    const confirm = await screen.findByRole('alertdialog', { name: 'Reset CH 3 Newsroom?' });
+    expect(within(confirm).getByText(/your unsaved edits are lost/)).toBeTruthy();
+    expect(count(requests, 'POST', '/api/tunarr/channels/chan-news/programming')).toBe(0);
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Reset channel' }));
+
+    await waitFor(() => expect(count(requests, 'POST', '/api/tunarr/channels/chan-news/programming')).toBe(1));
+    const post = requests.find((r) => r.method === 'POST' && r.path.endsWith('/programming'))!;
+    expect(post.body).toEqual({ type: 'manual', lineup: [], append: false });
+    expect(state.lineup).toEqual([]);
+    expect(await screen.findByText('Reset CH 3 Newsroom. Its lineup is empty.')).toBeTruthy();
+    await waitFor(() => expect(count(requests, 'GET', '/api/tunarr/channels/chan-news/programming')).toBe(2));
+    expect(screen.queryByText(/Showing unsaved changes/)).toBeNull();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Channel' }));
+    expect((screen.getByRole('menuitem', { name: /Reset Channel/ }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('resets a scheduled channel by recreating it without the schedule, or empties only the lineup', async () => {
+    const { requests, state } = fakeCompanion({ schedule: { type: 'time', slots: [] } });
+    render(<Home />);
+    await pickAlpha();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Channel' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /Reset Channel/ }));
+    const confirm = await screen.findByRole('alertdialog', { name: 'Reset CH 3 Newsroom?' });
+    expect(within(confirm).getByText(/CH 7 Movie Night redirects to this channel/)).toBeTruthy();
+    expect(within(confirm).getByText(/internal Tunarr id changes/)).toBeTruthy();
+
+    // The lesser choice: an ordinary empty save, schedule kept.
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Empty lineup only' }));
+    await waitFor(() => expect(count(requests, 'POST', '/api/tunarr/channels/chan-news/programming')).toBe(1));
+    expect(count(requests, 'POST', '/api/tunarr/channels/chan-news/recreate')).toBe(0);
+    expect(state.lineup).toEqual([]);
+    expect(await screen.findByText('Reset CH 3 Newsroom. Its lineup is empty.')).toBeTruthy();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Channel' }));
+    expect(screen.getByRole('menuitem', { name: /Edit Slot Schedule/ })).toBeTruthy();
+  });
+
+  it('resets and removes the slot schedule through the companion’s recreate', async () => {
+    const { requests } = fakeCompanion({ schedule: { type: 'time', slots: [] } });
+    render(<Home />);
+    await pickAlpha();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Channel' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /Reset Channel/ }));
+    const confirm = await screen.findByRole('alertdialog', { name: 'Reset CH 3 Newsroom?' });
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Reset and remove schedule' }));
+    await waitFor(() => expect(count(requests, 'POST', '/api/tunarr/channels/chan-news/recreate')).toBe(1));
+    expect(requests.find((r) => r.method === 'POST' && r.path.endsWith('/recreate'))!.body).toEqual({ lineup: 'empty' });
+    expect(await screen.findByText('Reset CH 3 Newsroom. Its lineup and slot schedule are gone.')).toBeTruthy();
+    // The desk moves to the recreated channel, which is manual and empty.
+    await waitFor(() => expect(count(requests, 'GET', '/api/tunarr/channels/chan-news-new/programming')).toBe(1));
+    await waitFor(() => expect(screen.queryByText('Generated schedule')).toBeNull());
+  });
+
+  it('detaches from a slot schedule by recreating the channel with its current lineup', async () => {
+    const { requests, state } = fakeCompanion({ schedule: { type: 'time', slots: [] } });
+    const before = state.lineup;
+    render(<Home />);
+    await screen.findAllByText('Alpha Movie');
+    fireEvent.click(screen.getByRole('button', { name: 'Edit slot schedule…' }));
+    const editor = await screen.findByRole('dialog', { name: /Slot schedule ·/ });
+    fireEvent.click(within(editor).getByRole('button', { name: 'Detach to manual lineup' }));
+    const confirm = await screen.findByRole('alertdialog', { name: 'Detach from the slot schedule?' });
+    expect(within(confirm).getByText(/CH 7 Movie Night redirects to this channel/)).toBeTruthy();
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Detach' }));
+    await waitFor(() => expect(count(requests, 'POST', '/api/tunarr/channels/chan-news/recreate')).toBe(1));
+    expect(requests.find((r) => r.method === 'POST' && r.path.endsWith('/recreate'))!.body).toEqual({ lineup: 'keep' });
+    // Not a manual save: that would keep the schedule.
+    expect(count(requests, 'POST', '/api/tunarr/channels/chan-news/programming')).toBe(0);
+    expect(await screen.findByText('Detached CH 3 Newsroom. It now has a manual lineup.')).toBeTruthy();
+    expect(state.lineup).toBe(before);
+    await waitFor(() => expect(screen.queryByText('Generated schedule')).toBeNull());
   });
 
   it('changes streaming settings and the transcode profile', async () => {

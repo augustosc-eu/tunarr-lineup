@@ -6,6 +6,7 @@ import type { FillerFolders, FillerRole, FillerRoles } from '../server/fillerRol
 import type { Template } from '../server/templateSchema';
 import type { ChannelSettings, ContentProgram, ListSummary, ManagedSource, MediaSource, NamedItem, NewMediaSource, SearchResult, SmartCollectionView, TranscodeProfile } from './library';
 import type { SchedulePreview, Slot, SlotSchedule } from './schedule';
+import type { ChannelRef, RecreateResult as RecreatedChannel } from '../server/recreateChannel';
 
 export type ScheduleDraft = { type: SlotSchedule['type']; settings?: Record<string, unknown>; slots: Slot[]; extraPrograms?: string[] };
 export type AiStatus = { enabled: true; provider: string; model: string } | { enabled: false; message: string };
@@ -161,6 +162,15 @@ export const tunarrApi = {
   createChannel: (body: { name: string; number?: number; groupTitle?: string; transcodeConfigId?: string; copyFrom?: string }) =>
     request<{ id: string; name: string; number: number }>('/api/tunarr/channels/create', jsonBody('POST', body)),
   deleteChannel: (id: string) => request<unknown>(channelPath(id), { method: 'DELETE' }),
+  /** Other channels whose lineup or slot schedule redirects to this one. */
+  channelRedirects: (id: string) => request<{ redirects: ChannelRef[] }>(`${channelPath(id)}/recreate`),
+  /** Recreates the channel without its slot schedule (Tunarr can't drop one); it gets a new id. */
+  recreateChannel: (id: string, lineup: 'keep' | 'empty', version: string) =>
+    request<RecreatedChannel>(`${channelPath(id)}/recreate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'if-match': `"${version}"` },
+      body: JSON.stringify({ lineup }),
+    }),
   transcodeProfiles: () => request<TranscodeProfile[]>('/api/tunarr/transcode-configs'),
   saveTranscodeProfile: (id: string, changes: Partial<TranscodeProfile>) => request<TranscodeProfile>(`/api/tunarr/transcode-configs/${encodeURIComponent(id)}`, jsonBody('PUT', changes)),
   copyTranscodeProfile: (id: string) => request<TranscodeProfile>(`/api/tunarr/transcode-configs/${encodeURIComponent(id)}/copy`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }),

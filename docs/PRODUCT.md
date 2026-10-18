@@ -142,6 +142,9 @@ Edits mark the lineup unsaved:
 
 - **Channel → New Channel… / Duplicate Channel…:** name, number (next free one by default), group, and the transcode profile (new) or the channel to copy (duplicate). Lineup switches to the new channel.
 - **Channel → Delete Channel…:** asks first, then removes the channel from Tunarr and moves to a neighbouring channel.
+- **Channel → Reset Channel…:** asks first, then saves an empty lineup: every program, break, flex and redirect goes, and the channel's name, number, logo and settings stay. Unsaved edits and the edit list for the channel are dropped. Disabled when the lineup is already empty. On a channel with a slot schedule there are two choices:
+  - **Reset and remove schedule** clears both for good. Tunarr can't remove a schedule from a channel, so Lineup makes a new channel with the same number, name, logo and settings and deletes the old one. Its internal Tunarr id changes, and the dialog names any channels that redirect to it, because Tunarr turns those redirects into off-air time.
+  - **Empty lineup only** keeps the channel and its schedule. Tunarr rebuilds the lineup from the schedule at its next library scan or start-time change.
 - **Setup → Media Sources…:** add Plex (address and token), Jellyfin or Emby (address, user name and password; Tunarr signs in), or local folders; turn libraries on or off, refresh and scan them; remove sources. Addresses, tokens and folder paths are never shown back.
 - **Setup → Transcode Profiles…:** resolution, codecs, bit depth, bitrates and buffers, hardware acceleration, threads, audio channels, sample rate, volume and loudness, error screen and audio, frame-rate and deinterlace options; duplicate or delete profiles.
 - **Logos:** channel logos appear in the channel list and the schedule header. Channels without a usable logo show their number.
@@ -203,7 +206,9 @@ channels use random slots), and for manual channels that should get one:
 4. **Save schedule** uses the preview's random seed and reports whether Tunarr's saved result matches the preview. The lineup's edit list starts fresh, because the lineup was regenerated.
 
 **Detach to manual lineup** keeps today's lineup as a manual lineup and drops
-the schedule.
+the schedule. Tunarr can't remove a schedule from a channel, so this recreates
+the channel with the same number, name, logo and settings (a new internal id),
+and first names any channels that redirect to it.
 
 ### 6. Export a program log
 

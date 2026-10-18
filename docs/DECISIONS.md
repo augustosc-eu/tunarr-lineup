@@ -236,7 +236,7 @@ on the `broadcast-programming` branch.
     2. The owner approved it on 2026-10-03, limited to existing sources.
     3. The owner widened it to "everything" the same day.
 - **Decision:**
-  - **What can be edited:** any source (library shows, movies, custom shows, filler lists, smart collections, redirects, flex); schedule-wide settings from a per-type allowlist; per-slot commercials (`filler` entries and `midRoll` breaks); conversion between random and time slots; creating a schedule for a manual channel; and **Detach to manual lineup**.
+  - **What can be edited:** any source (library shows, movies, custom shows, filler lists, smart collections, redirects, flex); schedule-wide settings from a per-type allowlist; per-slot commercials (`filler` entries and `midRoll` breaks); conversion between random and time slots; creating a schedule for a manual channel; and **Detach to manual lineup** (which recreates the channel, see D48).
   - **What the companion enforces** (`buildSchedule`):
     - It starts from Tunarr's current schedule when the type is unchanged, so fields Lineup doesn't edit are kept. Otherwise it starts from Tunarr's editor defaults.
     - It validates source ids, orders, timing, weights, filler and mid-roll shapes.
@@ -416,3 +416,20 @@ on the `broadcast-programming` branch.
   - **Ticked lists add to that, with no new storage.** A station-ID list in the channel's Tunarr `fillerCollections` (ticked in Channel Settings) gives the channel its IDs, minus those named for other channels. Tunarr also plays a ticked list in flex time without lists of its own.
   - **Programming them:** Insert → Station ID lists the channel's IDs to place one anywhere; Open with a station ID and Open Breaks With Station IDs rotate through them. A channel with none uses the IDs named for no channel, never another channel's.
 - **Consequence:** a generic ID whose title happens to contain a channel's full name goes to that channel. Tunarr picks channel filler at random, so a ticked list's IDs aren't guaranteed to open a break; the D45 tools still put an ID item in front of each break. The slot shortcut (Add station IDs to breaks) adds a whole list, so it can't pick IDs inside a list.
+
+## D48. Removing a slot schedule means recreating the channel
+
+- **Status:** Explicit: the owner asked to "reset a channel and delete all programming" (2026-10-18), then, on hearing that Tunarr can't drop a schedule and that Detach therefore didn't work, asked to "fix the bug and give the option". Evidenced: `server/recreateChannel.ts`, `confirmResetChannel` and `detachToManual` in `app/page.tsx`, tests in `tests/recreateChannel.test.ts`, `tests/page.test.tsx` and `tests/tunarrProxy.test.ts`.
+- **What Tunarr allows** (read in Tunarr's source):
+  - `LineupRepository.updateLineup` replaces only the items on a manual save (see D9). Only internal code clears `schedule`, and no HTTP route does.
+  - `RegenerateChannelLineupCommand` rebuilds a scheduled lineup after library scans and start-time changes.
+  - `copyChannel` copies the lineup file, schedule included.
+  - `deleteChannel` turns other channels' redirect items to the channel into offline time (`removeRedirectReferences`). Redirect slots in other schedules keep the dead id.
+  - A created channel always gets a new uuid.
+- **Decision:**
+  - **Reset Channel** is an ordinary conditional manual save of `[]` (If-Match, channel lock, 412 dialog). A scheduled channel also gets **Reset and remove schedule**, and that one is the main action.
+  - **Removing a schedule** (that reset, and **Detach to manual lineup**) uses `POST /api/tunarr/channels/:id/recreate`. It works under the lock and checks the version first. It creates a `new` channel from the old one's own fields on a spare number, saves the lineup to it (`keep`) or nothing (`empty`), deletes the old channel, then moves the new one to the old number. Lineup items pass through untouched.
+  - **Order:** the old channel is untouched until the copy is complete, and a failure before the delete removes the copy. A failure after it leaves the channel on the spare number, and the reply says so.
+  - **The cost is shown first.** The dialogs say the internal id changes and name the channels whose lineup or slots redirect here (`GET …/recreate`).
+- **Not built:** rewriting other channels' redirects to the new id. It would mean saving other channels' programming, and a manual save also clears their `scheduleSeed`.
+- **Consequence:** detached and reset channels have a new Tunarr id. Lineup's draft for the old id is deleted. Anything outside Lineup that stored the old id has to be updated; channel numbers stay the same.
