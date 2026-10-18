@@ -295,6 +295,28 @@ test('creates, duplicates and deletes channels', async ({ page }) => {
   expect(channels.map((channel) => [channel.name, channel.number])).toEqual([['Desk News', 5], ['Desk Movies', 9], ['Desk Rotation', 12], ['Desk News (copy)', 13]]);
 });
 
+test('resets a scheduled channel and removes its schedule by recreating it on the same number', async ({ page }) => {
+  await page.locator('.channel', { hasText: 'Desk Rotation' }).click();
+  await expect(page.getByText('Generated schedule')).toBeVisible();
+  await page.getByRole('menuitem', { name: 'Channel' }).click();
+  await page.getByRole('menuitem', { name: /Reset Channel/ }).click();
+  const confirm = page.getByRole('alertdialog', { name: 'Reset CH 12 Desk Rotation?' });
+  await expect(confirm.getByRole('button', { name: 'Empty lineup only' })).toBeVisible();
+  if (process.env.LINEUP_SCREENSHOTS) await page.screenshot({ path: path.join(process.env.LINEUP_SCREENSHOTS, `reset-${page.viewportSize()!.width}.png`) });
+  await confirm.getByRole('button', { name: 'Reset and remove schedule' }).click();
+  await expect(page.getByRole('status')).toHaveText('Reset CH 12 Desk Rotation. Its lineup and slot schedule are gone.');
+  await expect(page.locator('.channel.active')).toContainText('Desk Rotation');
+  await expect(page.locator('.empty')).toBeVisible();
+
+  const state = await fullState(page);
+  const rotation = state.channels.find((channel) => channel.name === 'Desk Rotation')!;
+  expect(rotation.id).not.toBe(ROTATION);
+  expect(rotation.number).toBe(12);
+  expect(state.channels.map((channel) => channel.number)).toEqual([5, 9, 12]);
+  expect(state.schedules[rotation.id]).toBeUndefined();
+  expect(state.lineups[rotation.id]).toEqual([]);
+});
+
 test('limits a show slot to some seasons and links two slots', async ({ page }) => {
   await page.locator('.channel', { hasText: 'Desk Rotation' }).click();
   await page.getByRole('button', { name: 'Edit slot schedule…' }).click();

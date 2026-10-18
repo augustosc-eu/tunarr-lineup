@@ -10,6 +10,7 @@ import { handleContentRoute, matchContentRoute, NOT_SAVEABLE, type ContentRoute 
 import { channelLogo, type ExternalImageFetcher } from './logos.js';
 import { callTunarr, fail, fetchUpstream, json, UpstreamError } from './upstream.js';
 import { buildSchedule, programPool, validateExtraPrograms, validateSeed } from './slotSchedule.js';
+import { findRedirectsTo, recreateChannel, validateRecreate, type RecreateMode } from './recreateChannel.js';
 
 // Narrow backend-for-frontend for Tunarr.
 //
@@ -138,6 +139,7 @@ type Route =
   | { name: 'lineup'; methods: string[]; channelId: string }
   | { name: 'schedule'; methods: string[]; channelId: string }
   | { name: 'schedule-preview'; methods: string[]; channelId: string }
+  | { name: 'recreate'; methods: string[]; channelId: string }
   | { name: 'logo'; methods: string[]; channelId: string }
   | { name: 'artwork'; methods: string[]; programId: string; artworkType: string };
 
@@ -150,7 +152,7 @@ function matchRoute(pathname: string): Route | { invalid: string } | null {
     if (!(ARTWORK_TYPES as readonly string[]).includes(artwork[2])) return { invalid: 'Artwork type is not supported.' };
     return { name: 'artwork', methods: ['GET'], programId: artwork[1].toLowerCase(), artworkType: artwork[2] };
   }
-  const match = /^\/api\/tunarr\/channels\/([^/]+)\/(programming|lineup|schedule|schedule-preview|logo)$/.exec(pathname);
+  const match = /^\/api\/tunarr\/channels\/([^/]+)\/(programming|lineup|schedule|schedule-preview|logo|recreate)$/.exec(pathname);
   if (!match) return null;
   // Validate the raw (still percent-encoded) segment so encoded slashes or
   // dots can never reach the upstream URL.
@@ -160,6 +162,7 @@ function matchRoute(pathname: string): Route | { invalid: string } | null {
     case 'lineup': return { name: 'lineup', methods: ['GET'], channelId: match[1] };
     case 'schedule': return { name: 'schedule', methods: ['GET'], channelId: match[1] };
     case 'logo': return { name: 'logo', methods: ['GET'], channelId: match[1] };
+    case 'recreate': return { name: 'recreate', methods: ['GET', 'POST'], channelId: match[1] };
     default: return { name: 'schedule-preview', methods: ['POST'], channelId: match[1] };
   }
 }
@@ -364,6 +367,7 @@ export async function handleTunarrApi(request: ProxyRequest, config: ProxyConfig
     let write: Write | undefined;
     let expectedVersion: string | null = null;
     let previewEdit: unknown;
+    let recreateMode: RecreateMode | undefined;
     if (method === 'POST') {
       const contentType = header(request.headers, 'content-type') ?? '';
       if (!/^application\/json\b/i.test(contentType)) return fail(415, 'unsupported_media_type', 'Send programming as application/json.');
@@ -375,6 +379,12 @@ export async function handleTunarrApi(request: ProxyRequest, config: ProxyConfig
       }
       if (route.name === 'schedule-preview') {
         previewEdit = parsed;
+      } else if (route.name === 'recreate') {
+        const checked = validateRecreate(parsed);
+        if ('error' in checked) return fail(400, 'invalid_request', checked.error);
+        recreateMode = checked.lineup;
+        expectedVersion = parseIfMatch(header(request.headers, 'if-match'));
+        if (!expectedVersion) return fail(428, 'precondition_required', 'Say which version of the channel this replaces (If-Match).');
       } else {
         const type = (parsed as { type?: unknown } | null)?.type;
         if (type === 'time' || type === 'random') {
@@ -465,6 +475,14 @@ export async function handleTunarrApi(request: ProxyRequest, config: ProxyConfig
         }
         case 'schedule':
           return json(200, await callTunarr(config, target, 'GET', `/api/channels/${route.channelId}/schedule`));
+        case 'recreate': {
+          const call = (verb: 'GET' | 'POST' | 'PUT' | 'DELETE', path: string, payload?: unknown) =>
+            callTunarr(config, target, verb, path, payload === undefined ? undefined : JSON.stringify(payload));
+          // GET: which channels redirect here, so the dialog can say what a recreate costs them.
+          if (!recreateMode) return json(200, { redirects: await findRedirectsTo(call, route.channelId) });
+          const mode = recreateMode;
+          return json(200, await withChannelLock(route.channelId, () => recreateChannel(call, route.channelId, mode, expectedVersion!)));
+        }
         case 'schedule-preview': {
           const current = (await callTunarr(config, target, 'GET', `/api/channels/${route.channelId}/programming`)) as CurrentProgramming;
           const built = buildSchedule(current?.schedule, previewEdit);

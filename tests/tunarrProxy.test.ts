@@ -226,6 +226,15 @@ describe('saving manual programming', () => {
     expect(calls[1].init.headers).toEqual({ accept: 'application/json', 'content-type': 'application/json' });
   });
 
+  it('saves an empty lineup (Reset Channel), still conditionally', async () => {
+    const { calls, config } = setup(tunarr(() => jsonResponse({ lineup: [], programs: {} })));
+    const response = await handleTunarrApi(post({ type: 'manual', lineup: [], append: false }), config);
+    expect(response.status).toBe(200);
+    expect(JSON.parse(String(calls[1].init.body))).toEqual({ type: 'manual', lineup: [], append: false });
+    const stale = await handleTunarrApi(post({ type: 'manual', lineup: [], append: false }, { 'if-match': '"stale"' }), config);
+    expect(stale.status).toBe(412);
+  });
+
   it('refuses to save when the channel changed since it was loaded', async () => {
     const changed = [...lineup].reverse();
     const { calls, config } = setup(tunarr(undefined, { lineup: changed, programs: {} }));
