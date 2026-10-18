@@ -38,6 +38,10 @@ jobs:
         uses: docker/metadata-action@v6
         with:
           images: ghcr.io/${{ github.repository }}
+          # Only the rule below may add :latest; metadata-action's own
+          # flavor would add it to every semver build, hand rebuilds included.
+          flavor: |
+            latest=false
           tags: |
             type=semver,pattern={{version}},value=${{ github.event.release.tag_name || inputs.tag }}
             type=semver,pattern={{major}}.{{minor}},value=${{ github.event.release.tag_name || inputs.tag }}
