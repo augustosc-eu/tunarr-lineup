@@ -571,7 +571,7 @@ bundle (`envPrefix`); none are used.
 - **CI** (`.github/workflows/ci.yml`):
   - **`checks` job:** `npm ci`, lint, typecheck, `npm test`, both builds, `playwright install chromium`, `test:e2e`, and the report as an artifact on failure.
   - **`docker` job:** image build, then curls `/healthz` until the container answers.
-- **Release** (`.github/workflows/release.yml`): publishing a GitHub release `vX.Y.Z` builds the multi-arch image with QEMU and Buildx, pushes it to GHCR, then runs the pushed image and curls `/healthz`. It can also be run by hand for an existing tag. Notes come from `CHANGELOG.md`.
+- **Release** (`.github/workflows/release.yml`): publishing a GitHub release `vYEAR.MONTH.N` (for example `v2026.10.3`, no leading zero on the month) builds the multi-arch image with QEMU and Buildx, pushes it to GHCR as `:YEAR.MONTH.N`, `:YEAR.MONTH` and `:latest`, then runs the pushed image and curls `/healthz`. It can also be run by hand for an existing tag; a hand run doesn't move `:latest`. Notes come from `CHANGELOG.md`.
 
 ## 13. Testing
 

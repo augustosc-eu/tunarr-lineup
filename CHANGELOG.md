@@ -1,17 +1,37 @@
 # Changelog
 
-All notable changes to Tunarr Lineup are listed here. Versions follow
-[Semantic Versioning](https://semver.org); until 1.0, minor versions may
-change behavior.
+All notable changes to Tunarr Lineup are listed here. Versions are
+`YEAR.MONTH.N`: the year and month of the release (no leading zero), and N
+counting that month's releases from 1, so 2026.10.3 is October 2026's third
+release. Any release may change behavior; this list says how. 0.1.0 and 0.2.0
+were renamed 2026.10.1 and 2026.10.2.
 
 ## [Unreleased]
+
+## [2026.10.3] - 2026-10-18
+
+### Reset Channel, and Detach that really drops the slot schedule
+
+- **Channel → Reset Channel…** empties a channel's lineup in Tunarr after asking. The channel's name, number, logo and settings stay.
+- Tunarr can't remove a slot schedule from a channel, so on a scheduled channel Reset offers **Reset and remove schedule** (clears both for good) or **Empty lineup only** (Tunarr rebuilds the lineup from the schedule at its next library scan or start-time change).
+- **Detach to manual lineup** now really drops the schedule. Before, Tunarr kept it and could regenerate over the detached lineup.
+- Removing a schedule recreates the channel with the same number, name, logo and settings. It gets a **new internal Tunarr id**, and other channels' redirects to it become off-air time; the dialog names those channels before you confirm.
+
+### Station IDs per channel
+
+- **Channel Settings → Commercials → Station IDs** ticks the station-ID lists that belong to a channel. Tunarr airs them in the channel's flex time, and Lineup's ID tools on that channel draw only from them.
+- An ID whose title holds a channel's whole name, word for word, belongs to that channel ("EL 7 ID.mp4" → El 7), with no tagging. A channel with none uses IDs named for no channel, never another channel's.
+- **Insert → Station ID** places one of the channel's own IDs anywhere.
 
 ### Filler folders
 
 - **Setup → Filler Folders…** turns folders of video files into filler lists with their role (Station IDs, Commercials, Promos, Bumpers, Other), automatically: when the desk loads and while the dialog is open, Lineup makes lists for folders named for a role (any Tunarr library: "Commercials", "station-ids"…) and for folders added with a role, and refreshes each list after every newer Tunarr scan. Lists deleted in Tunarr aren't made again. Other libraries get a one-time **Make filler list**.
 - **Uploads:** with `LINEUP_MEDIA_DIR` set (and the same folder mounted into Tunarr, `LINEUP_MEDIA_TUNARR_DIR`), upload videos from the desk into one folder per role, move them between roles, or delete them. Lineup adds the folder to Tunarr itself. Uploads stream to disk, never overwrite, and are limited by `LINEUP_MEDIA_MAX_MB` (default 4096).
+- The compose example shares a `lineup-media` volume between Tunarr and Lineup, so uploads work out of the box. With uploads off, the dialog shows the compose lines that turn them on.
 
-## [0.2.0] - 2026-10-07
+## [2026.10.2] - 2026-10-07
+
+Released as 0.2.0.
 
 ### Station IDs, commercials and flex time
 
@@ -35,7 +55,9 @@ change behavior.
 - Search filters as you type, ignores accents, and matches numbers to the title's numbers: "capitulo 2" finds "Chapter 2 - …", not "Capítulo 20".
 - The basket lists every pick with a remove button, and the edit list names what was inserted.
 
-## [0.1.0] - 2026-10-06
+## [2026.10.1] - 2026-10-06
+
+Released as 0.1.0.
 
 First public release.
 
@@ -85,6 +107,7 @@ First public release.
   reaches Tunarr through a narrow allowlisted proxy. Optional HTTP Basic
   sign-in and host-name checks against DNS rebinding.
 
-[Unreleased]: https://github.com/augustosc-eu/tunarr-lineup/compare/v0.2.0...HEAD
-[0.2.0]: https://github.com/augustosc-eu/tunarr-lineup/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/augustosc-eu/tunarr-lineup/releases/tag/v0.1.0
+[Unreleased]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.3...HEAD
+[2026.10.3]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.2...v2026.10.3
+[2026.10.2]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.1...v2026.10.2
+[2026.10.1]: https://github.com/augustosc-eu/tunarr-lineup/releases/tag/v2026.10.1
