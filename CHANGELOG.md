@@ -8,6 +8,12 @@ were renamed 2026.10.1 and 2026.10.2.
 
 ## [Unreleased]
 
+## [2026.10.7] - 2026-10-19
+
+### Fixed
+
+- **Watch live keeps playing**: channels no longer loop on "No signal · retrying" in Chrome. Chrome now says it can play live streams itself, but its player dropped Tunarr's channels after a few seconds or refused some outright; Lineup now always uses its own player (hls.js) where it can, and the browser's only on devices that can't run it. Subtitled channels play their subtitles.
+
 ## [2026.10.6] - 2026-10-19
 
 ### Fixed
@@ -148,7 +154,8 @@ First public release.
   reaches Tunarr through a narrow allowlisted proxy. Optional HTTP Basic
   sign-in and host-name checks against DNS rebinding.
 
-[Unreleased]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.6...HEAD
+[Unreleased]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.7...HEAD
+[2026.10.7]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.6...v2026.10.7
 [2026.10.6]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.5...v2026.10.6
 [2026.10.5]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.4...v2026.10.5
 [2026.10.4]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.3...v2026.10.4
