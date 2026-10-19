@@ -77,7 +77,7 @@ test('checks the lineup, and keeps a snapshot before each save that can be resto
   await page.locator('.program').first().click();
   await page.getByRole('button', { name: '↓ Later' }).click();
   await page.getByRole('button', { name: 'Save lineup' }).click();
-  await expect(page.getByRole('button', { name: 'Saved' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Saved', exact: true })).toBeVisible();
   await page.getByRole('menuitem', { name: 'File' }).click();
   await page.getByRole('menuitem', { name: /^Snapshots/ }).click();
   const snapshots = page.getByRole('dialog', { name: 'Snapshots' });

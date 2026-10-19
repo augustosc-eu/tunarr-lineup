@@ -1,6 +1,6 @@
 'use client';
 
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ChannelSettingsDialog } from './components/ChannelSettingsDialog';
 import { DayStrip } from './components/DayStrip';
 import { EventDialog } from './components/EventDialog';
@@ -1361,8 +1361,12 @@ export default function Home() {
 
   // Keyboard and TV-remote control. Arrow keys map to a remote's D-pad,
   // Enter to OK, Escape/Back to Back, PageUp/PageDown to CH+/CH−.
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
+  // The handler is swapped in as each render commits, so a key pressed the
+  // moment something appears already sees it (a passive effect left a gap
+  // where the previous render's state answered).
+  const keyHandler = useRef<(event: KeyboardEvent) => void>(() => {});
+  useLayoutEffect(() => {
+    keyHandler.current = (event: KeyboardEvent) => {
       const key = event.key;
       const back = key === 'Escape' || key === 'GoBack' || key === 'BrowserBack';
       const mod = event.metaKey || event.ctrlKey;
@@ -1446,9 +1450,12 @@ export default function Home() {
           else if (key === '?') setInfoDialog('shortcuts');
       }
     };
+  });
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => keyHandler.current(event);
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  });
+  }, []);
 
   const confirmDeleteChannel = () => {
     const channel = activeChannel;
