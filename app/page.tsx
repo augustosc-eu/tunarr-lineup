@@ -1340,11 +1340,6 @@ export default function Home() {
     loadChannel(channel, date);
   };
 
-  const stepWatch = (direction: 1 | -1) => {
-    if (!channels.length || !watching) return;
-    const index = channels.findIndex((channel) => channel.id === watching);
-    setWatching(channels[(Math.max(index, 0) + direction + channels.length) % channels.length].id);
-  };
 
   const moveCursor = (direction: -1 | 1, extend: boolean) => {
     if (!visibleInstances.length) return;
@@ -1920,6 +1915,7 @@ export default function Home() {
                 ['W', 'Week view'],
                 ['C', 'Check lineup'],
                 ['L', 'Watch the channel live'],
+                ['While watching: digits, R, G, I, M, F', 'Tune by number, last channel, cable guide, info, mute, full screen'],
                 ['⌘Z / Ctrl+Z', 'Undo'],
                 ['⇧⌘Z / Ctrl+Y', 'Redo'],
                 ['⌘S / Ctrl+S', 'Save lineup'],
@@ -2086,8 +2082,12 @@ export default function Home() {
       />}
       {watching && channels.find((channel) => channel.id === watching) && <WatchDialog
         channel={channels.find((channel) => channel.id === watching)!}
-        nowPlaying={watching === activeChannelId && onAir >= 0 ? (visibleInstances[onAir].title ?? programTitle(visibleInstances[onAir].item, viewPrograms)) : undefined}
-        onStep={stepWatch}
+        channels={channels}
+        now={now}
+        viewers={viewers}
+        loadGuide={loadGridGuide}
+        logo={(channel) => <ChannelLogo channel={channel} live={live} />}
+        onTune={setWatching}
         onClose={() => setWatching(null)}
       />}
 

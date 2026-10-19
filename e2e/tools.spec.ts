@@ -54,6 +54,14 @@ test('watches a channel live through the companion only', async ({ page }) => {
   // hls.js loads the master and variant playlists and the first segment, all rewritten to /api/tunarr.
   await expect.poll(async () => (await fakeState(page)).streamRequests).toEqual(expect.arrayContaining([`/stream/channels/${NEWS}.m3u8?mode=hls`, `/stream/channels/${NEWS}/hls/stream.m3u8`, `/stream/channels/${NEWS}/hls/data000000.ts`]));
   expect([...origins]).toEqual(['http://127.0.0.1:13000']);
+  // The remote sits beside the picture; the cable guide opens inside it.
+  await expect(page.getByRole('complementary', { name: 'Remote control' })).toBeVisible();
+  await page.keyboard.press('g');
+  const guide = page.getByRole('grid', { name: 'Cable guide' });
+  await expect(guide.locator('.cable-cell.focused')).toHaveCount(1);
+  await noOverflow(page);
+  await page.keyboard.press('Escape');
+  await expect(guide).toHaveCount(0);
   await page.keyboard.press('Escape');
   await expect(page.locator('.watch-modal')).toHaveCount(0);
 });

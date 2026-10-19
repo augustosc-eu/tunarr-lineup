@@ -216,7 +216,13 @@ and first names any channels that redirect to it.
 
 - **Guide grid** (View → Guide Grid, `G`): every channel down the side, three hours across, from Tunarr's guide. ← → move between programs (paging the window at its edges), ↑ ↓ change channel, PgUp/PgDn page channels, `N` goes to now, OK opens the program in the desk, `L` watches the channel, Back closes. **By network** groups channels by group title.
 - **Week view** (View → Week View, `W`): Monday to Sunday as blocks, projected from the lineup (including unsaved changes and slot previews). ← → change day (and week at the edges), ↑ ↓ move through a day, PgUp/PgDn change week, OK opens that day in the desk. **Export week log…** and **Export month log…** download CSV.
-- **Watch live** (Channel → Watch Live, `L`, or **▶ Watch live** on the program on air): the channel's stream in a player, through the companion. CH± changes channel; Back stops. It counts as a viewer in Tunarr.
+- **Watch live** (Channel → Watch Live, `L`, or **▶ Watch live** on the program on air): the channel's stream in a player, through the companion, run like a cable box. It counts as a viewer in Tunarr.
+  - **Tuning:** CH± (PgUp/PgDn, or ↑ ↓) go up and down the dial by number, wrapping round. Digits tune directly (they wait briefly for another digit only while a longer number could still match). `R` / **LAST** goes back to the previous channel.
+  - **The banner** shows on every tune and with `I` / **INFO**: number, name, viewers, what's on with its progress, and what's next. OK shows or hides it too.
+  - **Sound and screen:** `M` mutes, `+`/`−` change volume, Space plays/pauses, `F` (or a double-click) goes full screen.
+  - **Keeping it playing:** a stream that fails is retried with a growing wait (five tries), one with no picture after 45 s or stuck buffering for 20 s is restarted, and it retries straight away when the network comes back. If the browser blocks sound, it plays muted and says so.
+  - **The remote** beside the picture has every button above, for a mouse or touch screen; below the picture on phones.
+  - **The cable guide** (`G` / **GUIDE**): the on-screen guide of an early-2000s cable box, inside the picture. The picture keeps playing in a window at the top right, beside the focused program's details; below, five channels at a time and ninety minutes across. ← → move between programs and page the time (forward only, about half a day), ↑ ↓ move between channels, PgUp/PgDn or CH± page them, digits jump to a channel, OK tunes, Back closes it.
 - **Viewer counts**: a red badge on each channel with viewers (rail and guide), refreshed every 30 seconds while the desk is visible.
 
 ### 5b. Check the lineup
@@ -271,6 +277,7 @@ or a month.
 | Back / Esc | Cancel a move, or close a dialog |
 | `N` / `T` / `M` / `?` | Now / today / Move dialog / shortcuts |
 | `G` / `W` / `C` / `L` | Guide grid / week view / check lineup / watch live |
+| While watching: CH± or ↑ ↓, digits, `R`, `G`, `I`, `M`, `+`/`−`, `F` | Change channel, tune by number, last channel, cable guide, info banner, mute, volume, full screen |
 | ⌘ or Ctrl + Z, Shift+Z (or Y), S | Undo, redo, save |
 
 The menus can also be operated with the arrows, OK and Back.

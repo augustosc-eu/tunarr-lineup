@@ -1563,6 +1563,44 @@ describe('guide, checks and planning', () => {
     await waitFor(() => expect(screen.queryByRole('grid', { name: 'Program guide' })).toBeNull());
   });
 
+  it('watches like a cable box: tunes by number, goes back with LAST, and opens the classic guide', async () => {
+    fakeCompanion();
+    render(<Home />);
+    await screen.findAllByText('Alpha Movie');
+    fireEvent.keyDown(document.body, { key: 'l' });
+    const watch = () => screen.getByRole('dialog', { name: /^CH \d+ / });
+    await screen.findByRole('dialog', { name: /CH 3 Newsroom/ });
+    // jsdom can't play HLS: the player says so rather than tuning forever.
+    expect(await within(watch()).findByText(/can’t play live streams|couldn’t load/)).toBeTruthy();
+    const remote = within(watch()).getByRole('complementary', { name: 'Remote control' });
+    // 7 can't be the start of a longer number here, so it tunes at once.
+    fireEvent.click(within(remote).getByRole('button', { name: 'Digit 7' }));
+    await screen.findByRole('dialog', { name: /CH 7 Movie Night/ });
+    fireEvent.keyDown(watch(), { key: 'r' });
+    await screen.findByRole('dialog', { name: /CH 3 Newsroom/ });
+    // A number that isn't on the lineup says so.
+    fireEvent.keyDown(watch(), { key: '9' });
+    expect(await within(watch()).findByText('CH 9 isn’t on this lineup')).toBeTruthy();
+
+    // The guide: ninety minutes across, the tuned channel focused; ↓ then OK tunes.
+    fireEvent.keyDown(watch(), { key: 'g' });
+    const guide = await screen.findByRole('grid', { name: 'Cable guide' });
+    await waitFor(() => expect(within(guide).getAllByRole('gridcell').length).toBeGreaterThan(1));
+    expect(within(guide).getAllByRole('columnheader')).toHaveLength(4);
+    fireEvent.keyDown(guide, { key: 'ArrowDown' });
+    fireEvent.keyDown(watch(), { key: 'Enter' });
+    await screen.findByRole('dialog', { name: /CH 7 Movie Night/ });
+    expect(screen.queryByRole('grid', { name: 'Cable guide' })).toBeNull();
+
+    // Back closes the guide first, then stops watching.
+    fireEvent.keyDown(watch(), { key: 'g' });
+    await screen.findByRole('grid', { name: 'Cable guide' });
+    fireEvent.keyDown(watch(), { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('grid', { name: 'Cable guide' })).toBeNull());
+    fireEvent.keyDown(watch(), { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: /^CH \d+ / })).toBeNull());
+  });
+
   it('checks the lineup, jumps to a problem, and asks the AI for a review', async () => {
     const { requests } = fakeCompanion();
     render(<Home />);

@@ -158,7 +158,7 @@ Chromium with `npx playwright install chromium`. CI runs all of them
   `events.ts` (placing events on dates), `fillerRoles.ts` (filler-list roles, spot lengths),
   `airKinds.ts` (station-log kinds: breaks, IDs, flex; hour summaries, break rundowns),
   `lineupCheck.ts` (the lineup check), `weekLog.ts` (several days: week view, logs, AI
-  summary), `guideGrid.ts` (guide grid layout and focus), and `programInfo.ts` for titles,
+  summary), `guideGrid.ts` (guide grid layout and focus), `tvRemote.ts` (watching like a cable box: remote keys, tuning, retries), and `programInfo.ts` for titles,
   artwork and logo URLs.
 - **Put HTTP and validation logic in `server/`:** `tunarrProxy.ts` (framework-free),
   `content.ts`, `admin.ts`, `logos.ts`, `smartCollection.ts`, `templateSchema.ts`,
@@ -175,9 +175,10 @@ Chromium with `npx playwright install chromium`. CI runs all of them
   `SmartCollectionsManager`, `MediaSourcesDialog`, `FillerFoldersDialog`, `TranscodeProfilesDialog`,
   `TemplatesDialog` (gallery, AI panel), `TemplateEditor`, `EventDialog`, `DayStrip`,
   `GuideGrid`, `WeekView`, `LineupCheckDialog`, `AlignDialog`, `MarathonDialog`,
-  `NetworkDialog` (copy, simulcast, shared commercials), `WatchDialog`, `SnapshotsDialog`,
+  `NetworkDialog` (copy, simulcast, shared commercials), `WatchDialog` (with `TvRemote` and `CableGuide`), `SnapshotsDialog`,
   `PlanDialog` (Save Later, seasonal overlays), `ScheduledDialog`.
-  `app/useFillerSpots.ts` loads filler lists, their roles and spots for the day view.
+  `app/useFillerSpots.ts` loads filler lists, their roles and spots for the day view;
+  `app/useLiveStream.ts` plays and retries a channel's live stream.
 - **Add or update tests** for any behavior change.
   - Unit and UI tests go in `tests/`. Proxy tests inject `fetchImpl`; UI tests mock
     `fetch` with a stateful fake companion (`tests/page.test.tsx`).

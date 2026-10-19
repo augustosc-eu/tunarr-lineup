@@ -473,3 +473,14 @@ on the `broadcast-programming` branch.
   - **A network is Tunarr's group title.** Copy, simulcast (a redirect placed with `placeEvent` replace) and shared commercials save each channel separately with its own version or settings merge; failures are reported per channel.
   - **The AI review** (`/ai/review`) gets a bounded text summary of the week and the check's findings, answers through a forced `review_schedule` tool, and only suggests (see D39).
 - **Consequence:** the check doesn't know ratings a media server doesn't send; Tunarr's group title defaults to "tunarr", so by default every channel is one network.
+
+## D53. Watching works like a cable box, with a period cable guide inside the picture
+
+- **Status:** Explicit: the owner asked for a sturdier channel view, a remote beside the picture and "a guide like in cable companies from the early 2000s" (2026-10-19). Evidenced: `app/components/WatchDialog.tsx`, `app/useLiveStream.ts`, `app/components/TvRemote.tsx`, `app/components/CableGuide.tsx`, `lib/tvRemote.ts`, `tests/tvRemote.test.ts`, the watching tests.
+- **Decision:**
+  - **No new routes.** The player and the cable guide use the existing stream routes and `/guide` (D49); the guide loads three hours at a time, so two ninety-minute pages share a request.
+  - **The stream keeps itself going** (five retries with a growing wait, tuning and stall timeouts, a retry on `online`) instead of showing an error at the first failure, because Tunarr starts a stream only when asked and the first tries often fail.
+  - **CH+ goes up the dial** (to a higher number) in the player, as on a cable box, unlike the desk, where PgUp moves up the channel list.
+  - **The cable guide's blue is on the TV, not the desk.** Only what's inside the picture takes the cable-box look; the dialog and the remote keep the platinum chrome (invariant 9). Sizes stay in `rem`.
+  - **The guide only looks ahead**, about half a day, as the boxes did; the full guide grid (View → Guide Grid) still covers any time.
+- **Consequence:** the native video controls are gone; the remote and keys replace them. A program that hasn't started tunes to its channel (there are no reminders).

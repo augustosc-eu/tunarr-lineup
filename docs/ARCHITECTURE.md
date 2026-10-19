@@ -56,7 +56,10 @@ server implements those paths.
 | `app/components/AlignDialog.tsx` | Align programs to the clock (`alignToClock`) with a preview. |
 | `app/components/MarathonDialog.tsx` | A run of programs with breaks between (`buildMarathon`), placed with `placeEvent`. |
 | `app/components/NetworkDialog.tsx` | Copy the selection to a channel, simulcast it on the network (redirects placed with `placeEvent`), or share commercial settings; each target saved with its own version or settings merge. |
-| `app/components/WatchDialog.tsx` | The live player: native HLS or `hls.js` (dynamic import) on `streamUrl(channelId)`. |
+| `app/components/WatchDialog.tsx` | The live player, run like a cable box: CH±, number entry, LAST, the INFO banner (now/next from the guide), volume, mute and full screen. Owns the cable guide's focus and loads the guide in three-hour chunks with the same loader as the guide grid. |
+| `app/useLiveStream.ts` | Plays `streamUrl(channelId)` (native HLS or `hls.js`, dynamic import) and keeps it playing: retries with a growing wait (`retryDelay`), a 45 s tuning timeout, a 20 s stall watchdog, a retry when the browser comes back online, and muted autoplay when sound is blocked. |
+| `app/components/TvRemote.tsx` | The on-screen remote beside the picture; every button sends the same `RemoteAction` as its key. |
+| `app/components/CableGuide.tsx` | The early-2000s on-screen guide inside the picture: details and the picture window on top, five channels × ninety minutes below, forward only. |
 | `app/components/SnapshotsDialog.tsx` | Snapshot list, restore, take now, delete; lineup export/import files (`readExport`). |
 | `app/components/PlanDialog.tsx` / `ScheduledDialog.tsx` | Save Later and seasonal overlays; the list of scheduled changes with cancel. |
 | `app/layout.tsx` | Hosted-only root layout: Geist fonts (`next/font/google`), metadata, OpenGraph. Not used by the companion build. |
@@ -74,6 +77,7 @@ server implements those paths.
 | `lib/lineupCheck.ts` | `checkLineup` (issues with severity, first air time and lineup position), `redirectLoop`, `DEFAULT_CHECK_SETTINGS`, `issueLines`. |
 | `lib/weekLog.ts` | `dateRange`, `weekStart`, `projectDays`, `dayBlocks`, `logRows` (multi-day CSV), `weekSummary` (bounded text for the AI review). |
 | `lib/guideGrid.ts` | `windowStart`, `cellsFor`, `entryAt`, `stepFocus`, `byNetwork`. |
+| `lib/tvRemote.ts` | Watching like a cable box: `remoteAction` (keys to remote buttons), `stepChannel`, number entry (`addDigit`, `channelByNumber`, `mightContinue`), `retryDelay`, `nowAndNext`, `progress`, `visibleRows` and the cable guide's span and paging constants. |
 | `lib/programInfo.ts` | `getProgram`, `programTitle`, `programDetail`, `programArtwork`, `channelLogoUrl`. |
 | `lib/tunarrClient.ts` | Browser client for `/api/tunarr/*`: `checkHealth`, `tunarrApi`, `TunarrApiError`, `ConnectionState`. |
 | `lib/demoData.ts` | Demo channels and lineup (`demoChannels`, `demoProgramming()`, `demoDate`). |
@@ -655,7 +659,7 @@ bundle (`envPrefix`); none are used.
     - slot helpers
     - draft encoding and decoding, the IndexedDB store via `fake-indexeddb`, the memory fallback, `rebaseHistory` and version fingerprints
   - `page.test.tsx` (jsdom): `Home` against a stateful `fakeCompanion()`. The fake enforces `If-Match` like the companion. Covers live loading, saves, 412 conflicts, remote slide and cancel, block moves, the Move dialog, menus, the on-air marker, export, drafts kept across channel switches and reloads, undo past a save, stale drafts dropped, the slot editor (catalog sources, adding slots with commercials and mid-roll, creating a time-slot schedule for a manual channel, preview then save with the seed, discard), library inserts, commercial breaks, remove/length/undo, drafts with inserted items, filler-list creation, and channel filler settings, demo guards, and no silent demo fallback.
-  - `watch.test.ts` (guide, sessions, stream rewriting and refusals, redirect graph), `scheduler.test.ts` (plans, patches, overlays, skips, cancel), `companionStores.test.ts` (snapshots, shared drafts, media playback ranges, AI review), `deskTools.test.ts` (lineup check, alignment, marathons, air-once patches, week log, guide grid, browser draft sync, lineup files). Tests that build a full config use a temporary `LINEUP_DATA_DIR` (`tests/tempData.ts`).
+  - `watch.test.ts` (guide, sessions, stream rewriting and refusals, redirect graph), `scheduler.test.ts` (plans, patches, overlays, skips, cancel), `companionStores.test.ts` (snapshots, shared drafts, media playback ranges, AI review), `tvRemote.test.ts` (remote keys, CH±, number entry, retry waits, now/next), `deskTools.test.ts` (lineup check, alignment, marathons, air-once patches, week log, guide grid, browser draft sync, lineup files). Tests that build a full config use a temporary `LINEUP_DATA_DIR` (`tests/tempData.ts`).
 - **`e2e/` (Playwright):**
   - `responsive.spec.ts` checks a 390×844 touch phone (Menu sheet, Program Info sheet edit and save, channel strip) and that 768×1024, 1280×800 and 2560×1080 fit without horizontal overflow.
   - `desk.spec.ts` runs at 1920×1080 against the built companion and `fake-tunarr.mjs`. The fake mimics Tunarr's guide window and provides `/__test/reset`, `/__test/state` and `/__test/edit-elsewhere` hooks.

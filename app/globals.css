@@ -681,12 +681,107 @@ input[type=checkbox] { width:1.25rem; height:1.25rem; margin:0; accent-color:var
 .toolbar-buttons { display:flex; flex-wrap:wrap; gap:0.375rem; }
 .plan-modal { width:min(44rem,100%); }
 .plan-modal:before { content:'Schedule a Change'; }
-.watch-modal { width:min(80rem,100%); }
+/* Watching like a cable box (2026-10-19): the picture, a remote beside it, and the
+   on-screen guide of an early-2000s set-top box inside the picture. The chrome around
+   them stays platinum; only what's "on the TV" takes the cable box's blue. */
+.watch-modal { width:min(100rem,100%); max-height:calc(var(--vh) - var(--bar) - 1.5rem); }
 .watch-modal:before { content:'Watch Live'; }
-.watch-frame { position:relative; width:min(100%, calc((var(--vh) - var(--bar) - 12rem) * 16 / 9)); margin:0.5rem auto 0; background:#000; border:1px solid #111; aspect-ratio:16 / 9; }
-.watch-frame video { width:100%; height:100%; display:block; background:#000; }
-.watch-status { position:absolute; left:0.75rem; right:0.75rem; bottom:3.5rem; margin:0; padding:0.375rem 0.5rem; color:#fff; background:rgba(0,0,0,.65); font-size:0.875rem; }
-.watch-status.warning { color:#111; background:var(--yellow); }
+.watch-modal:focus { outline:1px solid #fff; }
+.watch-signal { padding:0.125rem 0.5rem; background:#fff; border:1px solid #777; box-shadow:inset 1px 1px #bbb; font-size:0.8125rem; font-weight:700; }
+.watch-signal.playing:before { content:'● '; color:#c0261c; }
+.watch-signal.retrying,.watch-signal.error { background:var(--yellow); }
+.watch-body { margin-top:0.5rem; display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:start; gap:0.75rem; }
+.tv-screen { position:relative; width:min(100%, calc((var(--vh) - var(--bar) - 11rem) * 16 / 9)); margin:0 auto; overflow:hidden; background:#000; border:1px solid #111; outline:1px solid #fff; aspect-ratio:16 / 9; font-family:Verdana,Tahoma,"Helvetica Neue",Arial,sans-serif; }
+.tv-screen:fullscreen { width:100vw; height:100vh; border:0; outline:0; }
+.tv-screen video { position:absolute; inset:0; width:100%; height:100%; display:block; background:#000; }
+.tv-static { position:absolute; inset:0; opacity:.22; background:repeating-linear-gradient(0deg,#fff 0,#fff 1px,#000 1px,#000 3px),repeating-linear-gradient(90deg,rgba(255,255,255,.4) 0,rgba(0,0,0,.4) 2px,rgba(255,255,255,.2) 5px); background-size:100% 6px,9px 100%; animation:tv-static .25s steps(4) infinite; pointer-events:none; }
+@keyframes tv-static { to { background-position:0 6px,9px 0; } }
+@media (prefers-reduced-motion:reduce) { .tv-static { animation:none; } }
+.tv-message { position:absolute; left:1rem; right:1rem; bottom:1rem; margin:0; padding:0.5rem 0.75rem; display:flex; flex-wrap:wrap; align-items:center; gap:0.25rem 0.5rem; color:#fff; background:rgba(0,0,0,.72); border:1px solid #555; font-size:0.9375rem; line-height:1.4; }
+.tv-message.warning { display:grid; color:#111; background:var(--yellow); }
+.tv-message button { min-height:1.75rem; font-family:inherit; font-size:0.875rem; }
+.tv-play { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); min-height:3rem; padding:0 1.5rem; font-size:1.25rem; font-weight:700; }
+.tv-chip { position:absolute; top:0.75rem; left:0.75rem; margin:0; padding:0.25rem 0.5rem; color:#fff; background:rgba(0,0,0,.65); font-size:0.875rem; }
+.tv-digits,.tv-osd { position:absolute; z-index:4; top:0.75rem; right:1rem; margin:0; color:#7dff6b; font-family:"Courier New",Monaco,monospace; font-size:2.25rem; font-weight:700; letter-spacing:.06em; text-shadow:0.125rem 0.125rem 0 #000,0 0 0.5rem rgba(0,0,0,.8); pointer-events:none; }
+.tv-osd { top:auto; bottom:6.5rem; right:auto; left:1rem; font-size:1.375rem; letter-spacing:0; }
+.tv-banner { position:absolute; left:3%; right:3%; bottom:5%; padding:0.5rem 0.75rem; display:grid; grid-template-columns:auto auto minmax(0,1fr) auto; align-items:center; gap:0.75rem; color:#fff; background:linear-gradient(#22409e,#0b1f6b); border:2px solid #9fb4ff; border-radius:0.375rem; box-shadow:0 0.25rem 0.75rem rgba(0,0,0,.6); text-shadow:1px 1px #000; }
+.tv-banner small { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#c9d6ff; font-size:0.8125rem; }
+.tv-banner-logo .channel-logo { width:3.5rem; height:2.5rem; font-size:1rem; text-shadow:none; }
+.tv-banner-channel { max-width:16rem; min-width:0; font-size:1.0625rem; font-weight:700; }
+.tv-banner-channel b { margin-right:0.25rem; color:#ffe35a; font-size:1.5rem; }
+.tv-banner-now { min-width:0; display:grid; gap:0.125rem; border-left:1px solid #6f86d6; padding-left:0.75rem; }
+.tv-banner-now b { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:1.0625rem; }
+.tv-banner-clock { align-self:start; color:#ffe35a; font-size:1rem; font-weight:700; }
+.cable-progress { display:block; height:0.375rem; margin:0.125rem 0; background:#051247; border:1px solid #6f86d6; }
+.cable-progress i { display:block; height:100%; background:#ffe35a; }
+
+/* The cable guide. */
+.cable-guide { position:absolute; z-index:1; inset:0; padding:2% 2.5% 1.5%; display:flex; flex-direction:column; gap:0.375rem; color:#fff; background:linear-gradient(#08175a,#0d2a8c 45%,#08175a); text-shadow:1px 1px #000; }
+.tv-screen.guide-on video { z-index:2; inset:3% 2.5% auto auto; width:36%; height:auto; aspect-ratio:16 / 9; border:2px solid #9fb4ff; box-shadow:0 0 0 1px #000; }
+.cable-top { flex:none; display:grid; grid-template-columns:minmax(0,1fr) 37%; gap:3%; min-height:0; }
+.cable-pip-slot { aspect-ratio:16 / 9; }
+.cable-info { min-width:0; padding:0.375rem 0.625rem; overflow:hidden; background:rgba(5,18,71,.75); border:1px solid #6f86d6; border-radius:0.25rem; font-size:0.875rem; line-height:1.35; }
+.cable-info h3 { margin:0.125rem 0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#ffe35a; font-size:1.25rem; }
+.cable-info p { margin:0.125rem 0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.cable-info-channel { font-weight:700; }
+.cable-info-channel span { color:#c9d6ff; font-weight:400; }
+.cable-airing { color:#c9d6ff; }
+.cable-airing .cable-progress { display:inline-block; width:5rem; vertical-align:middle; }
+.cable-error { padding:0.25rem 0.5rem; color:#111; background:var(--yellow); font-size:0.875rem; text-shadow:none; }
+.cable-error button { min-height:1.5rem; margin-left:0.5rem; font-size:0.8125rem; }
+.cable-grid { flex:1; min-height:0; display:grid; grid-template-rows:auto; grid-auto-rows:minmax(0,3rem); align-content:start; gap:2px; }
+.cable-grid .cable-head { max-height:2rem; }
+.cable-row { position:relative; display:grid; grid-template-columns:minmax(6rem,22%) repeat(3,minmax(0,1fr)); gap:2px; min-height:0; }
+.cable-head { grid-template-columns:minmax(6rem,22%) repeat(3,minmax(0,1fr)); }
+.cable-head span { padding:0.125rem 0.5rem; background:#3a5bd0; border-top:1px solid #9fb4ff; font-size:0.875rem; font-weight:700; white-space:nowrap; overflow:hidden; }
+.cable-head .cable-channel { color:#ffe35a; background:#0e2a8a; }
+.cable-more { position:absolute; top:0; bottom:0; padding:0 0.25rem!important; display:grid; place-items:center; color:#ffe35a; background:transparent!important; border:0!important; }
+.cable-more.left { left:calc(22% + 0.125rem); }
+.cable-more.right { right:0; }
+.cable-channel { min-width:0; padding:0 0.5rem; display:flex; align-items:center; gap:0.375rem; overflow:hidden; white-space:nowrap; text-transform:uppercase; background:#1d3aa8; border-left:0.25rem solid transparent; font-size:0.9375rem; font-weight:700; }
+.cable-channel b { color:#ffe35a; }
+.cable-channel span { min-width:0; overflow:hidden; text-overflow:ellipsis; }
+.cable-head .cable-channel { text-transform:none; }
+.cable-row.tuned .cable-channel { color:#7fe9ff; }
+.cable-row.focus-row .cable-channel { border-left-color:#ffe35a; }
+.cable-track { position:relative; grid-column:2 / -1; min-width:0; overflow:hidden; background:#0b1f6b; }
+.cable-cell { position:absolute; top:0; bottom:0; min-height:0; padding:0 0.5rem; display:flex; align-items:center; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; text-align:left; color:#fff; background:linear-gradient(#3352c4,#2442ad); border:0; border-right:2px solid #0b1f6b; border-radius:0; box-shadow:inset 0 1px #6f86d6; font-family:inherit; font-size:0.9375rem; font-weight:700; text-shadow:1px 1px #000; }
+.cable-cell.empty { position:absolute; inset:0; width:auto; color:#c9d6ff; font-weight:400; }
+.cable-cell.type-flex { color:#c9d6ff; background:linear-gradient(#2a3f8a,#1f3278); font-weight:400; }
+.cable-cell:hover:not(:disabled) { background:linear-gradient(#4566d8,#3352c4); }
+.cable-cell.focused,.cable-cell.focused:hover:not(:disabled) { z-index:1; color:#000; background:linear-gradient(#fff27a,#ffd400); box-shadow:inset 0 0 0 2px #000; text-shadow:none; }
+.cable-cell:focus-visible { outline:0; }
+.cable-now { position:absolute; z-index:2; top:0; bottom:0; width:2px; background:#ff4b3a; pointer-events:none; }
+.cable-legend { flex:none; margin:0; display:flex; flex-wrap:wrap; justify-content:center; gap:0.25rem 1rem; color:#c9d6ff; font-size:0.8125rem; }
+.cable-legend span:before { content:''; display:inline-block; width:0.625rem; height:0.625rem; margin-right:0.25rem; background:#ffe35a; border-radius:50%; vertical-align:-0.0625rem; }
+.cable-legend span:nth-child(2):before { background:#4cd964; }
+.cable-legend span:nth-child(3):before { background:#5aa9ff; }
+.cable-legend span:nth-child(4):before { background:#ff4b3a; }
+.cable-legend span:nth-child(5):before { background:#fff; }
+
+/* The remote: platinum plastic, like the desk around it. */
+.tv-remote { width:10.5rem; max-height:calc(var(--vh) - var(--bar) - 11rem); overflow:auto; padding:0.75rem 0.625rem 0.5rem; display:grid; gap:0.5rem; justify-items:center; background:linear-gradient(90deg,#c4c4c4,#ececec 18%,#f6f6f6 50%,#e2e2e2 82%,#b9b9b9); border:1px solid #111; border-radius:2.5rem 2.5rem 1.5rem 1.5rem; box-shadow:inset 1px 1px #fff,inset -1px -1px #888,0.1875rem 0.1875rem 0 rgba(0,0,0,.3); }
+.remote-key { min-width:2.5rem; min-height:2.125rem; padding:0 0.25rem; border-radius:0.625rem; font-size:1rem; font-weight:700; }
+.remote-key.small { font-size:0.75rem; letter-spacing:.02em; }
+.remote-key[aria-pressed="true"] { color:#fff; background:var(--selection); box-shadow:inset 1px 1px #111; text-shadow:none; }
+.remote-top { width:100%; display:flex; align-items:center; justify-content:space-between; gap:0.25rem; }
+.remote-key.power { min-width:2.25rem; border-radius:50%; color:#fff; background:linear-gradient(#ff8a80,#d32f2f 55%,#a31d1d); text-shadow:none; }
+.remote-led { width:0.4375rem; height:0.4375rem; border-radius:50%; background:#c0261c; box-shadow:0 0 0.25rem #ff4b3a; }
+.remote-pad { display:grid; grid-template-columns:repeat(3,2.75rem); gap:0.3125rem; }
+.remote-pad .remote-key { min-width:0; }
+.remote-row { display:flex; gap:0.375rem; }
+.remote-key.pill { min-width:4rem; border-radius:1rem; }
+.remote-key.guide-key { color:#111; background:linear-gradient(#fff6c8,#ffe680 48%,#f0cf4c 52%,#fbe490); }
+.remote-key.guide-key[aria-pressed="true"] { color:#111; background:#f0cf4c; }
+.remote-dpad { display:grid; grid-template-columns:repeat(3,2.5rem); grid-template-rows:repeat(3,2.25rem); gap:0.1875rem; padding:0.3125rem; background:radial-gradient(circle,#d0d0d0 0,#a9a9a9 70%); border:1px solid #666; border-radius:50%; box-shadow:inset 1px 1px #fff; }
+.remote-dpad .remote-key { min-width:0; padding:0; border-radius:0.5rem; font-size:0.875rem; }
+.remote-dpad .up { grid-area:1 / 2; }.remote-dpad .left { grid-area:2 / 1; }.remote-dpad .ok { grid-area:2 / 2; border-radius:50%; color:#fff; background:linear-gradient(#5863b8,#323c8d); text-shadow:none; }.remote-dpad .right { grid-area:2 / 3; }.remote-dpad .down { grid-area:3 / 2; }
+.remote-rockers { display:grid; grid-template-columns:2.5rem auto 2.5rem; align-items:center; gap:0.375rem; }
+.rocker { display:grid; justify-items:center; gap:0.125rem; padding:0.1875rem; background:#bdbdbd; border:1px solid #777; border-radius:1.25rem; }
+.rocker .remote-key { min-width:2rem; min-height:1.875rem; border-radius:1rem; }
+.rocker small { font-size:0.6875rem; font-weight:700; color:#333; }
+.remote-key.back-key { min-width:0; padding:0 0.375rem; }
+.remote-brand { color:#666; font-size:0.6875rem; font-weight:700; letter-spacing:.3em; text-shadow:1px 1px #fff; }
 
 /* Responsive layout. Desktop and TV get three columns. Up to 1180px, Program Info
    becomes a sheet over the lineup: collapsed it shows the program and its everyday
@@ -728,6 +823,15 @@ input[type=checkbox] { width:1.25rem; height:1.25rem; margin:0; accent-color:var
 }
 
 @media (max-width:760px) {
+  .watch-body { grid-template-columns:1fr; }
+  .tv-screen { width:100%; }
+  .tv-screen.guide-on { aspect-ratio:3 / 4; }
+  .tv-screen.guide-on video { width:45%; }
+  .cable-top { grid-template-columns:minmax(0,1fr) 46%; }
+  .tv-banner { grid-template-columns:auto minmax(0,1fr); }.tv-banner-logo,.tv-banner-clock { display:none; }
+  .tv-remote { width:100%; max-height:none; display:flex; flex-wrap:wrap; justify-content:center; align-items:center; gap:0.75rem 1rem; border-radius:1rem; }
+  .remote-top { width:auto; }
+  .remote-brand { display:none; }
   .guide-row { grid-template-columns:7.5rem minmax(0,1fr); }
   .guide-channel .channel-logo { display:none; }
   .guide-track { min-width:28rem; }
