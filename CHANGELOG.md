@@ -8,6 +8,17 @@ were renamed 2026.10.1 and 2026.10.2.
 
 ## [Unreleased]
 
+## [2026.10.8] - 2026-10-19
+
+### Added
+
+- **Server Settings** (Setup → Server Settings…): change the Lineup server's settings that aren't about security without editing `.env` or restarting: Tunarr timeouts, loading logos from public sites, scheduled changes on or off, the AI model and timeout, and the largest upload. Each shows where its value comes from (.env, saved here, or the default); saved values apply at once, are kept in the data folder (`settings.json`) and win over `.env` until **Use .env value**. The Tunarr address, keys, password, allowed hosts and folders stay in `.env`, and the dialog only says whether each is set.
+- **Individual station IDs** (Channel Settings → Commercials): pick single station IDs for a channel, in addition to the IDs named for it and its ticked lists. Insert → Station ID and the break tools use them. An ID picked for a channel is only that channel's, even if its name says otherwise; two channels can share one. Picks are kept by Lineup (`station-ids.json`), so Tunarr doesn't air them in flex time; tick a list for that.
+
+### Fixed
+
+- **Keys always reach what's on screen**: a key pressed the moment a dialog or preview appeared could go to what was there before (Escape closed the slot editor instead of discarding its preview).
+
 ## [2026.10.7] - 2026-10-19
 
 ### Fixed
@@ -154,7 +165,8 @@ First public release.
   reaches Tunarr through a narrow allowlisted proxy. Optional HTTP Basic
   sign-in and host-name checks against DNS rebinding.
 
-[Unreleased]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.7...HEAD
+[Unreleased]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.8...HEAD
+[2026.10.8]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.7...v2026.10.8
 [2026.10.7]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.6...v2026.10.7
 [2026.10.6]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.5...v2026.10.6
 [2026.10.5]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.4...v2026.10.5
