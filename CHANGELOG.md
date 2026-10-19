@@ -8,6 +8,12 @@ were renamed 2026.10.1 and 2026.10.2.
 
 ## [Unreleased]
 
+## [2026.10.6] - 2026-10-19
+
+### Fixed
+
+- **The desk fits the screen**: on desktop and TV the Programming window now ends above the bottom of the screen, with its bottom edge, shadow and resize box visible, and the channels, lineup and selected program each scroll inside it instead of running off the bottom. Phones still scroll the page.
+
 ## [2026.10.5] - 2026-10-19
 
 ### Watching like a cable box
@@ -142,7 +148,8 @@ First public release.
   reaches Tunarr through a narrow allowlisted proxy. Optional HTTP Basic
   sign-in and host-name checks against DNS rebinding.
 
-[Unreleased]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.5...HEAD
+[Unreleased]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.6...HEAD
+[2026.10.6]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.5...v2026.10.6
 [2026.10.5]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.4...v2026.10.5
 [2026.10.4]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.3...v2026.10.4
 [2026.10.3]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.2...v2026.10.3
