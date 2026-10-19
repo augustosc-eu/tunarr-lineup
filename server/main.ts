@@ -4,9 +4,11 @@ import { fileURLToPath } from 'node:url';
 import { createLineupServer } from './app.js';
 import { createAuthConfig } from './auth.js';
 import { createHostPolicy } from './hosts.js';
-import { createProxyConfig } from './tunarrProxy.js';
+import { createProxyConfig, loadSavedSettings } from './tunarrProxy.js';
 
 const config = createProxyConfig(process.env);
+// Settings changed from the desk win over the environment; a broken settings.json is reported, not overwritten.
+await loadSavedSettings(config).catch((error) => console.error('[settings]', error instanceof Error ? error.message : error));
 const auth = createAuthConfig(process.env);
 const hosts = createHostPolicy(process.env);
 const port = Number(process.env.PORT) || 3000;

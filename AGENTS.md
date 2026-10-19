@@ -124,7 +124,10 @@ Chromium with `npx playwright install chromium`. CI runs all of them
    `server/fillerRoleStore.ts`, owner decision 2026-10-07), and since the owner decision
    of 2026-10-19 snapshots (`snapshots/<channel>.json`, `server/snapshotStore.ts`),
    shared drafts (`drafts/`, `server/sharedDraftStore.ts`) and scheduled changes
-   (`scheduled.json`, `server/scheduler.ts`). When `LINEUP_MEDIA_DIR` is set, it also
+   (`scheduled.json`, `server/scheduler.ts`); since the owner decision of 2026-10-19
+   (D54, D55) also picked station IDs (`station-ids.json`, `server/stationIdStore.ts`) and
+   the server settings changed from the desk (`settings.json`, `server/settings.ts`; only
+   the allowlist in `EDITABLE_SETTINGS`, never addresses, keys, the password, hosts or paths). When `LINEUP_MEDIA_DIR` is set, it also
    holds the filler videos users upload there.
    - **The scheduler** (`LINEUP_SCHEDULER=on`, off by default) is the only thing that
      writes to Tunarr without someone at the desk. It uses the same conditional save
@@ -163,7 +166,7 @@ Chromium with `npx playwright install chromium`. CI runs all of them
 - **Put HTTP and validation logic in `server/`:** `tunarrProxy.ts` (framework-free),
   `content.ts`, `admin.ts`, `logos.ts`, `smartCollection.ts`, `templateSchema.ts`,
   `templateStore.ts`, `fillerRoles.ts`, `fillerRoleStore.ts`, `mediaFolder.ts`, `jsonFile.ts`, `lineupRoutes.ts`, `ai.ts`, `upstream.ts`,
-  `watch.ts`, `snapshotStore.ts`, `sharedDraftStore.ts`, `scheduler.ts`, `channelLock.ts`, `lineupItems.ts`,
+  `watch.ts`, `settings.ts`, `stationIdStore.ts`, `snapshotStore.ts`, `sharedDraftStore.ts`, `scheduler.ts`, `channelLock.ts`, `lineupItems.ts`,
   `slotSchedule.ts`, `recreateChannel.ts`, `lineupVersion.ts`, `auth.ts`, `hosts.ts` and `app.ts`. `lib/` and
   `app/` may import pure modules from `server/` (`lineupVersion`, `slotSchedule`,
   `smartCollection`, `templateSchema`, `fillerRoles`; types from any module) but never Node
@@ -172,7 +175,7 @@ Chromium with `npx playwright install chromium`. CI runs all of them
 - **Keep `app/page.tsx` for UI state and rendering,** and `app/components/` for larger
   UI pieces: `MenuBar`, `MoveDialog`, `ScheduleEditor`, `InsertDialog`,
   `LibraryBrowser`, `ListsManager`, `ChannelSettingsDialog`, `NewChannelDialog`,
-  `SmartCollectionsManager`, `MediaSourcesDialog`, `FillerFoldersDialog`, `TranscodeProfilesDialog`,
+  `SmartCollectionsManager`, `MediaSourcesDialog`, `FillerFoldersDialog`, `TranscodeProfilesDialog`, `ServerSettingsDialog`,
   `TemplatesDialog` (gallery, AI panel), `TemplateEditor`, `EventDialog`, `DayStrip`,
   `GuideGrid`, `WeekView`, `LineupCheckDialog`, `AlignDialog`, `MarathonDialog`,
   `NetworkDialog` (copy, simulcast, shared commercials), `WatchDialog` (with `TvRemote` and `CableGuide`), `SnapshotsDialog`,

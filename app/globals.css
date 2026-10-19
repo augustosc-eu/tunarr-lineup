@@ -485,6 +485,20 @@ input[type=checkbox] { width:1.25rem; height:1.25rem; margin:0; accent-color:var
 .list-toolbar { margin:0.5rem 0; display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:0.5rem; }
 .channel-settings-modal { width:min(60rem,100%); }
 .channel-settings-modal:before { content:'Channel Settings'; }
+.server-settings-modal { width:min(52rem,100%); }
+.server-settings-modal:before { content:'Server Settings'; }
+.server-settings { display:grid; gap:0.5rem; }
+.server-setting { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:end; gap:0.125rem 0.75rem; padding:0.375rem 0.5rem; background:#fff; border:1px solid #777; box-shadow:inset 1px 1px #bbb; }
+.server-setting .field { margin-top:0; }
+.server-setting > p { grid-column:1; margin:0; }
+.server-setting > button { grid-column:2; grid-row:1 / span 2; align-self:center; }
+.server-setting-control { grid-column:1; display:flex; align-items:center; gap:0.375rem; font-weight:700; }
+.server-setting-control.field { display:grid; max-width:24rem; }
+.setting-source { padding:0 0.25rem; border:1px solid #777; background:#eee; white-space:nowrap; }
+.setting-source.source-saved { background:#e7effa; border-color:#3d6fb4; }
+.fixed-settings { margin:0.25rem 0 0; padding:0; list-style:none; display:grid; grid-template-columns:repeat(auto-fit,minmax(16rem,1fr)); gap:0.25rem 1rem; }
+.fixed-settings li { display:flex; justify-content:space-between; gap:0.5rem; padding:0.25rem 0; border-bottom:1px solid #ccc; font-size:0.875rem; }
+.station-id-picks small { color:#555; }
 .settings-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(16rem,1fr)); gap:0.5rem 0.75rem; }
 .filler-row { grid-template-columns:minmax(10rem,1fr) auto auto auto; }
 .filler-row label { display:flex; align-items:center; gap:0.25rem; font-size:0.875rem; }

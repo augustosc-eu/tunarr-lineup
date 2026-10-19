@@ -163,6 +163,8 @@ accident.
 | `POST /api/tunarr/smart-collections/create`, `POST …/preview`, `GET`/`PUT`/`DELETE …/:id` | Tunarr's smart-collection API and `POST /api/programs/search` for previews (rules are turned into Tunarr's filter by the companion) |
 | `GET`/`POST /api/tunarr/templates`, `PUT`/`DELETE …/:id` | Lineup's own saved templates (`LINEUP_DATA_DIR/templates.json`); not Tunarr |
 | `GET /api/tunarr/filler-roles`, `PUT`/`DELETE …/:id` | Lineup's own filler-list roles (`LINEUP_DATA_DIR/filler-roles.json`); not Tunarr |
+| `GET /api/tunarr/station-ids`, `PUT …/:channelId` | Station IDs picked one by one for each channel (`LINEUP_DATA_DIR/station-ids.json`); not Tunarr |
+| `GET`/`PUT /api/tunarr/server-settings` | Server settings the desk may change (`LINEUP_DATA_DIR/settings.json`), and whether the others are set; values of addresses, keys and paths are never returned |
 | `POST /api/tunarr/filler-lists/from-library` | Builds a filler list from everything Tunarr indexed in one library (`POST {TUNARR_URL}/api/programs/search`, then Tunarr's filler-list API) and follows that library from then on |
 | `GET /api/tunarr/filler-folders`, `POST …/sync`, `POST …/add` | Automatic pickup: which lists follow which folders; `sync` adds the upload folder to Tunarr, makes lists for folders named for a role and refreshes followed lists after a newer scan; `add` adds a folder on the Tunarr server with a role (`POST {TUNARR_URL}/api/media-sources`) |
 | `GET /api/tunarr/media-folder`, `PUT`/`DELETE …/:role/:file`, `POST …/:role/:file/move` | Lineup's media folder (`LINEUP_MEDIA_DIR`): list, upload (raw video bytes, streamed to disk), delete and move files between role folders |
@@ -290,7 +292,7 @@ Server environment variables:
 | `TUNARR_TIMEOUT_MS` | `10000` | Upstream timeout for reads |
 | `TUNARR_SAVE_TIMEOUT_MS` | `30000` | Upstream timeout for saves |
 | `LINEUP_EXTERNAL_LOGOS` | `true` | Set to `false` to stop the companion fetching channel logos hosted on public sites |
-| `LINEUP_DATA_DIR` | `./data` (`/data` in Docker) | Where Lineup keeps its own data: saved templates, filler-list roles, snapshots, shared drafts and scheduled changes |
+| `LINEUP_DATA_DIR` | `./data` (`/data` in Docker) | Where Lineup keeps its own data: saved templates, filler-list roles, picked station IDs, server settings, snapshots, shared drafts and scheduled changes |
 | `LINEUP_SCHEDULER` | `off` | `on` lets the Lineup server save scheduled changes (dated saves, seasonal overlays, events that air once) when they're due |
 | `LINEUP_MEDIA_DIR` | (none: uploads off) | The media folder for filler videos, as Lineup sees it. Must also be mounted into Tunarr |
 | `LINEUP_MEDIA_TUNARR_DIR` | same as `LINEUP_MEDIA_DIR` | The same folder as Tunarr sees it, e.g. `/media/lineup` |
@@ -304,6 +306,15 @@ Server environment variables:
 | `LINEUP_USERNAME` | `lineup` | Sign-in user name |
 | `LINEUP_ALLOWED_HOSTS` | (none) | Extra host names Lineup answers to without sign-in, e.g. `nas.local,.home.example` (`*` for any); IP addresses and `localhost` always work |
 | `STATIC_DIR` | `dist-local` | Directory holding the built interface |
+
+**Setup → Server Settings…** changes the settings that have nothing to do with
+security while the server runs: `TUNARR_TIMEOUT_MS`, `TUNARR_SAVE_TIMEOUT_MS`,
+`LINEUP_EXTERNAL_LOGOS`, `LINEUP_SCHEDULER`, `LINEUP_AI_MODEL`,
+`LINEUP_AI_TIMEOUT_MS` and `LINEUP_MEDIA_MAX_MB`. Values saved there are kept in
+`LINEUP_DATA_DIR/settings.json` and win over the environment until you press
+**Use .env value**. Everything else (the Tunarr address, keys, the password,
+allowed hosts, folders, the listen address) stays in the environment; the
+dialog only says whether each is set.
 
 ## Filler folders
 

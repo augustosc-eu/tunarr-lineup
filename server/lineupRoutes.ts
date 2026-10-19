@@ -1,5 +1,5 @@
 // Lineup's own routes (not Tunarr's): saved programming templates, filler-list
-// roles, the media folder (LINEUP_MEDIA_DIR) and the AI programming assistant. They share the proxy's pipeline (method allowlist,
+// roles, picked station IDs, server settings, the media folder (LINEUP_MEDIA_DIR) and the AI programming assistant. They share the proxy's pipeline (method allowlist,
 // Origin check, JSON bodies, optional sign-in) but answer from the companion.
 import { aiFailure, buildUserMessage, callModel, gatherContext, MAX_PROMPT_CHARS, MAX_REVIEW_ISSUES, MAX_REVIEW_SUMMARY_CHARS, resolveProposal, resolveReview, REVIEW_PROMPT, REVIEW_SCHEMA, SYSTEM_PROMPT, type AiConfig } from './ai.js';
 import { isChangeId, summarize, validatePlan } from './scheduler.js';
@@ -9,6 +9,8 @@ import { validateMediaSourceAdd } from './admin.js';
 import { FILLER_ROLES, folderRole, isFillerRole, ROLE_LABELS, type FillerRole } from './fillerRoles.js';
 import type { FillerRoleStore } from './fillerRoleStore.js';
 import { mediaFileName, ROLE_FOLDERS, type MediaFolder } from './mediaFolder.js';
+import { applySettings, settingsView } from './settings.js';
+import { validatePicks } from './stationIdStore.js';
 import { validateTemplate } from './templateSchema.js';
 import { newTemplateId, StoreError, type TemplateStore } from './templateStore.js';
 import type { ProxyConfig, ProxyResponse, TunarrTarget } from './tunarrProxy.js';
@@ -33,7 +35,10 @@ export type LineupRoute =
   | { name: 'drafts'; methods: string[] }
   | { name: 'draft'; methods: string[]; channelId: string }
   | { name: 'scheduled'; methods: string[] }
-  | { name: 'scheduled-change'; methods: string[]; id: string };
+  | { name: 'scheduled-change'; methods: string[]; id: string }
+  | { name: 'station-ids'; methods: string[] }
+  | { name: 'station-id-picks'; methods: string[]; channelId: string }
+  | { name: 'settings'; methods: string[] };
 
 const TEMPLATE_ID = /^[a-z0-9][a-z0-9-]{0,47}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -66,6 +71,10 @@ export function matchLineupRoute(path: string): LineupRoute | { invalid: string 
   if (path === '/ai/template') return { name: 'ai-template', methods: ['POST'] };
   if (path === '/ai/review') return { name: 'ai-review', methods: ['POST'] };
   if (path === '/drafts') return { name: 'drafts', methods: ['GET'] };
+  if (path === '/server-settings') return { name: 'settings', methods: ['GET', 'PUT'] };
+  if (path === '/station-ids') return { name: 'station-ids', methods: ['GET'] };
+  const picks = /^\/station-ids\/([^/]+)$/.exec(path);
+  if (picks) return CHANNEL_ID.test(picks[1]) ? { name: 'station-id-picks', methods: ['PUT'], channelId: picks[1] } : { invalid: 'Channel id is not valid.' };
   if (path === '/scheduled') return { name: 'scheduled', methods: ['GET', 'POST'] };
   const scheduled = /^\/scheduled\/([^/]+)$/.exec(path);
   if (scheduled) return isChangeId(scheduled[1]) ? { name: 'scheduled-change', methods: ['DELETE'], id: scheduled[1] } : { invalid: 'Change id is not valid.' };
@@ -265,6 +274,26 @@ export async function handleLineupRoute(route: LineupRoute, { config, target, me
         if (!isFillerRole(to)) return fail(400, 'invalid_request', 'Send { "role" } with the folder to move the file to.');
         await media.move(route.role, route.file, to);
         return json(200, { moved: true, role: to });
+      }
+      case 'station-ids': {
+        if (!config.stationIds) return json(200, {});
+        return json(200, await config.stationIds.list());
+      }
+      case 'station-id-picks': {
+        if (!config.stationIds) return fail(503, 'store_off', 'Picking station IDs is not available on this server.');
+        const checked = validatePicks(body);
+        if ('error' in checked) return fail(400, 'invalid_request', checked.error);
+        return json(200, await config.stationIds.set(route.channelId, checked.programIds));
+      }
+      case 'settings': {
+        const settings = config.settings;
+        if (!settings) return fail(503, 'store_off', 'Server settings can’t be changed on this server.');
+        if (method === 'GET') return json(200, settingsView(settings.env, await settings.saved()));
+        const values = isObject(body) ? body.values : undefined;
+        if (!isObject(values) || !Object.keys(values).length) return fail(400, 'invalid_request', 'Send { "values": { "SETTING": value or null } }.');
+        const saved = await settings.update(values);
+        applySettings(config, settings.env, saved);
+        return json(200, settingsView(settings.env, saved));
       }
       case 'filler-roles': {
         if (!roles) return fail(503, 'store_off', 'Filler roles are not available on this server.');

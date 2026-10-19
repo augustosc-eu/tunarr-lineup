@@ -49,10 +49,11 @@ export function idChannel<C extends { id: string; name: string }>(title: string,
 }
 
 /**
- * The station IDs a channel airs: those named for it, plus those in its own
- * station-ID lists (ticked in Channel Settings, so in its Tunarr filler) that
- * aren't named for another channel. A channel with none gets the IDs named for
- * no channel, never another channel's.
+ * The station IDs a channel airs: those picked for it one by one (Channel
+ * Settings), those named for it, plus those in its own station-ID lists (ticked
+ * in Channel Settings, so in its Tunarr filler) that aren't named for another
+ * channel. A pick beats a name: an ID picked for other channels is theirs only.
+ * A channel with none gets the IDs that belong to no channel, never another's.
  */
 export function channelStationIds<T extends { id: string }>(
   byList: Record<string, T[]>,
@@ -60,19 +61,32 @@ export function channelStationIds<T extends { id: string }>(
   channel: { id: string; name: string } | undefined,
   channels: Array<{ id: string; name: string }>,
   titleOf: (id: T) => string,
+  picks: Record<string, string[]> = {},
 ): { ids: T[]; own: boolean } {
-  // One entry per ID, with every list that holds it.
-  const entries = new Map<string, { id: T; lists: string[]; owner?: string }>();
+  const pickedBy = new Map<string, string[]>();
+  for (const [channelId, ids] of Object.entries(picks)) for (const id of ids) pickedBy.set(id, [...(pickedBy.get(id) ?? []), channelId]);
+  // One entry per ID, with every list that holds it and the channels it belongs to.
+  const entries = new Map<string, { id: T; lists: string[]; owners: string[] }>();
   for (const [list, ids] of Object.entries(byList)) {
     for (const id of ids) {
       const entry = entries.get(id.id);
       if (entry) entry.lists.push(list);
-      else entries.set(id.id, { id, lists: [list], owner: idChannel(titleOf(id), channels)?.id });
+      else {
+        const named = idChannel(titleOf(id), channels)?.id;
+        entries.set(id.id, { id, lists: [list], owners: pickedBy.get(id.id) ?? (named ? [named] : []) });
+      }
     }
   }
   const all = [...entries.values()];
-  const own = channel ? all.filter((entry) => entry.owner === channel.id || (!entry.owner && entry.lists.some((list) => assignedListIds.includes(list)))) : [];
-  return own.length ? { ids: own.map((entry) => entry.id), own: true } : { ids: all.filter((entry) => !entry.owner).map((entry) => entry.id), own: false };
+  const own = channel ? all.filter((entry) => entry.owners.includes(channel.id) || (!entry.owners.length && entry.lists.some((list) => assignedListIds.includes(list)))) : [];
+  return own.length ? { ids: own.map((entry) => entry.id), own: true } : { ids: all.filter((entry) => !entry.owners.length).map((entry) => entry.id), own: false };
+}
+
+/** Every station ID once, in list order: the choices for picking a channel's own. */
+export function allStationIds<T extends { id: string }>(byList: Record<string, T[]>): T[] {
+  const seen = new Map<string, T>();
+  for (const ids of Object.values(byList)) for (const id of ids) if (!seen.has(id.id)) seen.set(id.id, id);
+  return [...seen.values()];
 }
 
 /** Broadcast-style spot length: ":15", ":30", "1:00", "2:30". */

@@ -11,6 +11,8 @@ import type { ChangeSummary } from '../server/scheduler';
 import type { Snapshot, SnapshotSummary } from '../server/snapshotStore';
 import type { GuideChannel } from '../server/watch';
 import type { Review } from '../server/ai';
+import type { SettingsView } from '../server/settings';
+import type { StationIdPicks } from '../server/stationIdStore';
 
 export type ScheduleDraft = { type: SlotSchedule['type']; settings?: Record<string, unknown>; slots: Slot[]; extraPrograms?: string[] };
 export type AiStatus = { enabled: true; provider: string; model: string } | { enabled: false; message: string };
@@ -20,7 +22,7 @@ export type MediaFile = { name: string; size: number; modifiedAt: number };
 export type MediaRoleFolder = { role: FillerRole; folder: string; files: MediaFile[]; tunarr: { mediaSourceId: string; libraryId: string; lastScannedAt?: number; scanning: boolean } | null };
 export type MediaFolderStatus = { enabled: true; maxBytes: number; folders: MediaRoleFolder[]; tunarrError?: string } | { enabled: false; message: string };
 export type FillerSync = { connected: boolean; created: Array<{ id: string; name: string; count: number; role: FillerRole }>; updated: Array<{ id: string; count: number }>; errors: string[] };
-export type { ChangeSummary, Review, Snapshot, SnapshotSummary };
+export type { ChangeSummary, Review, SettingsView, Snapshot, SnapshotSummary, StationIdPicks };
 export type ScheduledList = { enabled: boolean; message?: string; changes: ChangeSummary[] };
 /** One change in a plan sent to the scheduler (server/scheduler.ts validatePlan). */
 export type PlannedChange = {
@@ -229,6 +231,13 @@ export const tunarrApi = {
   moveMediaFile: (role: FillerRole, name: string, to: FillerRole) => request<unknown>(`${mediaPath(role, name)}/move`, jsonBody('POST', { role: to })),
   deleteMediaFile: (role: FillerRole, name: string) => request<unknown>(mediaPath(role, name), { method: 'DELETE' }),
   setFillerRole: (listId: string, role: FillerRole | null) => request<FillerRoles>(`/api/tunarr/filler-roles/${encodeURIComponent(listId)}`, role ? jsonBody('PUT', { role }) : { method: 'DELETE' }),
+  /** Station IDs picked one by one for each channel (server/stationIdStore.ts). */
+  stationIdPicks: () => request<StationIdPicks>('/api/tunarr/station-ids'),
+  setStationIdPicks: (channelId: string, programIds: string[]) => request<StationIdPicks>(`/api/tunarr/station-ids/${encodeURIComponent(channelId)}`, jsonBody('PUT', { programIds })),
+  /** The settings the desk may change, and whether the others are set (server/settings.ts). */
+  settings: () => request<SettingsView>('/api/tunarr/server-settings'),
+  /** `null` goes back to the .env value. */
+  saveSettings: (values: Record<string, number | boolean | string | null>) => request<SettingsView>('/api/tunarr/server-settings', jsonBody('PUT', { values })),
   savedTemplates: () => request<Template[]>('/api/tunarr/templates'),
   createTemplate: (template: Omit<Template, 'id'> & { id?: string }) => request<Template>('/api/tunarr/templates', jsonBody('POST', template)),
   updateTemplate: (id: string, template: Template) => request<Template>(`/api/tunarr/templates/${encodeURIComponent(id)}`, jsonBody('PUT', template)),

@@ -9,6 +9,8 @@ import { createTemplateStore, type TemplateStore } from './templateStore.js';
 import { createScheduler, type Scheduler } from './scheduler.js';
 import { createSharedDraftStore, type SharedDraftStore } from './sharedDraftStore.js';
 import { createSnapshotStore, type SnapshotStore } from './snapshotStore.js';
+import { applySettings, createSettingsStore, type SettingsStore } from './settings.js';
+import { createStationIdStore, type StationIdStore } from './stationIdStore.js';
 import { handleWatchRoute, matchWatchRoute } from './watch.js';
 import { handleContentRoute, matchContentRoute, NOT_SAVEABLE, type ContentRoute } from './content.js';
 import { channelLogo, type ExternalImageFetcher } from './logos.js';
@@ -61,6 +63,10 @@ export type ProxyConfig = {
   drafts?: SharedDraftStore;
   /** Changes saved on a date (LINEUP_SCHEDULER=on). */
   scheduler?: Scheduler;
+  /** Station IDs picked for each channel (LINEUP_DATA_DIR/station-ids.json). */
+  stationIds?: StationIdStore;
+  /** Settings changed from the desk (LINEUP_DATA_DIR/settings.json), over the environment. */
+  settings?: SettingsStore;
 };
 
 export type ProxyRequest = {
@@ -142,10 +148,18 @@ export function createProxyConfig(env: Record<string, string | undefined>): Prox
     ai: createAiConfig(env),
     snapshots: createSnapshotStore(dataDir),
     drafts: createSharedDraftStore(dataDir),
+    stationIds: createStationIdStore(dataDir),
+    settings: createSettingsStore(dataDir, env),
   };
   const scheduler = env.LINEUP_SCHEDULER?.trim().toLowerCase();
   config.scheduler = createScheduler(config, { enabled: scheduler === 'on' || scheduler === 'true' || scheduler === '1', dataDir, snapshots: config.snapshots });
   return config;
+}
+
+/** Applies settings saved from the desk; called once at startup, before listening. */
+export async function loadSavedSettings(config: ProxyConfig) {
+  if (!config.settings) return;
+  applySettings(config, config.settings.env, await config.settings.saved());
 }
 
 type Route =
@@ -492,6 +506,7 @@ export async function handleTunarrApi(request: ProxyRequest, config: ProxyConfig
             const result = await recreateChannel(call, route.channelId, mode, expectedVersion!);
             // The channel has a new id now; its snapshots go with it.
             await config.snapshots?.moveChannel(route.channelId, result.id).catch(() => undefined);
+            await config.stationIds?.moveChannel(route.channelId, result.id).catch(() => undefined);
             return result;
           }));
         }

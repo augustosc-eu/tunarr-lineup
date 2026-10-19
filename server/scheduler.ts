@@ -252,6 +252,8 @@ export async function applyChange(config: ProxyConfig, target: TunarrTarget, cha
 
 export type Scheduler = {
   readonly enabled: boolean;
+  /** Turns it on or off while running (Server Settings). */
+  setEnabled(on: boolean): void;
   readonly store: SchedulerStore;
   /** Runs every change that's due. Returns how many ran (tests call this directly). */
   runDue(now?: number): Promise<number>;
@@ -263,6 +265,7 @@ export function createScheduler(config: ProxyConfig, options: { enabled: boolean
   const store = createSchedulerStore(options.dataDir);
   let timer: ReturnType<typeof setInterval> | undefined;
   let running: Promise<number> | null = null;
+  let enabled = options.enabled;
 
   async function runOnce(now: number) {
     const target = config.target;
@@ -297,7 +300,13 @@ export function createScheduler(config: ProxyConfig, options: { enabled: boolean
   }
 
   const scheduler: Scheduler = {
-    enabled: options.enabled,
+    get enabled() { return enabled; },
+    setEnabled(on) {
+      if (on === enabled) return;
+      enabled = on;
+      if (on) scheduler.start();
+      else scheduler.stop();
+    },
     store,
     runDue(now = Date.now()) {
       // One run at a time; a tick that lands mid-run waits for it.
@@ -305,7 +314,7 @@ export function createScheduler(config: ProxyConfig, options: { enabled: boolean
       return running;
     },
     start() {
-      if (!options.enabled || timer) return;
+      if (!enabled || timer) return;
       timer = setInterval(() => { scheduler.runDue().catch((error) => console.error('[scheduler]', error instanceof Error ? error.message : error)); }, options.intervalMs ?? 30_000);
       timer.unref?.();
       void scheduler.runDue().catch(() => {});

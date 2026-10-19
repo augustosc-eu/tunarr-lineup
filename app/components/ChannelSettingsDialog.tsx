@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { STREAM_MODE_LABELS, type ChannelSettings, type ListSummary, type TranscodeProfile, type Watermark } from '../../lib/library';
-import { listsWithRole, roleOf, ROLE_LABELS, type FillerRoles } from '../../lib/fillerRoles';
+import { listsWithRole, roleOf, ROLE_LABELS, spotLength, type FillerRoles } from '../../lib/fillerRoles';
 import { channelLogoUrl } from '../../lib/programInfo';
 import { tunarrApi } from '../../lib/tunarrClient';
 
@@ -10,6 +10,11 @@ type Props = {
   channelId: string;
   /** Roles Lineup keeps for filler lists, shown next to each list. */
   fillerRoles?: FillerRoles;
+  /** Every station ID in a station-ID list, to pick this channel's own from; `note` says whose it is now. */
+  stationIdChoices?: Array<{ id: string; title: string; duration: number; note?: string }>;
+  /** The station IDs picked for this channel, kept by Lineup (not Tunarr). */
+  pickedStationIds?: string[];
+  onSaveStationIds?: (programIds: string[]) => Promise<void>;
   onClose: () => void;
   onSaved: (settings: ChannelSettings, startTimeChanged: boolean) => void;
 };
@@ -28,7 +33,9 @@ const toLocalInput = (ms: number) => {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 };
 
-export function ChannelSettingsDialog({ channelId, fillerRoles = {}, onClose, onSaved }: Props) {
+const NO_IDS: string[] = [];
+
+export function ChannelSettingsDialog({ channelId, fillerRoles = {}, stationIdChoices = [], pickedStationIds = NO_IDS, onSaveStationIds, onClose, onSaved }: Props) {
   const [original, setOriginal] = useState<ChannelSettings | null>(null);
   const [form, setForm] = useState<ChannelSettings | null>(null);
   const [fillerLists, setFillerLists] = useState<ListSummary[]>([]);
@@ -37,6 +44,7 @@ export function ChannelSettingsDialog({ channelId, fillerRoles = {}, onClose, on
   const [logoBroken, setLogoBroken] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [picks, setPicks] = useState<string[]>(pickedStationIds);
 
   useEffect(() => {
     let cancelled = false;
@@ -63,7 +71,9 @@ export function ChannelSettingsDialog({ channelId, fillerRoles = {}, onClose, on
     }
     return out;
   })();
-  const changed = Object.keys(changes).length > 0;
+  const picksChanged = [...picks].sort().join() !== [...pickedStationIds].sort().join();
+  const changed = Object.keys(changes).length > 0 || picksChanged;
+  const togglePick = (id: string, on: boolean) => setPicks((current) => (on ? [...current, id] : current.filter((item) => item !== id)));
   const idLists = listsWithRole(fillerLists, fillerRoles, 'station-id');
   // A station-ID list in the channel's filler is the channel's own: Tunarr airs it in
   // flex time, and Lineup opens this channel's breaks with it.
@@ -79,7 +89,8 @@ export function ChannelSettingsDialog({ channelId, fillerRoles = {}, onClose, on
     setBusy(true);
     setError('');
     try {
-      const saved = await tunarrApi.saveChannelSettings(channelId, changes);
+      if (picksChanged && onSaveStationIds) await onSaveStationIds(picks);
+      const saved = Object.keys(changes).length ? await tunarrApi.saveChannelSettings(channelId, changes) : original!;
       onSaved(saved, 'startTime' in changes);
     } catch (reason) {
       setError(errorText(reason));
@@ -163,6 +174,15 @@ export function ChannelSettingsDialog({ channelId, fillerRoles = {}, onClose, on
               <label key={list.id}><input type="checkbox" checked={collections.some((item) => item.id === list.id)} onChange={(event) => toggleIdList(list.id, event.target.checked)} /> {list.name} <small>{list.contentCount === undefined ? '—' : `${list.contentCount} ${list.contentCount === 1 ? 'ID' : 'IDs'}`}</small></label>
             ))}
           </div>
+          <h3 className="section-title">Individual station IDs</h3>
+          <p className="subtle">Pick single IDs for this channel. Lineup opens its breaks with them (along with the ones above), and an ID picked here stops being another channel’s just because of its name. Tunarr doesn’t air picked IDs in flex time; tick a list above for that.</p>
+          <div className="checklist station-id-picks" role="group" aria-label="Station IDs picked for this channel">
+            {!stationIdChoices.length && <p className="subtle">No station IDs yet. They come from lists tagged Station IDs (Lists → Station IDs…).</p>}
+            {stationIdChoices.map((choice) => (
+              <label key={choice.id}><input type="checkbox" checked={picks.includes(choice.id)} onChange={(event) => togglePick(choice.id, event.target.checked)} /> {choice.title} <small>{spotLength(choice.duration)}{choice.note ? ` · ${choice.note}` : ''}</small></label>
+            ))}
+          </div>
+          {!!stationIdChoices.length && <p className="subtle">{picks.length ? `${picks.length} picked for this channel.` : 'None picked.'}</p>}
           <h3 className="section-title">Commercials during flex time</h3>
           <p className="subtle">Flex time is airtime Tunarr leaves open: flex items in the lineup, slot padding, and breaks without their own lists. Tunarr fills it from these filler lists, picking by weight; with none, it shows the offline screen.</p>
           <div className="candidate-list filler-collections">

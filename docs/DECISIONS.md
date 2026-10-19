@@ -484,3 +484,23 @@ on the `broadcast-programming` branch.
   - **The cable guide's blue is on the TV, not the desk.** Only what's inside the picture takes the cable-box look; the dialog and the remote keep the platinum chrome (invariant 9). Sizes stay in `rem`.
   - **The guide only looks ahead**, about half a day, as the boxes did; the full guide grid (View → Guide Grid) still covers any time.
 - **Consequence:** the native video controls are gone; the remote and keys replace them. A program that hasn't started tunes to its channel (there are no reminders).
+
+## D54. Single station IDs can be picked for a channel
+
+- **Status:** Explicit: the owner asked "to be able to add individual Station IDs to the channels" (2026-10-19). Evidenced: `server/stationIdStore.ts`, the `/station-ids` routes, `channelStationIds`/`allStationIds` in `lib/fillerRoles.ts`, Individual station IDs in `ChannelSettingsDialog`, tests in `tests/airtime.test.ts`, `tests/companionStores.test.ts` and `tests/settingsDialogs.test.tsx`.
+- **Decision:**
+  - **Picks are Lineup's own data** (`station-ids.json`), like filler roles, not a Tunarr filler list per clip: Tunarr has no per-channel ID field, and a single clip in a channel's filler would also air in flex time.
+  - **They add to D47.** A channel's IDs are its picks, the IDs named for it, and its ticked lists' IDs. **A pick beats a name:** an ID picked for other channels is theirs only, even if its title names this channel, and a ticked list no longer brings it. Two channels can pick the same ID.
+  - The choices are the IDs in lists with the Station IDs role.
+- **Consequence:** picked IDs are used by Lineup's ID tools (Insert → Station ID, Open with a station ID, Open Breaks With Station IDs) but not by Tunarr in flex time; ticking a list is still the way to get that. Picks for a clip that leaves every station-ID list are kept but ignored.
+
+## D55. Settings that aren't about security can be changed from the desk
+
+- **Status:** Explicit: the owner asked to "expose the settings that aren't security wise from the .env to the UI" (2026-10-19). Evidenced: `server/settings.ts`, the `/server-settings` route, `app/components/ServerSettingsDialog.tsx` (Setup → Server Settings…), tests in `tests/companionStores.test.ts` and `tests/settingsDialogs.test.tsx`.
+- **Decision:**
+  - **Editable:** `TUNARR_TIMEOUT_MS`, `TUNARR_SAVE_TIMEOUT_MS`, `LINEUP_EXTERNAL_LOGOS`, `LINEUP_SCHEDULER`, `LINEUP_AI_MODEL`, `LINEUP_AI_TIMEOUT_MS`, `LINEUP_MEDIA_MAX_MB`. Each has bounds; the list is an allowlist (invariant 2).
+  - **Not editable, and never shown by value:** `TUNARR_URL` (invariant 1: no user-entered Tunarr address), the AI provider, key and address (where the key goes), `LINEUP_PASSWORD`/`LINEUP_USERNAME`, `LINEUP_ALLOWED_HOSTS`, and the folder settings (`LINEUP_DATA_DIR`, `LINEUP_MEDIA_DIR`, `LINEUP_MEDIA_TUNARR_DIR`), since they decide where the server reads and writes. The dialog says only whether each is set. `PORT`, `HOST` and `STATIC_DIR` need a restart and stay out.
+  - **Saved values win over the environment** until reset with Use .env value, and take effect at once (the scheduler starts or stops; the AI config is rebuilt, so setting a model can turn an OpenAI-compatible provider on).
+  - The scheduler is in the list on purpose: it only saves changes someone planned at the desk, under the same conditional save (D51).
+- **Consequence:** with sign-in off, anyone who can reach the desk can change these, as they can already edit programming. A changed `.env` value has no effect while a saved value exists; the dialog shows both.
+

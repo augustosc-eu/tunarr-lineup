@@ -88,7 +88,9 @@ server implements those paths.
 | `server/admin.ts` | Tunarr setup routes: `matchAdminRoute`, `handleAdminRoute`, `newChannel`, `validateChannelCreate`, `TRANSCODE_FIELDS`, `validateTranscodeChanges`, `manageableSources`, `validateMediaSourceAdd`, `validateSmartCollection`. |
 | `server/templateSchema.ts` | Template types and `validateTemplate` (ids, names, roles and suggestions, day plans, ad style, pad/lateness, role defaults reduced to plain source fields). Pure; the browser imports it. |
 | `server/templateStore.ts` | Saved templates in `LINEUP_DATA_DIR/templates.json`: serialized, atomic writes; unreadable files are reported, never overwritten. |
-| `server/lineupRoutes.ts` | Lineup's own routes: `/templates`, `/filler-roles`, `/media-folder` and `/ai` (`matchLineupRoute`, `handleLineupRoute`). |
+| `server/lineupRoutes.ts` | Lineup's own routes: `/templates`, `/filler-roles`, `/station-ids`, `/server-settings`, `/media-folder` and `/ai` (`matchLineupRoute`, `handleLineupRoute`). |
+| `server/settings.ts` | Server settings the desk may change (`EDITABLE_SETTINGS`), their store `LINEUP_DATA_DIR/settings.json`, `settingsView` and `applySettings`. `server/main.ts` applies saved values at startup (`loadSavedSettings`). |
+| `server/stationIdStore.ts` | Station IDs picked for each channel, `LINEUP_DATA_DIR/station-ids.json`. |
 | `server/mediaFolder.ts` | The media folder (`LINEUP_MEDIA_DIR`): role subfolders, safe file names (`mediaFileName`), streamed uploads that never overwrite, move and delete. Node built-ins. |
 | `server/jsonFile.ts` | One JSON file in `LINEUP_DATA_DIR`: serialized, atomic writes; a file that can't be parsed is reported, never overwritten. Used by both stores. |
 | `server/fillerRoles.ts` / `server/fillerRoleStore.ts` | Filler-list roles (`station-id`, `commercials`, `promos`, `bumpers`, `other`) and their store, `LINEUP_DATA_DIR/filler-roles.json`, which also keeps the folder (library) each folder-built list follows, folders waiting for their first list, and libraries never to pick up again. |
@@ -370,6 +372,9 @@ Further Lineup routes (owner decision 2026-10-19, D50–D52):
 | `/scheduled` | GET, POST | `{ enabled, message?, changes }` (summaries); POST a plan `{ group, changes }` checked by `validatePlan` (503 when `LINEUP_SCHEDULER` is off). A change already due runs at once. |
 | `/scheduled/:id` | DELETE | Cancels a pending change and the rest of its plan |
 | `/ai/review` | POST | `{ channelName, summary (≤ 40,000 chars), issues (≤ 100) }` → `callModel` with `REVIEW_PROMPT` and the `review_schedule` tool → `resolveReview` |
+| `/station-ids` | GET | `{ [channelId]: programId[] }` from `station-ids.json` (`server/stationIdStore.ts`, D54) |
+| `/station-ids/:channelId` | PUT | `{ programIds }` (UUIDs, deduplicated, up to 200; up to 500 channels) checked by `validatePicks`; an empty list drops the channel. Picks follow a recreated channel to its new id. |
+| `/server-settings` | GET, PUT | `settingsView`: `{ editable: [{ key, label, group, help, kind, min?, max?, value, envValue, defaultValue, source }], fixed: [{ label, set }], restartNote }`. PUT `{ values: { KEY: value or null } }`: only keys in `EDITABLE_SETTINGS` (`server/settings.ts`), each checked by `validateSetting`; `null` drops the saved value. Saved values go to `settings.json` and `applySettings` puts them into the running config (timeouts, external logos, the scheduler on or off, the AI config rebuilt, the upload limit). Fixed settings are reported as set or not, never by value. Works without `TUNARR_URL`. |
 
 Every programming POST (manual and schedule) takes a snapshot of Tunarr's current
 programming after the version check and before the write; the recreate route takes one
@@ -583,7 +588,7 @@ position) and downloads it via a `Blob` object URL. The filename gets an
 
 ## 9. Persistence
 
-- **Tunarr** holds all channel data. The companion stores, in `LINEUP_DATA_DIR`: saved templates (`templates.json`), filler-list roles and folder links (`filler-roles.json`), snapshots (`snapshots/<channel>.json`), shared drafts (`drafts/`) and scheduled changes (`scheduled.json`); plus the video files users upload to the media folder (`LINEUP_MEDIA_DIR`, when set). In memory it keeps channel locks and the logo cache.
+- **Tunarr** holds all channel data. The companion stores, in `LINEUP_DATA_DIR`: saved templates (`templates.json`), filler-list roles and folder links (`filler-roles.json`), picked station IDs (`station-ids.json`), server settings changed from the desk (`settings.json`), snapshots (`snapshots/<channel>.json`), shared drafts (`drafts/`) and scheduled changes (`scheduled.json`); plus the video files users upload to the media folder (`LINEUP_MEDIA_DIR`, when set). In memory it keeps channel locks and the logo cache.
 - **The browser** keeps per-channel drafts (unsaved order and edit list) in IndexedDB (database `tunarr-lineup`, store `drafts`, key `channelId`). Each draft is tied to the programming version it was made against and is dropped once that version is gone.
   - If IndexedDB is unavailable or fails, an in-memory store is used and `draftStore().persistent` is false.
   - Drafts are also written to the companion (`sharedDraftStore` over `companionDrafts`), and a load takes the newer copy, so they follow the user between devices. Without the companion's draft routes (hosted preview) they stay per browser.
@@ -629,6 +634,10 @@ userinfo.
 | `NEXT_PUBLIC_SITE_URL` | `app/layout.tsx` | Hosted `metadataBase` (default `http://localhost:3000`) |
 | `WRANGLER_*`, `MINIFLARE_REGISTRY_PATH` | `vite.config.ts` | Hosted dev tooling |
 | `PLAYWRIGHT_CHANNEL`, `CI` | `playwright.config.ts` | Browser choice and retries/reporting for e2e |
+
+The variables in `EDITABLE_SETTINGS` (`server/settings.ts`) can be overridden from
+Setup → Server Settings…; saved values in `settings.json` win over the environment
+and are applied at startup and on every save (`applySettings`).
 
 Only `LINEUP_PUBLIC_`-prefixed variables can reach the companion client
 bundle (`envPrefix`); none are used.

@@ -13,6 +13,7 @@ import { FillerFoldersDialog } from './components/FillerFoldersDialog';
 import { MoveDialog } from './components/MoveDialog';
 import { NewChannelDialog } from './components/NewChannelDialog';
 import { ScheduleEditor } from './components/ScheduleEditor';
+import { ServerSettingsDialog } from './components/ServerSettingsDialog';
 import { SmartCollectionsManager } from './components/SmartCollectionsManager';
 import { TemplatesDialog, type TemplateTarget } from './components/TemplatesDialog';
 import { TranscodeProfilesDialog } from './components/TranscodeProfilesDialog';
@@ -28,7 +29,7 @@ import { WatchDialog } from './components/WatchDialog';
 import { WeekView } from './components/WeekView';
 import { spotTitle, useFillerSpots } from './useFillerSpots';
 import { airKind, estimateBreakFill, hourSummaries, KIND_BADGES, KIND_LABELS, stripSegments, type AirKind } from '../lib/airKinds';
-import { channelStationIds, type FillerRole } from '../lib/fillerRoles';
+import { allStationIds, channelStationIds, idChannel, type FillerRole } from '../lib/fillerRoles';
 import {
   changedPositions,
   clockTimecode,
@@ -186,6 +187,18 @@ async function loadSeasons(slot: Slot): Promise<SeasonInfo[]> {
 }
 
 /** The channel's logo, or its number when it has none (or it fails to load). */
+/** Channel Settings' station-ID choices, each saying which other channels it belongs to now. */
+function stationIdOptions(byList: Record<string, ContentProgram[]>, picks: Record<string, string[]>, channelId: string, channels: Channel[]) {
+  const nameOf = (id: string) => channels.find((channel) => channel.id === id)?.name ?? 'another channel';
+  return allStationIds(byList).map((program) => {
+    const title = spotTitle(program);
+    const others = Object.entries(picks).filter(([id, ids]) => id !== channelId && ids.includes(program.id)).map(([id]) => nameOf(id));
+    const named = idChannel(title, channels);
+    const note = others.length ? `picked for ${others.join(', ')}` : named && named.id !== channelId ? `named for ${named.name}` : undefined;
+    return { id: program.id, title, duration: program.duration, note };
+  });
+}
+
 function ChannelLogo({ channel, live, className = 'channel-logo' }: { channel: Channel; live: boolean; className?: string }) {
   const src = channelLogoUrl(channel, live);
   const [failed, setFailed] = useState('');
@@ -293,7 +306,7 @@ export default function Home() {
   // Station-log view: each commercial break expanded into its (estimated) spots.
   const [showRundowns, setShowRundowns] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [setupDialog, setSetupDialog] = useState<'sources' | 'folders' | 'transcode' | 'smart' | null>(null);
+  const [setupDialog, setSetupDialog] = useState<'sources' | 'folders' | 'transcode' | 'smart' | 'server' | null>(null);
   const [newChannel, setNewChannel] = useState<{ copyFrom: string } | null>(null);
   const [templatesOpen, setTemplatesOpen] = useState(false);
   const [eventOpen, setEventOpen] = useState(false);
@@ -340,7 +353,7 @@ export default function Home() {
   const lineup = programming.lineup;
   const activeChannel = channels.find((channel) => channel.id === activeChannelId);
   // IDs named for this channel ("El 7 ID.mp4") plus its ticked lists; never another channel's.
-  const stationIds = useMemo(() => channelStationIds(filler.stationIdsByList, channelFiller.channelId === activeChannelId ? channelFiller.listIds : [], activeChannel, channels, spotTitle), [filler.stationIdsByList, channelFiller, activeChannelId, activeChannel, channels]);
+  const stationIds = useMemo(() => channelStationIds(filler.stationIdsByList, channelFiller.channelId === activeChannelId ? channelFiller.listIds : [], activeChannel, channels, spotTitle, filler.stationIdPicks), [filler.stationIdsByList, channelFiller, activeChannelId, activeChannel, channels, filler.stationIdPicks]);
   const activeChannelIndex = channels.findIndex((channel) => channel.id === activeChannelId);
   const dirty = useMemo(() => !sameLineup(lineup, originalLineup), [lineup, originalLineup]);
   const changed = useMemo(() => (dirty ? changedPositions(lineup, originalLineup) : new Set<number>()), [dirty, lineup, originalLineup]);
@@ -1119,7 +1132,7 @@ export default function Home() {
   const openBreaksWithStationIds = () => {
     if (grab || slotPreview) return;
     if (!stationIds.ids.length) {
-      notify(Object.keys(filler.stationIdsByList).length ? `No station IDs for ${activeChannel?.name ?? 'this channel'}. Name one for it (“${activeChannel?.name ?? 'Channel'} ID.mp4”) or tick a list in Channel Settings → Commercials.` : 'No station IDs yet. Tag a filler list as Station IDs in Lists → Station IDs…');
+      notify(Object.keys(filler.stationIdsByList).length ? `No station IDs for ${activeChannel?.name ?? 'this channel'}. Pick some in Channel Settings → Commercials, name one for it (“${activeChannel?.name ?? 'Channel'} ID.mp4”) or tick a list there.` : 'No station IDs yet. Tag a filler list as Station IDs in Lists → Station IDs…');
       return;
     }
     const result = openBreaksWithIds(lineup, stationIds.ids, (item) => !!item.id && filler.spots.get(item.id) === 'station-id');
@@ -1601,6 +1614,8 @@ export default function Home() {
       { label: 'Media Sources…', disabled: !live, onSelect: () => setSetupDialog('sources') },
       { label: 'Filler Folders…', disabled: !live, onSelect: () => setSetupDialog('folders') },
       { label: 'Transcode Profiles…', disabled: !live, onSelect: () => setSetupDialog('transcode') },
+      'separator',
+      { label: 'Server Settings…', disabled: mode === 'demo', onSelect: () => setSetupDialog('server') },
     ] },
     { title: 'Help', items: [
       { label: 'Keyboard & Remote Shortcuts', shortcut: '?', onSelect: () => setInfoDialog('shortcuts') },
@@ -1613,6 +1628,7 @@ export default function Home() {
     ? `${durationTimecode(lineup.slice(block.start, block.end + 1).reduce((sum, item) => sum + Math.max(0, item.duration || 0), 0))} total`
     : selectedItem ? `${programDetail(selectedItem, programming.programs)} · ${durationTimecode(selectedItem.duration)}` : '';
   const nextStationId = pickStationId(stationIds.ids, lineup);
+  const stationIdChoices = settingsOpen ? stationIdOptions(filler.stationIdsByList, filler.stationIdPicks, activeChannelId, channels) : [];
   const selectedKind: AirKind = selectedItem ? airKind(selectedItem, filler.spots, filler.roles) : 'program';
   const selectedArt = blockSize === 1 && selectedItem ? programArtwork(selectedItem, programming.programs, live) : undefined;
   const lastRowOfBlock = blockSize > 1 ? visibleInstances.find((row) => row.lineupIndex === block.end && selectedInstance && row.start >= selectedInstance.start) : selectedInstance;
@@ -2005,6 +2021,7 @@ export default function Home() {
       {setupDialog === 'sources' && <MediaSourcesDialog onClose={() => setSetupDialog(null)} />}
       {setupDialog === 'folders' && <FillerFoldersDialog roles={filler.roles} onClose={() => setSetupDialog(null)} onChanged={() => { filler.reload(); if (slotEditor.open || catalog) loadCatalog(); }} />}
       {setupDialog === 'transcode' && <TranscodeProfilesDialog onClose={() => setSetupDialog(null)} />}
+      {setupDialog === 'server' && <ServerSettingsDialog onClose={() => setSetupDialog(null)} />}
       {newChannel && <NewChannelDialog
         channels={channels}
         copyFrom={newChannel.copyFrom}
@@ -2021,6 +2038,9 @@ export default function Home() {
       {settingsOpen && activeChannelId && <ChannelSettingsDialog
         fillerRoles={filler.roles}
         channelId={activeChannelId}
+        stationIdChoices={stationIdChoices}
+        pickedStationIds={filler.stationIdPicks[activeChannelId]}
+        onSaveStationIds={(ids) => filler.setStationIdPicks(activeChannelId, ids)}
         onClose={() => setSettingsOpen(false)}
         onSaved={(saved, startTimeChanged) => {
           setSettingsOpen(false);

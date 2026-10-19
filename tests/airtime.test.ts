@@ -4,7 +4,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { airKind, estimateBreakFill, hourSummaries, stripSegments, type ListSpots, type SpotIndex } from '../lib/airKinds';
 import { makeBreakWithId, makeCommercialBreak, makeFlex, openBreaksWithIds, pickStationId } from '../lib/broadcast';
-import { channelStationIds, guessRole, idChannel, nameTokens, roleOf, spotBreakdown, spotLength } from '../lib/fillerRoles';
+import { allStationIds, channelStationIds, guessRole, idChannel, nameTokens, roleOf, spotBreakdown, spotLength } from '../lib/fillerRoles';
 import type { Instance, LineupItem } from '../lib/lineup';
 import { createFillerRoleStore } from '../server/fillerRoleStore';
 import { createProxyConfig, handleTunarrApi, type ProxyRequest } from '../server/tunarrProxy';
@@ -178,5 +178,27 @@ describe('station IDs by channel', () => {
 
   it('falls back to the IDs named for no channel', () => {
     expect(pool('canal12')).toEqual({ ids: [byList.folder[2], byList.music[0]], own: false });
+  });
+
+  const picked = (channel: string, picks: Record<string, string[]>, assigned: string[] = []) =>
+    channelStationIds(byList, assigned, channels.find((item) => item.id === channel), channels, (item) => item.title, picks).ids.map((item) => item.id);
+
+  it('adds the IDs picked for a channel one by one', () => {
+    expect(picked('el7', { el7: ['c'] })).toEqual(['a', 'c']);
+    expect(picked('canal12', { canal12: ['d'] })).toEqual(['d']);
+  });
+
+  it('lets a pick beat a name, and keeps picked IDs out of other channels’ pools', () => {
+    // "EL 7 ID" picked for Canal 12 is Canal 12's only, so El 7 falls back.
+    expect(picked('canal12', { canal12: ['a'] })).toEqual(['a']);
+    expect(channelStationIds(byList, [], channels.find((item) => item.id === 'el7'), channels, (item) => item.title, { canal12: ['a'] })).toEqual({ ids: [byList.folder[2], byList.music[0]], own: false });
+    // A ticked list no longer brings an ID another channel picked.
+    expect(picked('el109', { canal12: ['c'] }, ['folder'])).toEqual(['b']);
+    // Shared by two channels when both pick it.
+    expect(picked('el7', { el7: ['d'], canal12: ['d'] })).toEqual(['a', 'd']);
+  });
+
+  it('lists every station ID once, in list order', () => {
+    expect(allStationIds(byList).map((item) => item.id)).toEqual(['a', 'b', 'c', 'd']);
   });
 });

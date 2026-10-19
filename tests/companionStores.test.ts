@@ -9,7 +9,7 @@ import { ROLE_FOLDERS } from '../server/mediaFolder';
 import { parseRange } from '../server/nodeAdapter';
 import { validateDraft } from '../server/sharedDraftStore';
 import { createSnapshotStore, MAX_SNAPSHOTS_PER_CHANNEL } from '../server/snapshotStore';
-import { createProxyConfig, handleTunarrApi, type ProxyConfig, type ProxyRequest } from '../server/tunarrProxy';
+import { createProxyConfig, handleTunarrApi, loadSavedSettings, type ProxyConfig, type ProxyRequest } from '../server/tunarrProxy';
 
 const tempDir = (name: string) => mkdtemp(path.join(tmpdir(), `lineup-${name}-`));
 const A = { type: 'content', id: 'a0000000-0000-4000-8000-000000000001', duration: 60_000 };
@@ -139,5 +139,87 @@ describe('AI review', () => {
     expect(response.status).toBe(200);
     expect(json(response)).toEqual({ summary: 'Solid prime time.', suggestions: [{ title: 'Move cartoons', detail: 'Mornings.', priority: 'medium' }] });
     expect((await handleTunarrApi(request('POST', '/api/tunarr/ai/review', { summary: '' }), config)).status).toBe(400);
+  });
+});
+
+describe('picked station IDs', () => {
+  const ID1 = 'b0000000-0000-4000-8000-000000000001';
+  const ID2 = 'b0000000-0000-4000-8000-000000000002';
+
+  it('keeps each channel’s picks, drops an emptied channel, and validates ids', async () => {
+    const config = createProxyConfig({ LINEUP_DATA_DIR: await tempDir('picks') });
+    expect(json(await handleTunarrApi(request('GET', '/api/tunarr/station-ids'), config))).toEqual({});
+    const saved = await handleTunarrApi(request('PUT', '/api/tunarr/station-ids/chan-1', { programIds: [ID1, ID2, ID1.toUpperCase()] }), config);
+    expect(saved.status).toBe(200);
+    expect(json(saved)).toEqual({ 'chan-1': [ID1, ID2] });
+    await handleTunarrApi(request('PUT', '/api/tunarr/station-ids/chan-2', { programIds: [ID2] }), config);
+    expect(json(await handleTunarrApi(request('PUT', '/api/tunarr/station-ids/chan-1', { programIds: [] }), config))).toEqual({ 'chan-2': [ID2] });
+    expect((await handleTunarrApi(request('PUT', '/api/tunarr/station-ids/chan-2', { programIds: ['../etc'] }), config)).status).toBe(400);
+    expect((await handleTunarrApi(request('PUT', '/api/tunarr/station-ids/chan-2', {}), config)).status).toBe(400);
+    expect((await handleTunarrApi(request('PUT', '/api/tunarr/station-ids/..%2Fx', { programIds: [] }), config)).status).toBe(400);
+    expect((await handleTunarrApi(request('PUT', '/api/tunarr/station-ids/chan-2', { programIds: [] }, { origin: 'http://evil.example' }), config)).status).toBe(403);
+  });
+
+  it('moves picks to a reset channel’s new id', async () => {
+    const config = createProxyConfig({ LINEUP_DATA_DIR: await tempDir('picks') });
+    await config.stationIds!.set('old-id', [ID1]);
+    await config.stationIds!.moveChannel('old-id', 'new-id');
+    expect(await config.stationIds!.list()).toEqual({ 'new-id': [ID1] });
+  });
+});
+
+describe('server settings', () => {
+  const env = (dir: string) => ({
+    LINEUP_DATA_DIR: dir, TUNARR_URL: 'http://user:secret@tunarr:8000', TUNARR_TIMEOUT_MS: '5000',
+    LINEUP_AI_PROVIDER: 'openai', LINEUP_AI_BASE_URL: 'http://ollama:11434/v1', LINEUP_AI_API_KEY: 'sk-hidden', LINEUP_PASSWORD: 'hunter2',
+  });
+  const setting = (body: { editable: Array<{ key: string }> }, key: string) => body.editable.find((item) => item.key === key);
+
+  it('shows editable settings with their source, and only whether the others are set', async () => {
+    const config = createProxyConfig(env(await tempDir('settings')));
+    const response = await handleTunarrApi(request('GET', '/api/tunarr/server-settings'), config);
+    expect(response.status).toBe(200);
+    const text = String(response.body);
+    for (const secret of ['secret', 'tunarr:8000', 'sk-hidden', 'hunter2', 'ollama']) expect(text).not.toContain(secret);
+    const body = json(response);
+    expect(setting(body, 'TUNARR_TIMEOUT_MS')).toMatchObject({ value: 5, source: 'env', kind: 'seconds' });
+    expect(setting(body, 'LINEUP_SCHEDULER')).toMatchObject({ value: false, source: 'default' });
+    expect(body.fixed).toContainEqual({ label: 'AI key', set: true });
+    expect(body.fixed).toContainEqual({ label: 'Allowed host names', set: false });
+  });
+
+  it('saves values over .env, applies them right away, and goes back on reset', async () => {
+    const dir = await tempDir('settings');
+    const config = createProxyConfig(env(dir));
+    expect(config.ai).toHaveProperty('off');
+    const saved = await handleTunarrApi(request('PUT', '/api/tunarr/server-settings', { values: { TUNARR_TIMEOUT_MS: 45, LINEUP_SCHEDULER: true, LINEUP_AI_MODEL: 'llama3', LINEUP_EXTERNAL_LOGOS: false } }), config);
+    expect(saved.status).toBe(200);
+    expect(setting(json(saved), 'TUNARR_TIMEOUT_MS')).toMatchObject({ value: 45, source: 'saved', envValue: 5 });
+    expect(config.timeoutMs).toBe(45_000);
+    expect(config.externalLogos).toBe(false);
+    expect(config.scheduler?.enabled).toBe(true);
+    expect(config.ai).toMatchObject({ provider: 'openai', model: 'llama3' });
+    config.scheduler?.stop();
+
+    // A restarted server picks the saved values up again.
+    const restarted = createProxyConfig(env(dir));
+    await loadSavedSettings(restarted);
+    expect(restarted.timeoutMs).toBe(45_000);
+    restarted.scheduler?.stop();
+
+    const reset = await handleTunarrApi(request('PUT', '/api/tunarr/server-settings', { values: { TUNARR_TIMEOUT_MS: null, LINEUP_SCHEDULER: null } }), config);
+    expect(setting(json(reset), 'TUNARR_TIMEOUT_MS')).toMatchObject({ value: 5, source: 'env' });
+    expect(config.timeoutMs).toBe(5000);
+    expect(config.scheduler?.enabled).toBe(false);
+  });
+
+  it('refuses settings that are about security, and values out of range', async () => {
+    const config = createProxyConfig(env(await tempDir('settings')));
+    for (const values of [{ TUNARR_URL: 'http://elsewhere' }, { LINEUP_AI_BASE_URL: 'http://x' }, { LINEUP_PASSWORD: null }, { TUNARR_TIMEOUT_MS: 0 }, { TUNARR_TIMEOUT_MS: 1.5 }, { LINEUP_SCHEDULER: 'yes' }, { LINEUP_AI_MODEL: 'a\nb' }]) {
+      const response = await handleTunarrApi(request('PUT', '/api/tunarr/server-settings', { values }), config);
+      expect(response.status).toBe(400);
+    }
+    expect(config.timeoutMs).toBe(5000);
+    expect(config.target?.host).toBe('tunarr:8000');
   });
 });

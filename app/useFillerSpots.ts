@@ -4,13 +4,14 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ListSpots, SpotIndex } from '../lib/airKinds';
 import { roleOf, type FillerRole, type FillerRoles } from '../lib/fillerRoles';
 import type { ContentProgram, ListSummary } from '../lib/library';
-import { tunarrApi } from '../lib/tunarrClient';
+import { tunarrApi, type StationIdPicks } from '../lib/tunarrClient';
 
 /** Lists whose spots are read for the log; more than this and only tagged lists are read. */
 const MAX_LISTS_READ = 40;
 // Stable empties for demo mode, so effects keyed on them don't re-run each render.
 const NO_LISTS: ListSummary[] = [];
 const NO_ROLES: FillerRoles = {};
+const NO_PICKS: StationIdPicks = {};
 
 export type FillerSpots = {
   lists: ListSummary[];
@@ -21,6 +22,9 @@ export type FillerSpots = {
   listSpots: Record<string, ListSpots>;
   /** Station ID programs by station-ID list, in list order (see `channelStationIds`). */
   stationIdsByList: Record<string, ContentProgram[]>;
+  /** Channel id → station IDs picked for it in Channel Settings. */
+  stationIdPicks: StationIdPicks;
+  setStationIdPicks: (channelId: string, programIds: string[]) => Promise<void>;
   setRole: (listId: string, role: FillerRole | null) => Promise<void>;
   reload: () => void;
 };
@@ -39,6 +43,7 @@ export function useFillerSpots(live: boolean): FillerSpots {
   const [lists, setLists] = useState<ListSummary[]>([]);
   const [roles, setRoles] = useState<FillerRoles>({});
   const [programs, setPrograms] = useState<Record<string, ContentProgram[]>>({});
+  const [stationIdPicks, setPicks] = useState<StationIdPicks>({});
   const [version, setVersion] = useState(0);
 
   // Folders are picked up when the desk opens: new uploads and rescans reach their lists.
@@ -56,11 +61,12 @@ export function useFillerSpots(live: boolean): FillerSpots {
     if (!live) return;
     let cancelled = false;
     // Roles are optional: an older or read-only data dir still shows guessed roles.
-    Promise.all([tunarrApi.fillerLists(), tunarrApi.fillerRoles().catch(() => ({} as FillerRoles))])
-      .then(async ([found, stored]) => {
+    Promise.all([tunarrApi.fillerLists(), tunarrApi.fillerRoles().catch(() => ({} as FillerRoles)), tunarrApi.stationIdPicks().catch(() => ({} as StationIdPicks))])
+      .then(async ([found, stored, picks]) => {
         if (cancelled) return;
         setLists(found);
         setRoles(stored);
+        setPicks(picks);
         const read = found.length <= MAX_LISTS_READ ? found : found.filter((list) => roleOf(list, stored));
         const entries = await Promise.all(read.slice(0, MAX_LISTS_READ).map((list) => tunarrApi.fillerListPrograms(list.id).then((items) => [list.id, items] as const).catch(() => [list.id, []] as const)));
         if (!cancelled) setPrograms(Object.fromEntries(entries));
@@ -89,7 +95,10 @@ export function useFillerSpots(live: boolean): FillerSpots {
   const setRole = useCallback(async (listId: string, role: FillerRole | null) => {
     setRoles(await tunarrApi.setFillerRole(listId, role));
   }, []);
+  const setStationIdPicks = useCallback(async (channelId: string, programIds: string[]) => {
+    setPicks(await tunarrApi.setStationIdPicks(channelId, programIds));
+  }, []);
   const reload = useCallback(() => setVersion((value) => value + 1), []);
 
-  return { lists: live ? lists : NO_LISTS, roles: live ? roles : NO_ROLES, ...derived, setRole, reload };
+  return { lists: live ? lists : NO_LISTS, roles: live ? roles : NO_ROLES, ...derived, stationIdPicks: live ? stationIdPicks : NO_PICKS, setStationIdPicks, setRole, reload };
 }

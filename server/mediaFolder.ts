@@ -30,7 +30,8 @@ const MAX_NAME = 200;
 export type MediaFile = { name: string; size: number; modifiedAt: number };
 
 export type MediaFolder = {
-  readonly maxBytes: number;
+  /** Changeable while running (Server Settings). */
+  maxBytes: number;
   /** The role's folder as Tunarr sees it (a local library's path). */
   tunarrPath(role: FillerRole): string;
   /** Creates the role folders (so Tunarr can add them before anything is uploaded). */
@@ -107,7 +108,7 @@ export function createMediaFolderAt(root: string, tunarrRoot: string, maxBytes: 
     return files.filter((file): file is MediaFile => !!file).sort((a, b) => a.name.localeCompare(b.name));
   }
 
-  return {
+  const media: MediaFolder = {
     maxBytes,
     tunarrPath: (role) => join(tunarrRoot, ROLE_FOLDERS[role]),
     async prepare() {
@@ -122,7 +123,7 @@ export function createMediaFolderAt(root: string, tunarrRoot: string, maxBytes: 
       return Object.fromEntries(entries) as Record<FillerRole, MediaFile[]>;
     },
     async save(role, name, body, length) {
-      if (length > maxBytes) throw new StoreError(413, 'file_too_large', `Files can be up to ${Math.round(maxBytes / 1024 / 1024)} MB (LINEUP_MEDIA_MAX_MB).`);
+      if (length > media.maxBytes) throw new StoreError(413, 'file_too_large', `Files can be up to ${Math.round(media.maxBytes / 1024 / 1024)} MB (LINEUP_MEDIA_MAX_MB).`);
       const dir = folder(role);
       const target = path.join(dir, name);
       try {
@@ -181,4 +182,5 @@ export function createMediaFolderAt(root: string, tunarrRoot: string, maxBytes: 
       }
     },
   };
+  return media;
 }
