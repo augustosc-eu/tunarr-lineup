@@ -8,6 +8,8 @@ were renamed 2026.10.1 and 2026.10.2.
 
 ## [Unreleased]
 
+## [2026.10.9] - 2026-10-19
+
 ### Added
 
 - **Program bin** (`A`, Edit → Program Bin, or ▦ Program Bin above the lineup): browse the library as posters beside the lineup, pick movies, episodes or whole shows, and set how they air (as picked, in episode order or shuffled; several passes; flex or a commercial break after each program, optionally opened by station IDs). Place them after or before the selection, at the end or at a time; choose the spot with ↑ ↓ and OK; or drag a poster (or everything picked) onto a row of the schedule.
@@ -173,7 +175,8 @@ First public release.
   reaches Tunarr through a narrow allowlisted proxy. Optional HTTP Basic
   sign-in and host-name checks against DNS rebinding.
 
-[Unreleased]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.8...HEAD
+[Unreleased]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.9...HEAD
+[2026.10.9]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.8...v2026.10.9
 [2026.10.8]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.7...v2026.10.8
 [2026.10.7]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.6...v2026.10.7
 [2026.10.6]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.5...v2026.10.6

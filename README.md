@@ -257,7 +257,7 @@ Open **http://localhost:3000**. Tunarr itself stays at http://localhost:8000.
 - Saved templates are kept in the `lineup-data` named volume (`/data` in the container). Add the AI settings from the compose file's comments to turn on **Ask AI…**.
 
 The compose file uses the published image (`ghcr.io/augustosc-eu/tunarr-lineup`, tags `latest`
-or a version such as `2026.10.8`, or `2026.10` for the latest release of that month). To build it from source instead, replace
+or a version such as `2026.10.9`, or `2026.10` for the latest release of that month). To build it from source instead, replace
 `image:` with `build: .` on the `lineup` service, or:
 
 ```sh
