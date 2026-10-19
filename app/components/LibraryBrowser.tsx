@@ -1,25 +1,21 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { durationTimecode } from '../../lib/broadcast';
 import {
   childType,
-  defaultLibrarySort,
-  findLibraryItems,
   isPlayable,
   itemLabel,
   LIBRARY_SORT_LABELS,
-  sortLibraryItems,
   titleNumber,
   toContentProgram,
-  topLevelType,
   TYPE_LABELS,
   type ContentProgram,
   type LibraryItem,
   type LibrarySort,
-  type MediaSource,
 } from '../../lib/library';
 import { tunarrApi } from '../../lib/tunarrClient';
+import { errorText, useLibraryListing } from '../useLibraryListing';
 
 export type LibraryPick = { programs: ContentProgram[] } | { show: { id: string; title: string; mediaSourceId?: string; libraryId?: string } };
 
@@ -32,113 +28,15 @@ type Props = {
   onClose: () => void;
 };
 
-const PAGE_SIZE = 100;
-/**
- * Listings up to this size are loaded whole, so they can be shown in episode
- * order and searched by number here. Bigger ones page through Tunarr's search.
- */
-const LOAD_ALL_MAX = 1000;
-const errorText = (error: unknown) => (error instanceof Error ? error.message : 'Something went wrong.');
-
 export function LibraryBrowser({ title, mode, confirmLabel = 'Add', onPick, onClose }: Props) {
-  const [sources, setSources] = useState<MediaSource[] | null>(null);
-  const [sourceId, setSourceId] = useState('');
-  const [libraryId, setLibraryId] = useState('');
-  const [text, setText] = useState('');
-  const [query, setQuery] = useState('');
-  const [path, setPath] = useState<LibraryItem[]>([]);
-  const [results, setResults] = useState<LibraryItem[]>([]);
-  const [page, setPage] = useState(0);
-  const [totalPages, setTotalPages] = useState(0);
-  const [totalHits, setTotalHits] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
+  const wantedMediaType = mode === 'show' ? 'shows' : mode === 'movies' ? 'movies' : undefined;
+  const listing = useLibraryListing(wantedMediaType);
+  const { sources, usableSources, source, sourceId, libraries, library, libraryId, path, text, query, shown, results, totalHits, loading, error, setError, complete, order } = listing;
   const [basket, setBasket] = useState<ContentProgram[]>([]);
   const [adding, setAdding] = useState('');
-  /** The whole listing is loaded: sort and search it here instead of asking Tunarr. */
-  const [complete, setComplete] = useState(false);
-  const [sort, setSort] = useState<LibrarySort | null>(null);
-
-  const wantedMediaType = mode === 'show' ? 'shows' : mode === 'movies' ? 'movies' : undefined;
-  const source = sources?.find((item) => item.id === sourceId);
-  const libraries = useMemo(() => (source?.libraries ?? []).filter((library) => !wantedMediaType || library.mediaType === wantedMediaType), [source, wantedMediaType]);
-  const library = libraries.find((item) => item.id === libraryId);
-  const folder = path.at(-1);
   const basketIds = useMemo(() => new Set(basket.map((program) => program.id)), [basket]);
   const basketDuration = basket.reduce((sum, program) => sum + program.duration, 0);
-
-  useEffect(() => {
-    let cancelled = false;
-    tunarrApi.mediaSources()
-      .then((list) => {
-        if (cancelled) return;
-        setSources(list);
-        const usable = list.filter((item) => item.libraries.some((lib) => !wantedMediaType || lib.mediaType === wantedMediaType));
-        const first = usable[0];
-        if (first) {
-          setSourceId(first.id);
-          setLibraryId(first.libraries.find((lib) => !wantedMediaType || lib.mediaType === wantedMediaType)?.id ?? '');
-        }
-      })
-      .catch((reason) => { if (!cancelled) setError(errorText(reason)); });
-    return () => { cancelled = true; };
-  }, [wantedMediaType]);
-
-  // Load the current library or folder: whole when it's small enough, otherwise
-  // a page at a time (and searched by Tunarr). A whole listing is searched here.
-  const serverQuery = complete ? '' : query;
-  useEffect(() => {
-    if (!sourceId || complete) return;
-    let cancelled = false;
-    const type = folder ? childType(folder.type) : topLevelType(library?.mediaType ?? source?.mediaType);
-    const search = (at: number) => tunarrApi.searchLibrary({ mediaSourceId: sourceId, libraryId: libraryId || undefined, text: folder ? undefined : serverQuery || undefined, type, parentId: folder?.uuid, page: at, limit: PAGE_SIZE });
-    (async () => {
-      const first = await search(page);
-      let items = first.results;
-      let whole = false;
-      if (page === 0 && !serverQuery && first.totalHits <= LOAD_ALL_MAX) {
-        for (let at = 1; at < first.totalPages && !cancelled; at += 1) items = [...items, ...(await search(at)).results];
-        whole = true;
-      }
-      if (cancelled) return;
-      setResults((current) => (page === 0 ? items : [...current, ...items]));
-      setTotalPages(first.totalPages);
-      setTotalHits(first.totalHits);
-      if (whole) setComplete(true);
-      setError('');
-    })()
-      .catch((reason) => { if (!cancelled) setError(errorText(reason)); })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
-  }, [complete, folder, library?.mediaType, libraryId, page, query, serverQuery, source?.mediaType, sourceId]);
-
-  const resetResults = () => {
-    setResults([]);
-    setPage(0);
-    setLoading(true);
-    setComplete(false);
-    setSort(null);
-    // A search belongs to the listing it was made in.
-    setQuery('');
-    setText('');
-  };
-  const order = sort ?? defaultLibrarySort(results);
-  const shown = useMemo(() => (complete ? findLibraryItems(sortLibraryItems(results, order), query) : results), [complete, order, query, results]);
-  const chooseSource = (id: string) => {
-    const next = sources?.find((item) => item.id === id);
-    setSourceId(id);
-    setLibraryId(next?.libraries.find((lib) => !wantedMediaType || lib.mediaType === wantedMediaType)?.id ?? '');
-    setPath([]);
-    resetResults();
-  };
-  const open = (item: LibraryItem) => {
-    setPath((current) => [...current, item]);
-    resetResults();
-  };
-  const goUp = (depth: number) => {
-    setPath((current) => current.slice(0, depth));
-    resetResults();
-  };
+  const { open, goUp } = listing;
 
   const addPrograms = (programs: ContentProgram[]) => {
     const playable = programs.filter((program) => program.duration > 0 && !basketIds.has(program.id));
@@ -164,29 +62,24 @@ export function LibraryBrowser({ title, mode, confirmLabel = 'Add', onPick, onCl
         <h2 id="library-title">{title}</h2>
         <div className="library-pickers">
           <label className="field"><span>Media source</span>
-            <select value={sourceId} onChange={(event) => chooseSource(event.target.value)} disabled={!sources}>
-              {(sources ?? []).filter((item) => item.libraries.some((lib) => !wantedMediaType || lib.mediaType === wantedMediaType)).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+            <select value={sourceId} onChange={(event) => listing.chooseSource(event.target.value)} disabled={!sources}>
+              {usableSources.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
             </select>
           </label>
           <label className="field"><span>Library</span>
-            <select value={libraryId} onChange={(event) => { setLibraryId(event.target.value); setPath([]); resetResults(); }} disabled={!libraries.length}>
+            <select value={libraryId} onChange={(event) => listing.chooseLibrary(event.target.value)} disabled={!libraries.length}>
               {libraries.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
             </select>
           </label>
           <form className="library-search" onSubmit={(event) => {
             event.preventDefault();
-            const next = text.trim();
-            if (complete) { setQuery(next); return; }
-            setPath([]);
-            resetResults();
-            setText(next);
-            setQuery(next);
+            listing.search();
           }}>
-            <label className="search"><span>⌕</span><input aria-label="Search the library" placeholder={complete ? 'Find by title or number' : 'Search this library'} value={text} onChange={(event) => { setText(event.target.value); if (complete) setQuery(event.target.value.trim()); }} /></label>
+            <label className="search"><span>⌕</span><input aria-label="Search the library" placeholder={complete ? 'Find by title or number' : 'Search this library'} value={text} onChange={(event) => listing.type(event.target.value)} /></label>
             <button type="submit">Search</button>
           </form>
           {complete && <label className="field"><span>Order</span>
-            <select aria-label="Order" value={order} onChange={(event) => setSort(event.target.value as LibrarySort)}>
+            <select aria-label="Order" value={order} onChange={(event) => listing.setSort(event.target.value as LibrarySort)}>
               {(Object.keys(LIBRARY_SORT_LABELS) as LibrarySort[]).map((value) => <option key={value} value={value}>{LIBRARY_SORT_LABELS[value]}</option>)}
             </select>
           </label>}
@@ -218,7 +111,7 @@ export function LibraryBrowser({ title, mode, confirmLabel = 'Add', onPick, onCl
               </div>
             );
           })}
-          {!complete && page + 1 < totalPages && <button className="wide" disabled={loading} onClick={() => { setLoading(true); setPage((value) => value + 1); }}>{loading ? 'Loading…' : 'Load more'}</button>}
+          {listing.canLoadMore && <button className="wide" disabled={loading} onClick={listing.loadMore}>{loading ? 'Loading…' : 'Load more'}</button>}
         </div>
 
         {mode !== 'show' && basket.length > 0 && <ol className="basket-list" aria-label="Selected programs">

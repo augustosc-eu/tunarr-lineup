@@ -56,6 +56,8 @@ see [Run with Docker Compose](#run-with-docker-compose-recommended).
   - flex time
   - redirects to another channel
 
+  **Program bin** (`A`, or **▦ Program Bin** above the lineup) shows your library as posters beside the lineup. Pick movies, episodes or whole shows, choose the order (as picked, episode order, shuffle), how many passes and what airs after each program (flex or a commercial break, optionally opened by a station ID), then place them after or before the selection, at the end or at a time. Or choose the spot with ↑ ↓ and OK, or drag a poster onto a row of the schedule.
+
   **Remove** (or `Delete`) takes items out. Flex, breaks and redirects have an adjustable length in the inspector. Every edit is in the edit list and the stored draft. The dialog says when inserted items will air. Because a manual lineup repeats from the channel's start time, a longer lineup moves later passes; tick **Keep what's on air in place** to have the companion move the start time on save so the current pass keeps its times.
 - **Guide grid.** **View → Guide Grid** (or `G`) shows every channel down the side and three hours across, like a cable box, from Tunarr's own guide. Arrows move between programs (paging at the edges), OK opens the program in the desk, `L` watches that channel. Tick **By network** to group channels by their group title.
 - **Week view and longer logs.** **View → Week View** (`W`) shows the channel's week, Monday to Sunday, as blocks (episodes of a show merged, breaks folded in), projected from the lineup. Export the week or the month as a program log (CSV).

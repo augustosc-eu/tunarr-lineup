@@ -56,7 +56,12 @@ export function programArtwork(item: LineupItem, programs: Programming['programs
   return `/api/tunarr/programs/${item.id}/artwork/${kind}`;
 }
 
-const shortHash = (text: string) => {
+/** Artwork for a library item (a show, season, movie or episode), by its Tunarr id. */
+export function libraryArtwork(uuid: string, live: boolean, kind: ArtworkKind = 'poster') {
+  return live && UUID.test(uuid) ? `/api/tunarr/programs/${uuid}/artwork/${kind}` : undefined;
+}
+
+const shortHash =(text: string) => {
   let hash = 5381;
   for (let index = 0; index < text.length; index += 1) hash = ((hash * 33) ^ text.charCodeAt(index)) >>> 0;
   return hash.toString(36);

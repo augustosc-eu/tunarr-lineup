@@ -8,6 +8,14 @@ were renamed 2026.10.1 and 2026.10.2.
 
 ## [Unreleased]
 
+### Added
+
+- **Program bin** (`A`, Edit → Program Bin, or ▦ Program Bin above the lineup): browse the library as posters beside the lineup, pick movies, episodes or whole shows, and set how they air (as picked, in episode order or shuffled; several passes; flex or a commercial break after each program, optionally opened by station IDs). Place them after or before the selection, at the end or at a time; choose the spot with ↑ ↓ and OK; or drag a poster (or everything picked) onto a row of the schedule.
+
+### Fixed
+
+- The picks listed in the library browser are numbered 1, 2, 3… again instead of 0.
+
 ## [2026.10.8] - 2026-10-19
 
 ### Added

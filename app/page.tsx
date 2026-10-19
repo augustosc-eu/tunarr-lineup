@@ -12,6 +12,7 @@ import { MediaSourcesDialog } from './components/MediaSourcesDialog';
 import { FillerFoldersDialog } from './components/FillerFoldersDialog';
 import { MoveDialog } from './components/MoveDialog';
 import { NewChannelDialog } from './components/NewChannelDialog';
+import { ProgramBin } from './components/ProgramBin';
 import { ScheduleEditor } from './components/ScheduleEditor';
 import { ServerSettingsDialog } from './components/ServerSettingsDialog';
 import { SmartCollectionsManager } from './components/SmartCollectionsManager';
@@ -29,7 +30,8 @@ import { WatchDialog } from './components/WatchDialog';
 import { WeekView } from './components/WeekView';
 import { spotTitle, useFillerSpots } from './useFillerSpots';
 import { airKind, estimateBreakFill, hourSummaries, KIND_BADGES, KIND_LABELS, stripSegments, type AirKind } from '../lib/airKinds';
-import { allStationIds, channelStationIds, idChannel, type FillerRole } from '../lib/fillerRoles';
+import { allStationIds, channelStationIds, idChannel, roleOf, type FillerRole } from '../lib/fillerRoles';
+import { placedLabel, type Arranged, type PlaceWhere } from '../lib/programBin';
 import {
   changedPositions,
   clockTimecode,
@@ -130,13 +132,6 @@ const AIR_ONCE_LEAD_MS = 10 * 60_000;
 
 const dateLabel = (value: string) => new Intl.DateTimeFormat('en', { weekday: 'long', month: 'long', day: 'numeric' }).format(new Date(`${value}T12:00:00`));
 const inputDate = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-/** “A”, “A” and “B”, or “A”, “B” and 3 more: what an insert added, for the edit list. */
-const insertedLabel = (programs: ContentProgram[]) => {
-  const titles = programs.map((program) => `“${String((program.program as { title?: string }).title ?? 'program')}”`);
-  if (titles.length <= 2) return titles.join(' and ');
-  if (titles.length === 3) return `${titles[0]}, ${titles[1]} and ${titles[2]}`;
-  return `${titles[0]}, ${titles[1]} and ${titles.length - 2} more`;
-};
 const inputTime = (ms: number) => { const date = new Date(ms); return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`; };
 const fullTimeLabel = (ms: number) => `${new Intl.DateTimeFormat('en', { weekday: 'short' }).format(new Date(ms))} ${clockTimecode(ms)}`;
 const dayPeriod = (ms: number) => {
@@ -330,6 +325,11 @@ export default function Home() {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
+  // The program bin, docked beside the lineup; programs from it are placed by drag, by the cursor, or by its options.
+  const [binOpen, setBinOpen] = useState(false);
+  const [placing, setPlacing] = useState<{ arranged: Arranged; side: 'before' | 'after'; channelId: string } | null>(null);
+  const [binDrop, setBinDrop] = useState<{ position: number; side: 'before' | 'after' } | null>(null);
+  const binDrag = useRef<{ resolve: Promise<Arranged>; done: () => void } | null>(null);
   const programmingRequest = useRef(0);
   const guideRequest = useRef(0);
   const rowRefs = useRef(new Map<number, HTMLButtonElement>());
@@ -1099,24 +1099,24 @@ export default function Home() {
    * A time goes to the program boundary nearest it; before/after go next to
    * the selection. Both are worked out on the lengthened cycle (see boundaryAt).
    */
-  const insertPoint = (where: InsertWhere, added: number): { index: number; start: number | null; passes: number } => {
+  const insertPoint = (where: PlaceWhere, added: number): { index: number; start: number | null; passes: number } => {
     if (!activeChannel || !lineup.length) return { index: 0, start: null, passes: 0 };
     // `passes`: how many lineup passes grow between the fixed point (the
     // channel start, or what's on air when keeping it in place) and the spot.
     const passesTo = (time: number) => Math.abs(passesBefore(lineup, channelStart, time) - (keeping ? passesBefore(lineup, channelStart, now) : 0));
-    if (typeof where === 'object') {
+    if (typeof where === 'object' && 'at' in where) {
       const boundary = boundaryAt(lineup, startWith(added), where.at, where.snap, added);
       return boundary ? { ...boundary, passes: passesTo(where.at) } : { index: 0, start: null, passes: 0 };
     }
-    const index = where === 'before' ? block.start : block.end + 1;
-    const near = selectedInstance?.start ?? occurrenceStart(lineup, channelStart, block.start, dayStartMs);
+    const index = typeof where === 'object' ? where.index : where === 'end' ? lineup.length : where === 'before' ? block.start : block.end + 1;
+    const near = typeof where === 'object' ? where.near : selectedInstance?.start ?? occurrenceStart(lineup, channelStart, block.start, dayStartMs);
     return { index, start: insertedStart(lineup, channelStart, index, near, added, startWith(added)), passes: passesTo(near) };
   };
 
-  const insertAt = (where: InsertWhere, items: LineupItem[], label: string, meta: Record<string, ContentProgram> = {}) => {
+  const insertAt = (where: PlaceWhere, items: LineupItem[], label: string, meta: Record<string, ContentProgram> = {}) => {
     const point = insertPoint(where, cycleDuration(items));
     const result = insertItems(lineup, point.index, items);
-    if (!result) return;
+    if (!result) return false;
     if (Object.keys(meta).length) setProgramming((current) => ({ ...current, programs: { ...current.programs, ...meta } as Programming['programs'] }));
     applyEdit(`Inserted ${label}${point.start !== null ? ` at ${clockTimecode(point.start)}` : ''}`, result.lineup, result.block);
     // Show the day it airs and select it there.
@@ -1126,6 +1126,44 @@ export default function Home() {
       setCursorStart(point.start);
     }
     setInsertOpen(false);
+    return true;
+  };
+
+  /** Programs from the bin, placed where its options say (or where they were dropped). */
+  const placeArranged = (arranged: Arranged, where: PlaceWhere) => {
+    if (grab || slotPreview || !activeChannel || !arranged.items.length) return false;
+    return insertAt(where, arranged.items, placedLabel(arranged.programs), arranged.meta);
+  };
+  /** Places the programs the bin handed over next to the cursor row. */
+  const placeAtCursor = () => {
+    if (!placing || placing.channelId !== activeChannelId) return;
+    const near = selectedInstance?.start ?? occurrenceStart(lineup, channelStart, block.start, dayStartMs);
+    placeArranged(placing.arranged, { index: placing.side === 'before' ? block.start : block.end + 1, near });
+    setPlacing(null);
+  };
+  const chooseSpot = (arranged: Arranged, side: 'before' | 'after') => {
+    setPlacing({ arranged, side, channelId: activeChannelId });
+    const row = rowRefs.current.get(cursorPosition);
+    row?.focus({ preventScroll: true });
+    row?.scrollIntoView?.({ block: 'center' });
+  };
+  const cancelPlacing = () => {
+    setPlacing(null);
+    document.querySelector<HTMLElement>('.program-bin .bin-card-main, .program-bin select')?.focus();
+  };
+  /** A bin card dropped on a row: before it in its top half, after it in its bottom half. */
+  const dropFromBin = async (lineupIndex: number, start: number, side: 'before' | 'after') => {
+    const drag = binDrag.current;
+    binDrag.current = null;
+    setBinDrop(null);
+    if (!drag) return;
+    try {
+      const arranged = await drag.resolve;
+      const where: PlaceWhere = lineupIndex < 0 || !lineup.length ? 'end' : { index: side === 'before' ? lineupIndex : lineupIndex + 1, near: start };
+      if (placeArranged(arranged, where)) drag.done();
+    } catch (reason) {
+      notify(`Couldn’t add that: ${errorMessage(reason, 'the library didn’t answer.')}`);
+    }
   };
 
   /** Opens every commercial break with a rotating station ID (one undoable edit). */
@@ -1173,7 +1211,7 @@ export default function Home() {
       const programs = pick.programs.filter((program) => program.duration > 0);
       if (!programs.length) return;
       const entries = programs.map(lineupEntry);
-      insertAt(picker.where, entries.map((entry) => entry.item), insertedLabel(programs), Object.fromEntries(entries.map((entry) => entry.meta)));
+      insertAt(picker.where, entries.map((entry) => entry.item), placedLabel(programs), Object.fromEntries(entries.map((entry) => entry.meta)));
     } else if (picker.purpose === 'slot-show' && 'show' in pick) {
       setSlotEditor((current) => {
         const option = showOption(pick.show);
@@ -1406,7 +1444,8 @@ export default function Home() {
         return;
       }
       if (event.altKey || isTypingTarget(event.target)) return;
-      if ((event.target as HTMLElement | null)?.closest?.('[role="menubar"]')) return;
+      if ((event.target as HTMLElement | null)?.closest?.('[role="menubar"], .program-bin')) return;
+      const placingHere = placing && placing.channelId === activeChannelId ? placing : null;
       if (mod) {
         const lower = key.toLowerCase();
         if (lower === 'z') { event.preventDefault(); if (event.shiftKey) redo(); else undo(); }
@@ -1442,18 +1481,22 @@ export default function Home() {
         case ' ':
           if (!onRow || !selectedItem) return;
           event.preventDefault();
-          if (grab) drop();
+          if (placingHere) placeAtCursor();
+          else if (grab) drop();
           else pickUp();
           break;
         default:
           if (back) {
-            if (grab) { event.preventDefault(); cancelGrab(); }
+            if (placingHere) { event.preventDefault(); cancelPlacing(); }
+            else if (grab) { event.preventDefault(); cancelGrab(); }
             else if (blockSize > 1) { event.preventDefault(); select(selectedIndex, cursorStart); }
+            else if (binOpen) { event.preventDefault(); setBinOpen(false); }
           } else if (!grab && key === 'n') goToNow();
           else if (!grab && key === 't') changeDate(inputDate(new Date()));
           else if (key === 'b') setShowRundowns((open) => !open);
           else if (!grab && key === 'm' && selectedItem) setArrangeOpen(true);
           else if (!grab && !slotPreview && key === 'i' && activeChannel) setInsertOpen(true);
+          else if (!grab && !slotPreview && key === 'a' && live && activeChannel) setBinOpen((open) => !open);
           else if (!grab && !slotPreview && key === 'e' && activeChannel && lineup.length) setEventOpen(true);
           else if (!grab && key === 'Delete' && selectedItem) { event.preventDefault(); removeSelection(); }
           else if (!grab && key === 'g' && channels.length) setView('guide');
@@ -1563,6 +1606,7 @@ export default function Home() {
       { label: 'Revert All Changes', disabled: !dirty || !!grab, onSelect: revertAll },
       'separator',
       { label: 'Insert…', shortcut: 'I', disabled: !activeChannel || !!grab || !!slotPreview, onSelect: () => setInsertOpen(true) },
+      { label: binOpen ? 'Hide Program Bin' : 'Program Bin', shortcut: 'A', disabled: !live || !activeChannel || !!grab || !!slotPreview, onSelect: () => setBinOpen((open) => !open) },
       { label: 'Schedule Event…', shortcut: 'E', disabled: !activeChannel || !lineup.length || !!grab || !!slotPreview, onSelect: () => setEventOpen(true) },
       { label: 'Marathon…', disabled: !activeChannel || !lineup.length || !!grab || !!slotPreview, onSelect: () => setView('marathon') },
       { label: 'Open Breaks With Station IDs', disabled: !live || !activeChannel || !lineup.length || !!grab || !!slotPreview, onSelect: openBreaksWithStationIds },
@@ -1685,7 +1729,7 @@ export default function Home() {
         </div>
       </header>
 
-      <div className="workspace">
+      <div className={`workspace ${binOpen && live && activeChannel ? 'bin-open' : ''}`}>
         <aside className="channel-rail">
           <div className="rail-heading"><p className="eyebrow">{live ? 'CHANNELS' : 'DEMO CHANNELS'}</p><span>{channels.length}</span></div>
           {channels.map((channel) => (
@@ -1720,6 +1764,7 @@ export default function Home() {
           <div className="schedule-tools">
             <label className="search"><span>⌕</span><input aria-label="Search this day" placeholder="Search this day" value={search} onChange={(event) => setSearch(event.target.value)} />{search && <button aria-label="Clear search" onClick={() => setSearch('')}>×</button>}</label>
             <span className="day-count">{visibleInstances.length} {visibleInstances.length === 1 ? 'program' : 'programs'}</span>
+            {live && activeChannel && <button className="bin-toggle" aria-pressed={binOpen} disabled={!!grab || !!slotPreview} onClick={() => setBinOpen((open) => !open)}>▦ Program Bin</button>}
             {activeChannel && <button className={`check-badge ${issueCount ? 'has-issues' : ''}`} onClick={() => setView('check')} aria-label={issueCount ? `Check lineup: ${issueCount} ${issueCount === 1 ? 'issue' : 'issues'} this day` : 'Check lineup'}>{issueCount ? `⚠ ${issueCount}` : '✓ Check'}</button>}
           </div>
           {totals.total > 0 && <DayStrip
@@ -1745,7 +1790,16 @@ export default function Home() {
               <button className="primary" disabled={slotEditor.busy || saving} onClick={saveSlots}>{slotEditor.busy ? 'Saving…' : 'Save schedule'}</button>
             </span>
           </div>}
-          <div className={`timeline ${busy ? 'loading' : ''}`}>
+          {placing && placing.channelId === activeChannelId && <div className="preview-bar placing-bar" role="region" aria-label="Placing programs">
+            <span><b>Placing {placing.arranged.programs.length.toLocaleString('en')} {placing.arranged.programs.length === 1 ? 'program' : 'programs'}</b> ({durationTimecode(cycleDuration(placing.arranged.items))}) {placing.side} the highlighted row. ↑ ↓ choose the row, OK places, Back cancels.</span>
+            <span className="preview-actions">
+              <button onClick={cancelPlacing}>Cancel</button>
+              <button className="primary" disabled={!selectedItem} onClick={placeAtCursor}>Place {placing.side} {selectedItem ? `“${programTitle(selectedItem, programming.programs)}”` : 'the row'}</button>
+            </span>
+          </div>}
+          <div className={`timeline ${busy ? 'loading' : ''}`}
+            onDragOver={(event) => { if (binDrag.current && !lineup.length && !slotPreview) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; } }}
+            onDrop={(event) => { if (binDrag.current && !lineup.length && !slotPreview) { event.preventDefault(); void dropFromBin(-1, 0, 'after'); } }}>
             {!visibleInstances.length && <div className="empty"><span>○</span><h2>{emptyTitle}</h2><p>{emptyText}</p>{emptyRetry && <button onClick={retry}>Try again</button>}</div>}
             {visibleInstances.map((instance, position) => {
               const period = dayPeriod(instance.start);
@@ -1775,6 +1829,7 @@ export default function Home() {
                 grab && inBlock(instance.lineupIndex) ? 'grabbed' : '',
                 `kind-${kind}`,
                 guideOnly ? 'guide-only' : '',
+                binDrop?.position === position ? `drop-${binDrop.side}` : '',
               ].filter(Boolean).join(' ');
               return (
                 <Fragment key={`${instance.start}-${instance.lineupIndex}`}>
@@ -1789,8 +1844,23 @@ export default function Home() {
                     onClick={(event) => { if (!slotPreview) select(instance.lineupIndex, instance.start, event.shiftKey); }}
                     draggable={!readOnly && !grab}
                     onDragStart={() => setDraggedIndex(instance.lineupIndex)}
-                    onDragOver={(event) => event.preventDefault()}
-                    onDrop={() => {
+                    onDragOver={(event) => {
+                      event.preventDefault();
+                      if (!binDrag.current || readOnly) return;
+                      event.dataTransfer.dropEffect = 'copy';
+                      const box = event.currentTarget.getBoundingClientRect();
+                      const side = event.clientY < box.top + box.height / 2 ? 'before' : 'after';
+                      if (binDrop?.position !== position || binDrop.side !== side) setBinDrop({ position, side });
+                    }}
+                    onDrop={(event) => {
+                      event.stopPropagation();
+                      if (binDrag.current) {
+                        event.preventDefault();
+                        if (readOnly) { binDrag.current = null; setBinDrop(null); return; }
+                        const box = event.currentTarget.getBoundingClientRect();
+                        void dropFromBin(instance.lineupIndex, instance.start, event.clientY < box.top + box.height / 2 ? 'before' : 'after');
+                        return;
+                      }
                       if (draggedIndex != null && !readOnly) moveBefore(instance.lineupIndex, inBlock(draggedIndex) ? block : { start: draggedIndex, end: draggedIndex });
                       setDraggedIndex(null);
                     }}
@@ -1861,6 +1931,23 @@ export default function Home() {
             {activeChannel && <button className="wide primary" disabled={!!slotPreview} onClick={() => setInsertOpen(true)}>Insert…</button>}
           </>}
         </aside>
+
+        {binOpen && live && activeChannel && <ProgramBin
+          live={live}
+          anchorLabel={selectedItem ? (blockSize > 1 ? 'the selection' : `“${programTitle(selectedItem, programming.programs)}”`) : null}
+          emptyLineup={!lineup.length}
+          date={selectedDate}
+          time={inputTime(selectedInstance?.start ?? (selectedDate === inputDate(new Date(now)) ? now : dayStartMs))}
+          commercialLists={filler.lists.filter((list) => roleOf(list, filler.roles) === 'commercials')}
+          stationIds={stationIds.ids}
+          startFor={(where, added) => { const point = insertPoint(where, added); return point.start === null ? null : { start: point.start, passes: point.passes }; }}
+          keepOnAir={canKeepOnAir ? { checked: keepOnAir, onChange: setKeepOnAir } : undefined}
+          onPlace={placeArranged}
+          onChooseSpot={chooseSpot}
+          onDragPrograms={(resolve, done) => { binDrag.current = { resolve, done }; resolve.catch(() => {}); }}
+          onDragEnd={() => { binDrag.current = null; setBinDrop(null); }}
+          onClose={() => { setBinOpen(false); setPlacing(null); rowRefs.current.get(cursorPosition)?.focus({ preventScroll: true }); }}
+        />}
       </div>
 
       {connectionOpen && <div className="overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setConnectionOpen(false); }}>
@@ -1933,6 +2020,7 @@ export default function Home() {
                 ['B', 'Show or hide break rundowns'],
                 ['M', 'Move or swap…'],
                 ['I', 'Insert…'],
+                ['A', 'Program bin: browse posters, pick, place (in it: arrows move, OK picks or opens, Space picks a whole show, Back goes up)'],
                 ['E', 'Schedule an event on a date…'],
                 ['G', 'Guide grid (every channel)'],
                 ['W', 'Week view'],

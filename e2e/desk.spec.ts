@@ -615,3 +615,64 @@ test('picks up uploaded station IDs and added folders as filler lists by itself'
   await dialog.locator('.source-block', { hasText: folder }).getByRole('button', { name: 'Scan now' }).click();
   await expect(dialog.getByRole('status')).toContainText('(3 videos)');
 });
+
+test('picks posters in the program bin and places them with flex after each, at the end of the lineup', async ({ page }) => {
+  await page.keyboard.press('a');
+  const bin = page.getByRole('complementary', { name: 'Program bin' });
+  await expect(bin.locator('.bin-card')).toHaveCount(3);
+  // Posters come through the companion; a card without artwork shows its initial.
+  await expect(bin.locator('.bin-art').first()).toHaveText('D');
+  await bin.getByRole('button', { name: 'Pick Zulu Dawn (1979)' }).click();
+  await bin.getByRole('button', { name: 'Pick Yankee Doodle Dandy (1942)' }).click();
+  await expect(bin.locator('.bin-card.picked .bin-check')).toHaveText(['2', '1']);
+  await bin.getByLabel('After each program').selectOption('flex');
+  await bin.getByLabel('Length after each program in minutes').fill('2');
+  await bin.getByRole('radio', { name: 'At the end' }).click();
+  await expect(bin.getByRole('status', { name: 'Placement' })).toContainText('Starts');
+  await bin.getByRole('button', { name: 'Place 2 on schedule' }).click();
+  await expect(bin.locator('.bin-card.picked')).toHaveCount(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0);
+  await page.getByRole('button', { name: 'Save lineup', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Saved', exact: true })).toBeVisible();
+  const saved = (await fakeState(page)).lineups[NEWS];
+  expect(saved.slice(6).map((item) => item.id ?? item.type)).toEqual(['4d4d4d4d-1a2b-4c3d-8e9f-000000000001', 'flex', '4d4d4d4d-1a2b-4c3d-8e9f-000000000002', 'flex']);
+});
+
+test('drags a poster from the program bin onto a row of the schedule', async ({ page }) => {
+  await page.getByRole('button', { name: 'Program Bin' }).click();
+  const bin = page.getByRole('complementary', { name: 'Program bin' });
+  const card = bin.locator('.bin-card', { hasText: 'Zulu Dawn' });
+  const row = page.locator('.program', { hasText: 'Charlie Feature' }).first();
+  // The top half of a row drops before it.
+  await card.dragTo(row, { targetPosition: { x: 40, y: 4 } });
+  await page.getByRole('button', { name: 'Save lineup', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Saved', exact: true })).toBeVisible();
+  expect((await fakeState(page)).lineups[NEWS].map((item) => item.id?.slice(-1) ?? item.type)).toEqual(['1', 'flex', '2', 'redirect', '1', '3', '4']);
+  expect((await fakeState(page)).lineups[NEWS][4].id).toBe('4d4d4d4d-1a2b-4c3d-8e9f-000000000001');
+});
+
+test('places a program from the bin with remote keys: pick, choose a spot, OK', async ({ page }) => {
+  await page.locator('.program', { hasText: 'Alpha Hour' }).first().click();
+  await page.keyboard.press('a');
+  const bin = page.getByRole('complementary', { name: 'Program bin' });
+  // The first card takes focus; arrows move between cards and OK picks.
+  await expect(bin.getByRole('button', { name: 'Pick Desk Ident (2026)' })).toBeFocused();
+  await page.keyboard.press('ArrowRight');
+  await page.keyboard.press('ArrowRight');
+  await expect(bin.getByRole('button', { name: 'Pick Zulu Dawn (1979)' })).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(bin.getByRole('button', { name: 'Unpick Zulu Dawn (1979)' })).toBeVisible();
+  await bin.getByRole('button', { name: 'Choose spot on schedule…' }).focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('region', { name: 'Placing programs' })).toBeVisible();
+  // The cursor row (Alpha Hour) has focus; ↓ moves to the flex row, OK places after it.
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('region', { name: 'Placing programs' })).toHaveCount(0);
+  await page.keyboard.press('Control+s');
+  await expect(page.getByRole('button', { name: 'Saved', exact: true })).toBeVisible();
+  expect(await newsOrder(page)).toEqual(['1', 'flex', '1', '2', 'redirect', '3', '4']);
+  // Back closes the bin.
+  await page.keyboard.press('Escape');
+  await expect(bin).toHaveCount(0);
+});

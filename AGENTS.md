@@ -158,7 +158,7 @@ Chromium with `npx playwright install chromium`. CI runs all of them
   undo/redo and rebasing, `draftStore.ts` for persistent drafts, `schedule.ts` for slot
   editing (seasons, linked slots), `templates.ts` (presets, ad styles, `templateToDraft`,
   `scheduleToTemplate`), `networkTemplates.ts` (the network catalog), `templateCatalog.ts`,
-  `events.ts` (placing events on dates), `fillerRoles.ts` (filler-list roles, spot lengths),
+  `events.ts` (placing events on dates), `programBin.ts` (arranging picked programs: order, passes, breaks after each), `fillerRoles.ts` (filler-list roles, spot lengths),
   `airKinds.ts` (station-log kinds: breaks, IDs, flex; hour summaries, break rundowns),
   `lineupCheck.ts` (the lineup check), `weekLog.ts` (several days: week view, logs, AI
   summary), `guideGrid.ts` (guide grid layout and focus), `tvRemote.ts` (watching like a cable box: remote keys, tuning, retries), and `programInfo.ts` for titles,
@@ -174,14 +174,15 @@ Chromium with `npx playwright install chromium`. CI runs all of them
   built-ins).
 - **Keep `app/page.tsx` for UI state and rendering,** and `app/components/` for larger
   UI pieces: `MenuBar`, `MoveDialog`, `ScheduleEditor`, `InsertDialog`,
-  `LibraryBrowser`, `ListsManager`, `ChannelSettingsDialog`, `NewChannelDialog`,
+  `LibraryBrowser`, `ProgramBin` (the poster bin docked beside the lineup), `ListsManager`, `ChannelSettingsDialog`, `NewChannelDialog`,
   `SmartCollectionsManager`, `MediaSourcesDialog`, `FillerFoldersDialog`, `TranscodeProfilesDialog`, `ServerSettingsDialog`,
   `TemplatesDialog` (gallery, AI panel), `TemplateEditor`, `EventDialog`, `DayStrip`,
   `GuideGrid`, `WeekView`, `LineupCheckDialog`, `AlignDialog`, `MarathonDialog`,
   `NetworkDialog` (copy, simulcast, shared commercials), `WatchDialog` (with `TvRemote` and `CableGuide`), `SnapshotsDialog`,
   `PlanDialog` (Save Later, seasonal overlays), `ScheduledDialog`.
   `app/useFillerSpots.ts` loads filler lists, their roles and spots for the day view;
-  `app/useLiveStream.ts` plays and retries a channel's live stream.
+  `app/useLiveStream.ts` plays and retries a channel's live stream;
+  `app/useLibraryListing.ts` browses the libraries for `LibraryBrowser` and `ProgramBin`.
 - **Add or update tests** for any behavior change.
   - Unit and UI tests go in `tests/`. Proxy tests inject `fetchImpl`; UI tests mock
     `fetch` with a stateful fake companion (`tests/page.test.tsx`).
