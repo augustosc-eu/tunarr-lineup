@@ -8,6 +8,8 @@ were renamed 2026.10.1 and 2026.10.2.
 
 ## [Unreleased]
 
+## [2026.10.4] - 2026-10-19
+
 ### Seeing every channel
 
 - **Guide grid** (`G`): every channel and three hours across, from Tunarr's guide, driven by the remote; OK opens a program in the desk. Group by network (group title).
@@ -131,7 +133,8 @@ First public release.
   reaches Tunarr through a narrow allowlisted proxy. Optional HTTP Basic
   sign-in and host-name checks against DNS rebinding.
 
-[Unreleased]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.3...HEAD
+[Unreleased]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.4...HEAD
+[2026.10.4]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.3...v2026.10.4
 [2026.10.3]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.2...v2026.10.3
 [2026.10.2]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.1...v2026.10.2
 [2026.10.1]: https://github.com/augustosc-eu/tunarr-lineup/releases/tag/v2026.10.1
