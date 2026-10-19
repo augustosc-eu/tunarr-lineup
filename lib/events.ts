@@ -3,7 +3,8 @@
 // cut a program short, so an event starts when a program starts. "Replace"
 // takes out what would have aired and pads with flex so everything after the
 // event keeps its time; "Push" moves everything after the event later.
-import { makeFlex } from './broadcast';
+import { makeBreakWithId, makeCommercialBreak, makeFlex } from './broadcast';
+import { itemIdentity } from '../server/lineupVersion';
 import type { LineupItem } from './lineup';
 
 export type EventMode = 'replace' | 'push';
@@ -125,4 +126,38 @@ export function repeatLabel(cycle: number) {
   if (days >= 2) return `every ${Math.round(days * 10) / 10} days`;
   const hours = cycle / 3_600_000;
   return hours >= 1 ? `every ${Math.round(hours * 10) / 10} hours` : `every ${Math.round(cycle / 60_000)} minutes`;
+}
+
+/**
+ * A marathon: the programs back to back with a commercial break of
+ * `breakMs` between each (opening with a station ID when one is given), ready
+ * for placeEvent. No break after the last one: what follows takes over.
+ */
+export function buildMarathon(programs: LineupItem[], options: { breakMs: number; fillerListIds: string[]; stationId?: { id: string; duration: number } }): LineupItem[] {
+  const items: LineupItem[] = [];
+  programs.forEach((program, index) => {
+    items.push(program);
+    if (index === programs.length - 1 || options.breakMs < 1000) return;
+    if (!options.fillerListIds.length) items.push(makeFlex(options.breakMs));
+    else if (options.stationId && options.stationId.duration < options.breakMs) items.push(...makeBreakWithId(options.breakMs, options.fillerListIds, options.stationId));
+    else items.push(makeCommercialBreak(options.breakMs, options.fillerListIds));
+  });
+  return items;
+}
+
+export type LineupPatch = { index: number; remove: string[]; insert: LineupItem[] };
+
+/**
+ * An event that airs once: the patch that puts it in (just before it starts)
+ * and the one that takes it out again (when it ends), for the companion's
+ * scheduler. Only a replace that keeps the cycle's length works, because
+ * anything longer would move every later pass while it's in.
+ */
+export function airOncePatches(placement: EventPlacement): { apply: LineupPatch; undo: LineupPatch } | null {
+  if (placement.overrun > 0) return null;
+  const inserted = placement.lineup.slice(placement.index, placement.index + placement.count + (placement.pad > 0 ? 1 : 0));
+  return {
+    apply: { index: placement.index, remove: placement.removed.map(itemIdentity), insert: inserted },
+    undo: { index: placement.index, remove: inserted.map(itemIdentity), insert: placement.removed },
+  };
 }

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { programmingVersion } from '../server/lineupVersion';
 import { redirectsTo, validateRecreate } from '../server/recreateChannel';
 import { createProxyConfig, handleTunarrApi, type ProxyRequest } from '../server/tunarrProxy';
+import { testDataDir } from './tempData';
 
 const OLD = 'a0000000-0000-4000-8000-000000000001';
 const OTHER = 'a0000000-0000-4000-8000-000000000002';
@@ -58,7 +59,7 @@ function fakeTunarr(options: { failProgramming?: boolean; failDelete?: boolean; 
     }
     return reply(row.channel);
   });
-  const config = { ...createProxyConfig({ TUNARR_URL: 'http://tunarr:8000' }), fetchImpl: fetchImpl as unknown as typeof fetch };
+  const config = { ...createProxyConfig({ LINEUP_DATA_DIR: testDataDir, TUNARR_URL: 'http://tunarr:8000' }), fetchImpl: fetchImpl as unknown as typeof fetch };
   return { rows, log, config, fetchImpl };
 }
 

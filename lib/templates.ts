@@ -21,6 +21,8 @@ export const episodes = (...genres: string[]): RuleSet => ({ match: 'all', rules
 export const movies = (...genres: string[]): RuleSet => ({ match: 'all', rules: genres.length ? [any('type', 'movie'), any('genre', ...genres)] : [any('type', 'movie')] });
 export const videos = (...genres: string[]): RuleSet => ({ match: 'all', rules: genres.length ? [any('type', 'music_video', 'other_video', 'track'), any('genre', ...genres)] : [any('type', 'music_video', 'other_video', 'track')] });
 const oldMovies: RuleSet = { match: 'all', rules: [any('type', 'movie'), { field: 'year', op: '<', value: 1980 }] };
+/** Holiday packages: titles that name the holiday, of a playable type. */
+const titled = (type: 'movie' | 'episode', word: string): RuleSet => ({ match: 'all', rules: [any('type', type), { field: type === 'episode' ? 'show_title' : 'title', op: 'contains', values: [word] }] });
 
 /** Roles network templates share; templates pick them by id and may relabel them. */
 const PRESETS: Record<string, Omit<TemplateRole, 'id'>> = {
@@ -130,6 +132,31 @@ export const GENERAL_TEMPLATES: Template[] = [
     ads: AD_STYLES.news, padMs: 30 * MIN, latenessMs: 15 * MIN,
     roles: [preset('news'), preset('politics', 'Current affairs'), preset('docs')],
     days: { all: [['05:00', 'news'], ['12:00', 'politics'], ['14:00', 'news'], ['20:00', 'docs'], ['21:00', 'politics', 'heavy'], ['22:00', 'news'], ['01:00', 'docs', 'light']] },
+  },
+  // Holiday packages: meant as seasonal overlays (preview, then File → Save as Seasonal Overlay…).
+  {
+    id: 'halloween', name: 'Halloween fright week', inspiredBy: 'A typical Halloween programming stunt', region: 'Anywhere',
+    description: 'A seasonal overlay: spooky cartoons for kids by day, family Halloween films after school, horror from 21:00 and a creature-feature marathon overnight.',
+    ads: AD_STYLES.us, padMs: 15 * MIN, latenessMs: 30 * MIN,
+    roles: [
+      { id: 'spookykids', label: 'Spooky cartoons', hint: 'Halloween and monster cartoons', order: 'shuffle', suggest: episodes('Animation', 'Kids', 'Family') },
+      { id: 'halloweenfamily', label: 'Family Halloween films', hint: 'Films with Halloween in the title', order: 'shuffle', suggest: titled('movie', 'Halloween') },
+      { id: 'horror', label: 'Horror', hint: 'Horror films', order: 'shuffle', suggest: movies('Horror') },
+      { id: 'creature', label: 'Creature features', hint: 'Horror, thriller and sci-fi films, overnight', order: 'shuffle', suggest: movies('Horror', 'Thriller', 'Science Fiction') },
+    ],
+    days: { all: [['06:00', 'spookykids'], ['16:00', 'halloweenfamily'], ['21:00', 'horror', 'heavy'], ['01:00', 'creature', 'light']] },
+  },
+  {
+    id: 'christmas', name: 'Christmas holidays', inspiredBy: 'A typical holiday-season schedule', region: 'Anywhere',
+    description: 'A seasonal overlay: Christmas cartoons in the morning, holiday films all afternoon, a big family film at 20:00, Christmas specials late.',
+    ads: AD_STYLES.us, padMs: 15 * MIN, latenessMs: 30 * MIN,
+    roles: [
+      { id: 'xmascartoons', label: 'Christmas cartoons', hint: 'Holiday specials and cartoons', order: 'shuffle', suggest: titled('episode', 'Christmas') },
+      { id: 'xmasfilms', label: 'Holiday films', hint: 'Films with Christmas in the title', order: 'shuffle', suggest: titled('movie', 'Christmas') },
+      { id: 'xmasfamily', label: 'Big family film', hint: 'Family and animated films', order: 'shuffle', suggest: movies('Family', 'Animation') },
+      { id: 'xmasspecials', label: 'Late specials', hint: 'Christmas episodes of comedies and dramas', order: 'shuffle', suggest: episodes('Comedy', 'Drama', 'Family') },
+    ],
+    days: { all: [['07:00', 'xmascartoons'], ['12:00', 'xmasfilms'], ['20:00', 'xmasfamily', 'heavy'], ['22:00', 'xmasspecials', 'light'], ['01:00', 'xmasfilms', 'light']] },
   },
 ];
 

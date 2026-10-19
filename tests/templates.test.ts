@@ -33,7 +33,7 @@ describe('built-in templates', () => {
     expect(regions('Italy')).toEqual(['it-rai1', 'it-rai2', 'it-rai3', 'it-canale5', 'it-italia1', 'it-rete4', 'it-la7']);
     expect(regions('United States')).toEqual(expect.arrayContaining(['us-abc', 'us-cbs', 'us-nbc', 'us-fox', 'us-cw', 'us-pbs', 'us-univision', 'us-telemundo', 'us-espn', 'us-cnn', 'us-hbo', 'us-nickelodeon', 'us-disney', 'us-cartoon-network', 'us-discovery', 'us-mtv', 'us-vh1-classic', 'us-cmt-music', 'us-bet-jams', 'us-tcm']));
     expect(regions('Canada')).toEqual(['ca-muchmusic-classic']);
-    expect(regions('General')).toEqual(['general', 'kids', 'movies', 'music', 'news']);
+    expect(regions('General')).toEqual(['general', 'kids', 'movies', 'music', 'news', 'halloween', 'christmas']);
   });
 
   it('finds brand-inspired music templates without using brands as their names', () => {

@@ -8,6 +8,7 @@ import { channelStationIds, guessRole, idChannel, nameTokens, roleOf, spotBreakd
 import type { Instance, LineupItem } from '../lib/lineup';
 import { createFillerRoleStore } from '../server/fillerRoleStore';
 import { createProxyConfig, handleTunarrApi, type ProxyRequest } from '../server/tunarrProxy';
+import { testDataDir } from './tempData';
 
 const MIN = 60_000;
 const ADS = 'f0000000-0000-4000-8000-0000000000f1';
@@ -127,7 +128,7 @@ describe('filler role store and routes', () => {
   });
 
   it('answers without Tunarr and validates ids and roles', async () => {
-    const config = { ...createProxyConfig({}), fillerRoles: createFillerRoleStore(await mkdtemp(path.join(tmpdir(), 'lineup-roles-'))) };
+    const config = { ...createProxyConfig({ LINEUP_DATA_DIR: testDataDir }), fillerRoles: createFillerRoleStore(await mkdtemp(path.join(tmpdir(), 'lineup-roles-'))) };
     expect(parse(await handleTunarrApi(req('GET', '/filler-roles'), config))).toEqual({});
     expect(parse(await handleTunarrApi(req('PUT', `/filler-roles/${IDS}`, { role: 'station-id' }), config))).toEqual({ [IDS]: 'station-id' });
     expect((await handleTunarrApi(req('PUT', `/filler-roles/${IDS}`, { role: 'admin' }), config)).status).toBe(400);

@@ -16,6 +16,16 @@ import { ScheduleEditor } from './components/ScheduleEditor';
 import { SmartCollectionsManager } from './components/SmartCollectionsManager';
 import { TemplatesDialog, type TemplateTarget } from './components/TemplatesDialog';
 import { TranscodeProfilesDialog } from './components/TranscodeProfilesDialog';
+import { AlignDialog } from './components/AlignDialog';
+import { GuideGrid } from './components/GuideGrid';
+import { LineupCheckDialog, loadCheckSettings } from './components/LineupCheckDialog';
+import { MarathonDialog } from './components/MarathonDialog';
+import { NetworkDialog, type NetworkMode } from './components/NetworkDialog';
+import { PlanDialog, type PlanKind } from './components/PlanDialog';
+import { ScheduledDialog } from './components/ScheduledDialog';
+import { SnapshotsDialog } from './components/SnapshotsDialog';
+import { WatchDialog } from './components/WatchDialog';
+import { WeekView } from './components/WeekView';
 import { spotTitle, useFillerSpots } from './useFillerSpots';
 import { airKind, estimateBreakFill, hourSummaries, KIND_BADGES, KIND_LABELS, stripSegments, type AirKind } from '../lib/airKinds';
 import { channelStationIds, type FillerRole } from '../lib/fillerRoles';
@@ -48,6 +58,7 @@ import {
   cycleDuration,
   dayRange,
   hasGeneratedSchedule,
+  instancesForDay,
   reorderLineup,
   sameLineup,
   scheduleForDay,
@@ -58,12 +69,15 @@ import {
   type Programming,
 } from '../lib/lineup';
 import { channelLogoUrl, programArtwork, programDetail, programTitle } from '../lib/programInfo';
-import { boundaryAt, insertedStart, passesBefore, type EventPlacement, type InsertWhere } from '../lib/events';
+import { airOncePatches, boundaryAt, insertedStart, passesBefore, type EventPlacement, type InsertWhere } from '../lib/events';
+import { checkLineup, type Issue } from '../lib/lineupCheck';
+import type { GuideChannel } from '../lib/guideGrid';
+import { logRows, type DayRows } from '../lib/weekLog';
 import { keptStartTime, lineupLength } from '../server/lineupVersion';
 import { lineupEntry, seasonsFromEpisodes, type ContentProgram } from '../lib/library';
 import { changeSlotSource, draftFromSchedule, newSlot, showOption, type SchedulePreview, type ScheduleDraftState, type SeasonInfo, type Slot, type SlotCatalog, type SlotSchedule } from '../lib/schedule';
 import { programmingVersion } from '../server/lineupVersion';
-import { checkHealth, tunarrApi, TunarrApiError, type ConnectionState } from '../lib/tunarrClient';
+import { checkHealth, tunarrApi, TunarrApiError, type ConnectionState, type PlannedChange, type ViewerCounts } from '../lib/tunarrClient';
 
 type Mode = 'live' | 'demo';
 
@@ -108,6 +122,10 @@ const draftKey = (draft: ScheduleDraftState) => JSON.stringify([draft.type, draf
 
 const emptyProgramming: Programming = { lineup: [], programs: {} };
 const NOW_TICK_MS = 15_000;
+/** How often viewer counts are read while the desk is visible. */
+const VIEWERS_TICK_MS = 30_000;
+/** An event that airs once goes in this long before it starts. */
+const AIR_ONCE_LEAD_MS = 10 * 60_000;
 
 const dateLabel = (value: string) => new Intl.DateTimeFormat('en', { weekday: 'long', month: 'long', day: 'numeric' }).format(new Date(`${value}T12:00:00`));
 const inputDate = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
@@ -279,6 +297,14 @@ export default function Home() {
   const [newChannel, setNewChannel] = useState<{ copyFrom: string } | null>(null);
   const [templatesOpen, setTemplatesOpen] = useState(false);
   const [eventOpen, setEventOpen] = useState(false);
+  // Views and tools over the lineup (each an overlay).
+  const [view, setView] = useState<'guide' | 'week' | 'check' | 'align' | 'marathon' | 'snapshots' | 'scheduled' | null>(null);
+  const [networkMode, setNetworkMode] = useState<NetworkMode | null>(null);
+  const [planKind, setPlanKind] = useState<PlanKind | null>(null);
+  const [watching, setWatching] = useState<string | null>(null);
+  const [viewers, setViewers] = useState<ViewerCounts>({});
+  const [aiEnabled, setAiEnabled] = useState(false);
+  const [scheduler, setScheduler] = useState<{ enabled: boolean; message?: string }>({ enabled: false });
   const [grab, setGrab] = useState<Grab | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [connectionOpen, setConnectionOpen] = useState(false);
@@ -296,6 +322,8 @@ export default function Home() {
   const rowRefs = useRef(new Map<number, HTMLButtonElement>());
   const focusCursor = useRef(false);
   const scrolledToNow = useRef('');
+  // A time to select once another channel has loaded (opened from the guide grid).
+  const pendingJump = useRef<{ channelId: string; time: number } | null>(null);
 
   const live = mode === 'live';
   const filler = useFillerSpots(live);
@@ -375,6 +403,14 @@ export default function Home() {
     return byKind;
   })();
   const hours = hourSummaries(visibleInstances, kindOf, dayStartMs, dayEndMs);
+  const channelFillerIds = live && channelFiller.channelId === activeChannelId ? channelFiller.listIds : null;
+  const knownFillerIds = useMemo(() => (live && filler.lists.length ? new Set(filler.lists.map((list) => list.id)) : null), [live, filler.lists]);
+  // The lineup check for the day shown, for the badge in the toolbar (the dialog checks more).
+  const dayIssues = useMemo(() => (activeChannel && !slotPreview ? checkLineup({
+    lineup, programs: programming.programs, rows: instances, kindOf: (row) => airKind(row.item, filler.spots, filler.roles), channelId: activeChannel.id, channels,
+    channelFillerListIds: channelFillerIds, knownFillerListIds: knownFillerIds, settings: loadCheckSettings(activeChannel.id),
+  }) : []), [activeChannel, slotPreview, lineup, programming.programs, instances, filler.spots, filler.roles, channels, channelFillerIds, knownFillerIds]);
+  const issueCount = dayIssues.filter((issue) => issue.severity !== 'info').length;
   const canUndo = history.past.length > 0 && !grab;
   const canRedo = history.future.length > 0 && !grab;
   const describe = (target: Block = block, items: LineupItem[] = lineup) => {
@@ -569,6 +605,29 @@ export default function Home() {
     return () => window.clearInterval(timer);
   }, []);
 
+  // Who's watching each channel (counts only), while the desk is on screen.
+  useEffect(() => {
+    if (!live || connection.status !== 'connected') return;
+    let cancelled = false;
+    const read = () => {
+      if (document.visibilityState === 'hidden') return;
+      tunarrApi.sessions().then((counts) => { if (!cancelled) setViewers(counts); }).catch(() => { /* Optional: badges just don't show. */ });
+    };
+    read();
+    const timer = window.setInterval(read, VIEWERS_TICK_MS);
+    document.addEventListener('visibilitychange', read);
+    return () => { cancelled = true; window.clearInterval(timer); document.removeEventListener('visibilitychange', read); };
+  }, [live, connection.status]);
+
+  // What the companion offers: the AI review, and changes saved on a date.
+  useEffect(() => {
+    if (!live || connection.status !== 'connected') return;
+    let cancelled = false;
+    tunarrApi.aiStatus().then((status) => { if (!cancelled) setAiEnabled(status.enabled); }).catch(() => {});
+    tunarrApi.scheduled().then((list) => { if (!cancelled) setScheduler({ enabled: list.enabled, message: list.message }); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [live, connection.status]);
+
   // Unsaved work survives a reload when drafts are stored; warn only when they can't be.
   useEffect(() => {
     if (!live || !dirty || draftStore().persistent) return;
@@ -598,6 +657,17 @@ export default function Home() {
     row?.focus({ preventScroll: true });
     row?.scrollIntoView?.({ block: 'center' });
   }, [cursorPosition]);
+
+  // Opened from the guide grid on another channel: select what airs at that time once it's loaded.
+  useEffect(() => {
+    const pending = pendingJump.current;
+    if (!pending || loading || pending.channelId !== activeChannelId || !instances.length) return;
+    pendingJump.current = null;
+    const row = instances.find((item) => item.start <= pending.time && pending.time < item.stop && item.lineupIndex >= 0);
+    if (!row) return;
+    focusCursor.current = true;
+    select(row.lineupIndex, row.start);
+  }, [activeChannelId, instances, loading]);
 
   // Open today's schedule at whatever is on air, once per channel and day.
   useEffect(() => {
@@ -645,7 +715,7 @@ export default function Home() {
     notify('Demo mode: sample data only, nothing is sent to Tunarr');
   });
 
-  const loadChannel = (channel: Channel) => guardUnsaved(() => {
+  const loadChannel = (channel: Channel, date = selectedDate) => guardUnsaved(() => {
     if (grab) cancelGrab();
     if (slotEditor.channelId && slotEditor.channelId !== channel.id) setSlotEditor(closedSlotEditor);
     if (!live) {
@@ -657,7 +727,7 @@ export default function Home() {
       select(-1, null);
       return;
     }
-    void loadProgramming(channel.id, selectedDate);
+    void loadProgramming(channel.id, date);
   });
 
   const stepChannel = (direction: 1 | -1) => {
@@ -1150,6 +1220,19 @@ export default function Home() {
     else if (activeChannelId) void loadProgramming(activeChannelId, selectedDate);
   };
 
+  const downloadCsv = (rows: Array<Array<string | number>>, filename: string) => {
+    const csv = toCsv(['Date', 'Start', 'End', 'Duration', 'Type', 'Title', 'Detail', 'Lineup position'], rows);
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    notify(`Exported ${rows.length} log entries`);
+  };
+
   const exportLog = () => {
     if (!activeChannel || !instances.length) return;
     const rows = instances.map((row) => [
@@ -1162,16 +1245,105 @@ export default function Home() {
       row.lineupIndex < 0 ? 'In Tunarr’s guide only' : programDetail(row.item, programming.programs),
       row.lineupIndex < 0 ? '' : row.lineupIndex + 1,
     ]);
-    const csv = toCsv(['Date', 'Start', 'End', 'Duration', 'Type', 'Title', 'Detail', 'Lineup position'], rows);
-    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `program-log-ch${activeChannel.number}-${selectedDate}${dirty ? '-unsaved' : ''}.csv`;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-    notify(`Exported ${rows.length} log entries`);
+    downloadCsv(rows, `program-log-ch${activeChannel.number}-${selectedDate}${dirty ? '-unsaved' : ''}.csv`);
+  };
+
+  /** Several days' logs (week view): projected from the lineup, typed the way the station log reads. */
+  const exportDays = (days: DayRows[], label: string) => {
+    if (!activeChannel) return;
+    const rows = logRows(days, viewPrograms, kindOf, (kind) => (kind === 'program' ? 'Program' : KIND_LABELS[kind].replace(/s$/, '')));
+    if (!rows.length) return;
+    downloadCsv(rows, `program-log-ch${activeChannel.number}-${label}${dirty ? '-unsaved' : ''}.csv`);
+  };
+
+  /** Shows a date in the desk with a lineup position selected at a time (from the week view, the check, the guide). */
+  const jumpTo = (date: string, start: number | null, lineupIndex: number) => {
+    if (search) setSearch('');
+    if (date !== selectedDate) changeDate(date);
+    if (lineupIndex >= 0) {
+      focusCursor.current = true;
+      select(lineupIndex, start);
+    }
+    setView(null);
+  };
+
+  const jumpToIssue = (issue: Issue) => {
+    const at = issue.at ?? (issue.lineupIndex !== undefined ? occurrenceStart(lineup, channelStart, issue.lineupIndex, selectedInstance?.start ?? dayStartMs) : NaN);
+    const index = issue.lineupIndex ?? (Number.isFinite(at) ? scheduleForDay(null, lineup, channelStart, inputDate(new Date(at))).rows.find((row) => row.start <= at && at < row.stop)?.lineupIndex ?? -1 : -1);
+    jumpTo(Number.isFinite(at) ? inputDate(new Date(at)) : selectedDate, Number.isFinite(at) ? at : null, index);
+  };
+
+  /** Puts a whole lineup (a snapshot, an imported file, an alignment) into the desk as one edit. */
+  const replaceLineup = (next: LineupItem[], label: string, programs: Record<string, unknown> = {}) => {
+    if (grab || slotPreview) return;
+    if (Object.keys(programs).length) setProgramming((current) => ({ ...current, programs: { ...programs, ...current.programs } as Programming['programs'] }));
+    const index = Math.min(block.start, Math.max(next.length - 1, 0));
+    applyEdit(label, next, { start: index, end: index });
+    setView(null);
+  };
+
+  /** An event that airs once: the companion puts it in before it starts and takes it out after. */
+  const scheduleAirOnce = async (placement: EventPlacement, label: string, meta: Record<string, ContentProgram>) => {
+    if (!activeChannel || !base) return;
+    const patches = airOncePatches(placement);
+    if (!patches) throw new Error('This event can’t air once.');
+    const programs = { ...programming.programs, ...meta };
+    const apply: PlannedChange = { channelId: activeChannel.id, channelName: activeChannel.name, label, at: Math.max(Date.now() + 30_000, placement.start - AIR_ONCE_LEAD_MS), notAfter: placement.start, action: { kind: 'patch', ...patches.apply }, programs };
+    const undo: PlannedChange = { channelId: activeChannel.id, channelName: activeChannel.name, label: `${label} ends`, at: placement.end, action: { kind: 'patch', ...patches.undo }, programs };
+    await tunarrApi.schedulePlan('event', [apply, undo]);
+    setEventOpen(false);
+    notify(`“${label}” will air once, on ${new Intl.DateTimeFormat('en', { weekday: 'short', day: 'numeric', month: 'short' }).format(new Date(placement.start))}. See File → Scheduled Changes.`);
+  };
+
+  /** Save Later and Seasonal Overlay: the desk's lineup (or the slot preview's) goes in on a date. */
+  const planChange = async (kind: PlanKind, plan: { label: string; at: number; until?: number }) => {
+    if (!activeChannel || !base) return;
+    const next = slotPreview ? slotPreview.lineup : buildManualSave(lineup).request.lineup;
+    const change: PlannedChange = { channelId: activeChannel.id, channelName: activeChannel.name, label: plan.label, at: plan.at, action: { kind: 'lineup', lineup: next, expectVersion: base.version }, programs: viewPrograms };
+    const changes = kind === 'overlay' && plan.until ? [change, { channelId: activeChannel.id, channelName: activeChannel.name, label: `${plan.label} ends`, at: plan.until, action: { kind: 'restore' as const, after: 0 } }] : [change];
+    await tunarrApi.schedulePlan(kind, changes);
+    setPlanKind(null);
+    notify(kind === 'overlay' ? `“${plan.label}” is scheduled. See File → Scheduled Changes.` : `“${plan.label}” will be saved on ${new Intl.DateTimeFormat('en', { weekday: 'short', day: 'numeric', month: 'short' }).format(new Date(plan.at))}.`);
+  };
+
+  /** The guide grid's data: Tunarr's guide for every channel, or the demo lineup projected. */
+  const loadGridGuide = useMemo(() => (live
+    ? (from: number, to: number) => tunarrApi.guide(new Date(from), new Date(to)).then((result) => result.channels)
+    : async (from: number, to: number): Promise<GuideChannel[]> => {
+      const sample = demoProgramming();
+      return channels.map((channel) => {
+        const rows = [inputDate(new Date(from)), inputDate(new Date(to - 1))].filter((date, index, all) => all.indexOf(date) === index).flatMap((date) => instancesForDay(sample.lineup, channel.startTime, date));
+        const programs = rows.filter((row) => row.stop > from && row.start < to).map((row) => ({ start: row.start, stop: row.stop, type: row.item.type, title: programTitle(row.item, sample.programs), detail: programDetail(row.item, sample.programs), id: row.item.id }));
+        return { id: channel.id, number: channel.number, name: channel.name, programs };
+      });
+    }), [live, channels]);
+
+  /** From the guide grid: open the channel in the desk at that time. */
+  const openFromGuide = (channelId: string, time: number) => {
+    setView(null);
+    const date = inputDate(new Date(time));
+    const channel = channels.find((item) => item.id === channelId);
+    if (!channel) return;
+    const pick = () => {
+      focusCursor.current = true;
+      setCursorStart(time);
+    };
+    if (channelId === activeChannelId) {
+      changeDate(date);
+      const row = scheduleForDay(null, lineup, channelStart, date).rows.find((item) => item.start <= time && time < item.stop);
+      if (row) select(row.lineupIndex, row.start);
+      pick();
+      return;
+    }
+    setSelectedDate(date);
+    pendingJump.current = { channelId, time };
+    loadChannel(channel, date);
+  };
+
+  const stepWatch = (direction: 1 | -1) => {
+    if (!channels.length || !watching) return;
+    const index = channels.findIndex((channel) => channel.id === watching);
+    setWatching(channels[(Math.max(index, 0) + direction + channels.length) % channels.length].id);
   };
 
   const moveCursor = (direction: -1 | 1, extend: boolean) => {
@@ -1199,10 +1371,14 @@ export default function Home() {
       const key = event.key;
       const back = key === 'Escape' || key === 'GoBack' || key === 'BrowserBack';
       const mod = event.metaKey || event.ctrlKey;
-      if (confirmDialog || arrangeOpen || connectionOpen || infoDialog || slotEditor.open || libraryPicker || insertOpen || settingsOpen || listsOpen || setupDialog || newChannel || templatesOpen || eventOpen) {
+      if (confirmDialog || arrangeOpen || connectionOpen || infoDialog || slotEditor.open || libraryPicker || insertOpen || settingsOpen || listsOpen || setupDialog || newChannel || templatesOpen || eventOpen || view || networkMode || planKind || watching) {
         if (!back) return;
         event.preventDefault();
         if (confirmDialog) setConfirmDialog(null);
+        else if (watching) setWatching(null);
+        else if (planKind) setPlanKind(null);
+        else if (networkMode) setNetworkMode(null);
+        else if (view) setView(null);
         else if (libraryPicker) setLibraryPicker(null);
         else if (insertOpen) setInsertOpen(false);
         else if (settingsOpen) setSettingsOpen(false);
@@ -1227,7 +1403,7 @@ export default function Home() {
         return;
       }
       const onRow = (event.target as HTMLElement | null)?.classList?.contains('program') || event.target === document.body;
-      if (slotPreview && !['ArrowLeft', 'ArrowRight', 'n', 't', 'b', '?'].includes(key) && !back) return;
+      if (slotPreview && !['ArrowLeft', 'ArrowRight', 'n', 't', 'b', 'g', 'w', 'c', 'l', '?'].includes(key) && !back) return;
       if (slotPreview && back) { event.preventDefault(); discardSlotPreview(); return; }
       switch (key) {
         case 'ArrowDown':
@@ -1268,6 +1444,10 @@ export default function Home() {
           else if (!grab && !slotPreview && key === 'i' && activeChannel) setInsertOpen(true);
           else if (!grab && !slotPreview && key === 'e' && activeChannel && lineup.length) setEventOpen(true);
           else if (!grab && key === 'Delete' && selectedItem) { event.preventDefault(); removeSelection(); }
+          else if (!grab && key === 'g' && channels.length) setView('guide');
+          else if (!grab && key === 'w' && activeChannel) setView('week');
+          else if (!grab && key === 'c' && activeChannel) setView('check');
+          else if (!grab && key === 'l' && live && activeChannel) setWatching(activeChannel.id);
           else if (key === '?') setInfoDialog('shortcuts');
       }
     };
@@ -1350,7 +1530,13 @@ export default function Home() {
   const menus: Menu[] = [
     { title: 'File', items: [
       { label: 'Save Lineup', shortcut: '⌘S', disabled: !dirty || saving || !!grab, onSelect: save },
+      { label: 'Save Later…', disabled: !live || !base || !activeChannel || !!grab || (!dirty && !slotPreview), onSelect: () => setPlanKind('save') },
+      { label: 'Save as Seasonal Overlay…', disabled: !live || !base || !activeChannel || !!grab || (!dirty && !slotPreview), onSelect: () => setPlanKind('overlay') },
+      { label: 'Scheduled Changes…', disabled: !live, onSelect: () => setView('scheduled') },
+      'separator',
       { label: 'Export Program Log…', disabled: !instances.length, onSelect: exportLog },
+      { label: 'Export Week or Month Log…', disabled: !activeChannel || !lineup.length, onSelect: () => setView('week') },
+      { label: 'Snapshots, Export and Import…', disabled: !activeChannel, onSelect: () => setView('snapshots') },
       'separator',
       { label: 'Reload From Tunarr', disabled: !live || !activeChannelId, onSelect: reloadChannel },
       { label: 'Connection…', onSelect: () => setConnectionOpen(true) },
@@ -1363,12 +1549,17 @@ export default function Home() {
       'separator',
       { label: 'Insert…', shortcut: 'I', disabled: !activeChannel || !!grab || !!slotPreview, onSelect: () => setInsertOpen(true) },
       { label: 'Schedule Event…', shortcut: 'E', disabled: !activeChannel || !lineup.length || !!grab || !!slotPreview, onSelect: () => setEventOpen(true) },
+      { label: 'Marathon…', disabled: !activeChannel || !lineup.length || !!grab || !!slotPreview, onSelect: () => setView('marathon') },
       { label: 'Open Breaks With Station IDs', disabled: !live || !activeChannel || !lineup.length || !!grab || !!slotPreview, onSelect: openBreaksWithStationIds },
+      { label: 'Align Programs to Clock…', disabled: !activeChannel || !lineup.length || !!grab || !!slotPreview, onSelect: () => setView('align') },
       { label: 'Remove', shortcut: 'Del', disabled: !selectedItem || !!grab || !!slotPreview, onSelect: removeSelection },
       { label: 'Move or Swap…', shortcut: 'M', disabled: !selectedItem || !!grab, onSelect: () => setArrangeOpen(true) },
       { label: grab ? 'Drop Here' : 'Pick Up to Slide', shortcut: 'OK', disabled: !selectedItem, onSelect: () => (grab ? drop() : pickUp()) },
       { label: 'Move Earlier', shortcut: '↑', disabled: !selectedItem || block.start === 0 || !!grab, onSelect: () => nudge(-1) },
       { label: 'Move Later', shortcut: '↓', disabled: !selectedItem || block.end >= lineup.length - 1 || !!grab, onSelect: () => nudge(1) },
+      'separator',
+      { label: 'Copy Selection to Channel…', disabled: !live || !selectedItem || !!grab || !!slotPreview || channels.length < 2, onSelect: () => setNetworkMode('copy') },
+      { label: 'Simulcast Selection on Network…', disabled: !live || !selectedItem || !!grab || !!slotPreview || channels.length < 2, onSelect: () => setNetworkMode('simulcast') },
     ] },
     { title: 'View', items: [
       { label: 'Go to Now', shortcut: 'N', disabled: !activeChannel, onSelect: goToNow },
@@ -1376,15 +1567,21 @@ export default function Home() {
       { label: showRundowns ? 'Hide Break Rundowns' : 'Show Break Rundowns', shortcut: 'B', onSelect: () => setShowRundowns((open) => !open) },
       { label: 'Previous Day', shortcut: '←', onSelect: () => shiftDay(-1) },
       { label: 'Next Day', shortcut: '→', onSelect: () => shiftDay(1) },
+      'separator',
+      { label: 'Guide Grid', shortcut: 'G', disabled: !channels.length, onSelect: () => setView('guide') },
+      { label: 'Week View', shortcut: 'W', disabled: !activeChannel, onSelect: () => setView('week') },
+      { label: issueCount ? `Check Lineup (${issueCount})…` : 'Check Lineup…', shortcut: 'C', disabled: !activeChannel, onSelect: () => setView('check') },
     ] },
     { title: 'Channel', items: [
       { label: 'Previous Channel', shortcut: 'CH−', disabled: channels.length < 2, onSelect: () => stepChannel(-1) },
       { label: 'Next Channel', shortcut: 'CH+', disabled: channels.length < 2, onSelect: () => stepChannel(1) },
       { label: 'Reload Channel', disabled: !live || !activeChannelId, onSelect: reloadChannel },
+      { label: 'Watch Live', shortcut: 'L', disabled: !live || !activeChannel, onSelect: () => activeChannel && setWatching(activeChannel.id) },
       'separator',
       { label: hasGeneratedSchedule(programming) ? 'Edit Slot Schedule…' : 'Create Slot Schedule…', disabled: !live || !activeChannelId || !!grab, onSelect: openSlotEditor },
       { label: 'Channel Settings…', disabled: !live || !activeChannelId, onSelect: () => setSettingsOpen(true) },
       { label: 'Programming Templates…', disabled: !live || !!grab, onSelect: () => { loadCatalog(); setTemplatesOpen(true); } },
+      { label: 'Share Commercials With Network…', disabled: !live || !activeChannel || channels.length < 2, onSelect: () => setNetworkMode('commercials') },
       'separator',
       { label: 'New Channel…', disabled: !live || !!grab, onSelect: () => guardUnsaved(() => setNewChannel({ copyFrom: '' })) },
       { label: 'Duplicate Channel…', disabled: !live || !activeChannelId || !!grab, onSelect: () => guardUnsaved(() => setNewChannel({ copyFrom: activeChannelId })) },
@@ -1476,7 +1673,7 @@ export default function Home() {
           {channels.map((channel) => (
             <button className={`channel ${channel.id === activeChannelId ? 'active' : ''}`} key={channel.id} onClick={() => loadChannel(channel)}>
               <ChannelLogo channel={channel} live={live} />
-              <span className="channel-copy"><b>{channel.name}</b><small>CH {channel.number} · {channel.programCount ?? '—'} programs{live && draftMarks[channel.id] && <em className="unsaved-mark"> · unsaved</em>}</small></span>
+              <span className="channel-copy"><b>{channel.name}{live && (viewers[channel.id]?.viewers ?? 0) > 0 && <em className="viewer-badge" aria-label={`${viewers[channel.id].viewers} watching`}>● {viewers[channel.id].viewers}</em>}</b><small>CH {channel.number} · {channel.programCount ?? '—'} programs{live && draftMarks[channel.id] && <em className="unsaved-mark"> · unsaved</em>}</small></span>
             </button>
           ))}
           <div className="rail-note">
@@ -1505,6 +1702,7 @@ export default function Home() {
           <div className="schedule-tools">
             <label className="search"><span>⌕</span><input aria-label="Search this day" placeholder="Search this day" value={search} onChange={(event) => setSearch(event.target.value)} />{search && <button aria-label="Clear search" onClick={() => setSearch('')}>×</button>}</label>
             <span className="day-count">{visibleInstances.length} {visibleInstances.length === 1 ? 'program' : 'programs'}</span>
+            {activeChannel && <button className={`check-badge ${issueCount ? 'has-issues' : ''}`} onClick={() => setView('check')} aria-label={issueCount ? `Check lineup: ${issueCount} ${issueCount === 1 ? 'issue' : 'issues'} this day` : 'Check lineup'}>{issueCount ? `⚠ ${issueCount}` : '✓ Check'}</button>}
           </div>
           {totals.total > 0 && <DayStrip
             segments={stripSegments(instances, kindOf, dayStartMs, dayEndMs)}
@@ -1617,6 +1815,7 @@ export default function Home() {
             <div className="info-row"><span>Ends</span><b>{lastRowOfBlock ? clockTimecode(lastRowOfBlock.stop) : '—'}</b></div>
             <div className="info-row"><span>Position</span><b>#{block.start + 1}{blockSize > 1 ? `–${block.end + 1}` : ''} of {lineup.length}</b></div>
             {selectedInstance && cursorPosition === onAir && <div className="info-row on-air-row"><span>On air</span><b>{durationTimecode(selectedInstance.stop - now)} left</b></div>}
+            {selectedInstance && cursorPosition === onAir && live && activeChannel && <button className="wide watch-button" onClick={() => setWatching(activeChannel.id)}>▶ Watch live</button>}
             <div className="nudge-row order-row"><button disabled={block.start === 0 || !!grab} onClick={() => nudge(-1)}>↑ Earlier</button><button disabled={block.end >= lineup.length - 1 || !!grab} onClick={() => nudge(1)}>↓ Later</button></div>
             <div className="primary-actions">
               <button className="wide primary" disabled={!!grab} onClick={() => setArrangeOpen(true)}>Move or swap…</button>
@@ -1717,6 +1916,10 @@ export default function Home() {
                 ['M', 'Move or swap…'],
                 ['I', 'Insert…'],
                 ['E', 'Schedule an event on a date…'],
+                ['G', 'Guide grid (every channel)'],
+                ['W', 'Week view'],
+                ['C', 'Check lineup'],
+                ['L', 'Watch the channel live'],
                 ['⌘Z / Ctrl+Z', 'Undo'],
                 ['⇧⌘Z / Ctrl+Y', 'Redo'],
                 ['⌘S / Ctrl+S', 'Save lineup'],
@@ -1792,7 +1995,8 @@ export default function Home() {
 
       {listsOpen && <ListsManager kind={listsOpen} initialRole={listsRole} roles={filler.roles} onRoleChange={filler.setRole} onClose={() => setListsOpen(null)} onChanged={() => { filler.reload(); if (slotEditor.open || catalog) loadCatalog(); }} />}
 
-      {eventOpen && activeChannel && <EventDialog channel={{ ...activeChannel, startTime: channelStart }} channels={channels} lineup={lineup} programs={programming.programs} date={selectedDate} generated={hasGeneratedSchedule(programming)} onClose={() => setEventOpen(false)} onPlace={placeEventEdit} />}
+      {eventOpen && activeChannel && <EventDialog channel={{ ...activeChannel, startTime: channelStart }} channels={channels} lineup={lineup} programs={programming.programs} date={selectedDate} generated={hasGeneratedSchedule(programming)} onClose={() => setEventOpen(false)} onPlace={placeEventEdit}
+        airOnce={live ? { unavailable: !scheduler.enabled ? scheduler.message ?? 'Scheduled changes are off on the Lineup server.' : dirty ? 'Save or revert your edits first: it’s planned against the lineup in Tunarr.' : undefined, onSchedule: scheduleAirOnce } : undefined} />}
       {templatesOpen && <TemplatesDialog channels={channels} activeChannel={activeChannel} activeHasSchedule={hasGeneratedSchedule(programming)} catalog={catalog} fillerRoles={filler.roles} onClose={() => setTemplatesOpen(false)} onApply={applyTemplate} />}
       {setupDialog === 'smart' && <SmartCollectionsManager onClose={() => setSetupDialog(null)} onChanged={() => { if (slotEditor.open || catalog) loadCatalog(); }} />}
       {setupDialog === 'sources' && <MediaSourcesDialog onClose={() => setSetupDialog(null)} />}
@@ -1839,6 +2043,52 @@ export default function Home() {
         onMoveBefore={(index) => moveBefore(index)}
         onSwap={swapWith}
         onClose={() => setArrangeOpen(false)}
+      />}
+
+      {view === 'guide' && <GuideGrid
+        channels={channels}
+        activeChannelId={activeChannelId}
+        now={now}
+        viewers={live ? viewers : {}}
+        live={live}
+        loadGuide={loadGridGuide}
+        onOpen={openFromGuide}
+        onWatch={live ? (channelId) => { setView(null); setWatching(channelId); } : undefined}
+        logo={(channel) => <ChannelLogo channel={channel} live={live} />}
+        onClose={() => setView(null)}
+      />}
+      {view === 'week' && activeChannel && <WeekView channel={activeChannel} lineup={slotPreview ? slotPreview.lineup : lineup} programs={viewPrograms} channelStart={slotPreview ? slotPreview.startTime : channelStart} date={selectedDate} kindOf={kindOf} onJump={(date, start, index) => { if (!slotPreview) { jumpTo(date, start, index); return; } changeDate(date); setView(null); }} onExport={exportDays} onClose={() => setView(null)} />}
+      {view === 'check' && activeChannel && <LineupCheckDialog channel={activeChannel} channels={channels} lineup={lineup} programs={programming.programs} channelStart={channelStart} date={selectedDate} kindOf={kindOf} live={live} channelFillerListIds={channelFillerIds} knownFillerListIds={knownFillerIds} aiEnabled={aiEnabled} onJump={jumpToIssue} onClose={() => setView(null)} />}
+      {view === 'align' && activeChannel && <AlignDialog
+        channelLabel={`CH ${activeChannel.number} · ${activeChannel.name.toUpperCase()}`}
+        lineup={lineup}
+        channelStart={channelStart}
+        isProgram={(item) => airKind(item, filler.spots, filler.roles) === 'program'}
+        lists={filler.lists}
+        roles={filler.roles}
+        repeated={loopedBefore > 0 && !generated}
+        onApply={(result, label) => replaceLineup(result.lineup, label)}
+        onClose={() => setView(null)}
+      />}
+      {view === 'marathon' && activeChannel && <MarathonDialog channel={{ ...activeChannel, startTime: channelStart }} lineup={lineup} programs={programming.programs} date={selectedDate} lists={filler.lists} roles={filler.roles} stationId={nextStationId} generated={hasGeneratedSchedule(programming)} onClose={() => setView(null)} onPlace={(placement, label, meta, date) => { placeEventEdit(placement, label, meta, date); setView(null); }} />}
+      {view === 'snapshots' && activeChannel && <SnapshotsDialog channel={activeChannel} live={live} lineup={lineup} programs={programming.programs} hasSchedule={hasGeneratedSchedule(programming)} onRestore={(next, programs, label) => replaceLineup(next, label, programs)} onClose={() => setView(null)} />}
+      {view === 'scheduled' && <ScheduledDialog live={live} channelLabel={(id, fallback) => { const channel = channels.find((item) => item.id === id); return channel ? `CH ${channel.number} ${channel.name}` : fallback || 'a channel that’s gone'; }} onClose={() => setView(null)} />}
+      {planKind && activeChannel && <PlanDialog kind={planKind} channel={activeChannel} lineup={slotPreview ? slotPreview.lineup : buildManualSave(lineup).request.lineup} source={slotPreview ? 'preview' : 'edits'} hasSchedule={hasGeneratedSchedule(programming)} enabled={scheduler.enabled} disabledMessage={scheduler.message} onPlan={(plan) => planChange(planKind, plan)} onClose={() => setPlanKind(null)} />}
+      {networkMode && activeChannel && <NetworkDialog
+        mode={networkMode}
+        source={activeChannel}
+        channels={channels}
+        block={{ items: lineup.slice(block.start, block.end + 1), start: selectedInstance?.start ?? null }}
+        programs={programming.programs}
+        drafts={draftMarks}
+        onDone={(text) => { notify(text); void tunarrApi.channels().then((list) => setChannels([...list].sort((a, b) => a.number - b.number))).catch(noteFailure); refreshDraftMarks(); }}
+        onClose={() => setNetworkMode(null)}
+      />}
+      {watching && channels.find((channel) => channel.id === watching) && <WatchDialog
+        channel={channels.find((channel) => channel.id === watching)!}
+        nowPlaying={watching === activeChannelId && onAir >= 0 ? (visibleInstances[onAir].title ?? programTitle(visibleInstances[onAir].item, viewPrograms)) : undefined}
+        onStep={stepWatch}
+        onClose={() => setWatching(null)}
       />}
 
       {message && <div className="toast" role="status">{message}</div>}

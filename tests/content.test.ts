@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildLibrarySearch, sanitizeMediaSources, validateChannelSettings, validateCustomShowBody, validateFillerListBody } from '../server/content';
 import { createProxyConfig, handleTunarrApi, type ProxyConfig, type ProxyRequest } from '../server/tunarrProxy';
+import { testDataDir } from './tempData';
 
 const UUID_A = '0e2d2a41-5f2f-4a7e-9d3a-2b1f0c9e8d7a';
 const UUID_B = '1e2d2a41-5f2f-4a7e-9d3a-2b1f0c9e8d7b';
@@ -11,7 +12,7 @@ type Call = { url: string; method: string; body?: unknown };
 function harness(reply: (url: string, method: string) => unknown) {
   const calls: Call[] = [];
   const config: ProxyConfig = {
-    ...createProxyConfig({ TUNARR_URL: 'http://tunarr:8000' }),
+    ...createProxyConfig({ LINEUP_DATA_DIR: testDataDir, TUNARR_URL: 'http://tunarr:8000' }),
     fetchImpl: (async (input: string | URL | Request, init?: RequestInit) => {
       const url = String(input).replace('http://tunarr:8000', '');
       const method = init?.method ?? 'GET';

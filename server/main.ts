@@ -18,16 +18,18 @@ const staticRoot = path.resolve(
 const server = createLineupServer({ config, auth, staticRoot, hosts });
 
 server.listen(port, host, () => {
+  config.scheduler?.start();
   const tunarr = config.target ? config.target.host : config.configError ? 'invalid TUNARR_URL' : 'not configured (set TUNARR_URL)';
   console.log(`Tunarr Lineup listening on http://${host}:${port} · Tunarr: ${tunarr} · sign-in: ${auth ? `on (user "${auth.username}")` : 'off'}`);
   if (!auth && host !== '127.0.0.1' && host !== 'localhost') {
     console.log('Anyone who can reach this port can edit channel programming. Set LINEUP_PASSWORD to require sign-in.');
   }
+  if (config.scheduler?.enabled) console.log('Scheduled changes are on (LINEUP_SCHEDULER): due changes are saved to Tunarr every 30 seconds.');
   if (!auth && !hosts.any) {
     console.log(`Answering to IP addresses and localhost${hosts.names.length ? ` and ${hosts.names.join(', ')}` : ''}. Add other host names to LINEUP_ALLOWED_HOSTS.`);
   }
 });
 
 for (const signal of ['SIGTERM', 'SIGINT'] as const) {
-  process.on(signal, () => server.close(() => process.exit(0)));
+  process.on(signal, () => { config.scheduler?.stop(); server.close(() => process.exit(0)); });
 }

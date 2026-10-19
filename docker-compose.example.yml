@@ -64,6 +64,8 @@ services:
       # different path, set LINEUP_MEDIA_TUNARR_DIR to it.
       - LINEUP_MEDIA_DIR=/media/lineup
       # - LINEUP_MEDIA_MAX_MB=4096
+      # Let Lineup save changes on a date (Save Later, seasonal overlays, events that air once).
+      # - LINEUP_SCHEDULER=on
     volumes:
       # Saved programming templates. A named volume, so the container's
       # non-root user owns it.

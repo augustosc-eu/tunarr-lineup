@@ -6,8 +6,14 @@ import { handleLineupRoute, matchLineupRoute, type LineupRoute } from './lineupR
 import { createFillerRoleStore, type FillerRoleStore } from './fillerRoleStore.js';
 import { createMediaFolder, type MediaFolder } from './mediaFolder.js';
 import { createTemplateStore, type TemplateStore } from './templateStore.js';
+import { createScheduler, type Scheduler } from './scheduler.js';
+import { createSharedDraftStore, type SharedDraftStore } from './sharedDraftStore.js';
+import { createSnapshotStore, type SnapshotStore } from './snapshotStore.js';
+import { handleWatchRoute, matchWatchRoute } from './watch.js';
 import { handleContentRoute, matchContentRoute, NOT_SAVEABLE, type ContentRoute } from './content.js';
 import { channelLogo, type ExternalImageFetcher } from './logos.js';
+import { withChannelLock } from './channelLock.js';
+import { lineupItemsError } from './lineupItems.js';
 import { callTunarr, fail, fetchUpstream, json, UpstreamError } from './upstream.js';
 import { buildSchedule, programPool, validateExtraPrograms, validateSeed } from './slotSchedule.js';
 import { findRedirectsTo, recreateChannel, validateRecreate, type RecreateMode } from './recreateChannel.js';
@@ -49,6 +55,12 @@ export type ProxyConfig = {
   mediaFolder?: MediaFolder | { off: string };
   /** AI programming assistant (LINEUP_AI_*), or why it is off. */
   ai?: AiConfig | { off: string };
+  /** Programming kept before every save (LINEUP_DATA_DIR/snapshots). */
+  snapshots?: SnapshotStore;
+  /** Unsaved desk work shared between browsers (LINEUP_DATA_DIR/drafts). */
+  drafts?: SharedDraftStore;
+  /** Changes saved on a date (LINEUP_SCHEDULER=on). */
+  scheduler?: Scheduler;
 };
 
 export type ProxyRequest = {
@@ -70,14 +82,12 @@ export const API_PREFIX = '/api/tunarr';
 export const DEFAULT_TIMEOUT_MS = 10_000;
 export const DEFAULT_SAVE_TIMEOUT_MS = 30_000;
 export const MAX_LINEUP_RANGE_MS = 14 * 24 * 3_600_000;
-export const MAX_LINEUP_ITEMS = 100_000;
+export { MAX_LINEUP_ITEMS } from './lineupItems.js';
 export const MAX_ARTWORK_BYTES = 8 * 1024 * 1024;
 export const ARTWORK_TYPES = ['poster', 'thumbnail', 'landscape', 'banner'] as const;
 
 const CHANNEL_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const ISO_DATETIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/;
-const LINEUP_ITEM_TYPES = new Set(['content', 'custom', 'filler', 'flex', 'redirect']);
-const ITEM_ID_REQUIRED = new Set(['content', 'custom', 'filler']);
 const PROGRAM_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const IMAGE_TYPE = /^image\/(jpeg|png|webp|gif|avif)$/i;
 
@@ -119,17 +129,23 @@ function positiveInt(raw: string | undefined, fallback: number) {
 
 export function createProxyConfig(env: Record<string, string | undefined>): ProxyConfig {
   const parsed = parseTunarrUrl(env.TUNARR_URL);
-  return {
+  const dataDir = path.resolve(env.LINEUP_DATA_DIR?.trim() || 'data');
+  const config: ProxyConfig = {
     target: parsed && 'target' in parsed ? parsed.target : null,
     configError: parsed && 'error' in parsed ? parsed.error : undefined,
     timeoutMs: positiveInt(env.TUNARR_TIMEOUT_MS, DEFAULT_TIMEOUT_MS),
     saveTimeoutMs: positiveInt(env.TUNARR_SAVE_TIMEOUT_MS, DEFAULT_SAVE_TIMEOUT_MS),
     externalLogos: env.LINEUP_EXTERNAL_LOGOS?.trim().toLowerCase() !== 'false',
-    templates: createTemplateStore(path.resolve(env.LINEUP_DATA_DIR?.trim() || 'data')),
-    fillerRoles: createFillerRoleStore(path.resolve(env.LINEUP_DATA_DIR?.trim() || 'data')),
+    templates: createTemplateStore(dataDir),
+    fillerRoles: createFillerRoleStore(dataDir),
     mediaFolder: createMediaFolder(env),
     ai: createAiConfig(env),
+    snapshots: createSnapshotStore(dataDir),
+    drafts: createSharedDraftStore(dataDir),
   };
+  const scheduler = env.LINEUP_SCHEDULER?.trim().toLowerCase();
+  config.scheduler = createScheduler(config, { enabled: scheduler === 'on' || scheduler === 'true' || scheduler === '1', dataDir, snapshots: config.snapshots });
+  return config;
 }
 
 type Route =
@@ -164,22 +180,6 @@ function matchRoute(pathname: string): Route | { invalid: string } | null {
     case 'logo': return { name: 'logo', methods: ['GET'], channelId: match[1] };
     case 'recreate': return { name: 'recreate', methods: ['GET', 'POST'], channelId: match[1] };
     default: return { name: 'schedule-preview', methods: ['POST'], channelId: match[1] };
-  }
-}
-
-// Writes to one channel are serialized, so the version check and the write
-// below cannot interleave with another Lineup session's save.
-const channelLocks = new Map<string, Promise<unknown>>();
-
-async function withChannelLock<T>(channelId: string, task: () => Promise<T>): Promise<T> {
-  const previous = channelLocks.get(channelId) ?? Promise.resolve();
-  const run = previous.then(task, task);
-  const settled = run.then(() => undefined, () => undefined);
-  channelLocks.set(channelId, settled);
-  try {
-    return await run;
-  } finally {
-    if (channelLocks.get(channelId) === settled) channelLocks.delete(channelId);
   }
 }
 
@@ -241,25 +241,9 @@ export function validateManualProgramming(body: unknown): { lineup: unknown[]; k
   if (request.type !== 'manual') return { error: 'Only manual programming ("type": "manual") can be saved here.' };
   if (request.append !== undefined && request.append !== false) return { error: '"append" must be false.' };
   if (request.keepOnAir !== undefined && typeof request.keepOnAir !== 'boolean') return { error: '"keepOnAir" must be true or false.' };
-  if (!Array.isArray(request.lineup)) return { error: '"lineup" must be an array.' };
-  if (request.lineup.length > MAX_LINEUP_ITEMS) return { error: 'Lineup is too large.' };
-  for (const [index, item] of request.lineup.entries()) {
-    if (!item || typeof item !== 'object' || Array.isArray(item)) return { error: `Lineup item ${index} must be an object.` };
-    const entry = item as Record<string, unknown>;
-    if (typeof entry.type !== 'string' || !LINEUP_ITEM_TYPES.has(entry.type)) {
-      return { error: `Lineup item ${index} has an unsupported type.` };
-    }
-    if (typeof entry.duration !== 'number' || !Number.isFinite(entry.duration) || entry.duration <= 0) {
-      return { error: `Lineup item ${index} needs a positive duration.` };
-    }
-    if (ITEM_ID_REQUIRED.has(entry.type) && (typeof entry.id !== 'string' || !entry.id)) {
-      return { error: `Lineup item ${index} is missing its program id.` };
-    }
-    if (entry.type === 'redirect' && typeof entry.channel !== 'string') {
-      return { error: `Lineup item ${index} is missing its redirect channel.` };
-    }
-  }
-  return { lineup: request.lineup, keepOnAir: request.keepOnAir === true };
+  const problem = lineupItemsError(request.lineup);
+  if (problem) return { error: problem };
+  return { lineup: request.lineup as unknown[], keepOnAir: request.keepOnAir === true };
 }
 
 /** Fetches program artwork through Tunarr. Only image bytes are passed on. */
@@ -309,7 +293,7 @@ async function handleContent(request: ProxyRequest, config: ProxyConfig, url: UR
   }
   const target = config.target;
   // Saved templates, filler roles, media files and the AI status are Lineup's own; everything else reads Tunarr.
-  const needsTunarr = kind !== 'lineup' || route.name === 'ai-template' || route.name === 'filler-sync' || route.name === 'filler-folder-add';
+  const needsTunarr = kind !== 'lineup' || route.name === 'ai-template' || route.name === 'filler-sync' || route.name === 'filler-folder-add' || (route.name === 'snapshots' && method === 'POST');
   if (!target && needsTunarr) {
     const error = notConfigured(config);
     return fail(503, error.code, error.message);
@@ -339,6 +323,24 @@ export async function handleTunarrApi(request: ProxyRequest, config: ProxyConfig
       const content = matchContentRoute(subpath, CHANNEL_ID);
       if (content && 'invalid' in content) return fail(400, 'invalid_parameter', content.invalid);
       if (content) return await handleContent(request, config, url, method, content, 'content');
+      const watch = matchWatchRoute(subpath, CHANNEL_ID);
+      if (watch && 'invalid' in watch) return fail(400, watch.invalid.startsWith('Channel') ? 'invalid_channel_id' : 'invalid_parameter', watch.invalid);
+      if (watch) {
+        if (method !== 'GET') return fail(405, 'method_not_allowed', `${method.slice(0, 10)} is not allowed on this route.`, {}, { allow: 'GET' });
+        if (isCrossOrigin(request.headers)) return fail(403, 'cross_origin_blocked', 'Requests must come from this app.');
+        if (watch.name !== 'guide' && [...url.searchParams.keys()].length) return fail(400, 'invalid_query', 'This route does not accept query parameters.');
+        const target = config.target;
+        if (!target) {
+          const error = notConfigured(config);
+          return fail(503, error.code, error.message);
+        }
+        try {
+          return await handleWatchRoute(watch, config, target, url, CHANNEL_ID);
+        } catch (error) {
+          if (!(error instanceof UpstreamError)) throw error;
+          return fail(error.status, error.code, error.message, { tunarrHost: target.host });
+        }
+      }
     }
     const route = matchRoute(url.pathname);
 
@@ -433,6 +435,9 @@ export async function handleTunarrApi(request: ProxyRequest, config: ProxyConfig
             if (programmingVersion(current?.lineup, current?.schedule) !== expectedVersion) {
               throw new UpstreamError(412, 'lineup_changed', 'This channel changed in Tunarr since it was loaded. Nothing was saved.');
             }
+            // Keep what's about to be replaced; a snapshot that can't be written doesn't block the save.
+            await config.snapshots?.take(route.channelId, current, pending.kind === 'manual' ? (pending.lineup.length ? 'Before a lineup save' : 'Before a reset') : 'Before a slot schedule save')
+              .catch((error) => console.error('[snapshots]', error instanceof Error ? error.message : error));
             let body: unknown;
             if (pending.kind === 'manual') {
               // A start-time change regenerates a slot schedule, which would discard this lineup.
@@ -481,7 +486,14 @@ export async function handleTunarrApi(request: ProxyRequest, config: ProxyConfig
           // GET: which channels redirect here, so the dialog can say what a recreate costs them.
           if (!recreateMode) return json(200, { redirects: await findRedirectsTo(call, route.channelId) });
           const mode = recreateMode;
-          return json(200, await withChannelLock(route.channelId, () => recreateChannel(call, route.channelId, mode, expectedVersion!)));
+          return json(200, await withChannelLock(route.channelId, async () => {
+            const before = await call('GET', `/api/channels/${route.channelId}/programming`).catch(() => null);
+            if (before) await config.snapshots?.take(route.channelId, before, mode === 'keep' ? 'Before detaching from the slot schedule' : 'Before a reset').catch(() => null);
+            const result = await recreateChannel(call, route.channelId, mode, expectedVersion!);
+            // The channel has a new id now; its snapshots go with it.
+            await config.snapshots?.moveChannel(route.channelId, result.id).catch(() => undefined);
+            return result;
+          }));
         }
         case 'schedule-preview': {
           const current = (await callTunarr(config, target, 'GET', `/api/channels/${route.channelId}/programming`)) as CurrentProgramming;

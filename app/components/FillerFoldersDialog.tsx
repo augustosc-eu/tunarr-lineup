@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { FILLER_ROLES, folderRole, ROLE_LABELS, type FillerRole, type FillerRoles } from '../../lib/fillerRoles';
 import type { ListSummary, ManagedSource } from '../../lib/library';
-import { tunarrApi, uploadMediaFile, type FillerSync, type MediaFolderStatus } from '../../lib/tunarrClient';
+import { mediaFileUrl, tunarrApi, uploadMediaFile, type FillerSync, type MediaFolderStatus } from '../../lib/tunarrClient';
 import type { FillerFolders } from '../../server/fillerRoles';
 
 type Props = { roles: FillerRoles; onClose: () => void; onChanged: () => void };
@@ -64,6 +64,8 @@ export function FillerFoldersDialog({ roles, onClose, onChanged }: Props) {
   const [folderRoles, setFolderRoles] = useState<Record<string, FillerRole>>({});
   const [newRole, setNewRole] = useState<FillerRole>('commercials');
   const [newPath, setNewPath] = useState('');
+  // The file being played back (role/name), to check a clip before giving it a role.
+  const [playing, setPlaying] = useState('');
   const inputs = useRef<Partial<Record<FillerRole, HTMLInputElement | null>>>({});
   const snippet = useRef<HTMLPreElement | null>(null);
   // Background pickup waits while an action runs, so the two don't race.
@@ -226,6 +228,8 @@ export function FillerFoldersDialog({ roles, onClose, onChanged }: Props) {
                     return (
                       <div className="candidate file-row" key={key}>
                         <span><b>{file.name}</b><small>{size(file.size)}</small></span>
+                        <button aria-label={`${playing === key ? 'Stop' : 'Play'} ${file.name}`} aria-pressed={playing === key} onClick={() => setPlaying((current) => (current === key ? '' : key))}>{playing === key ? 'Stop' : 'Play'}</button>
+                        {playing === key && <video className="clip-preview" src={mediaFileUrl(folder.role, file.name)} controls autoPlay playsInline aria-label={`Preview of ${file.name}`} onEnded={() => setPlaying('')} />}
                         <select aria-label={`Move ${file.name} to`} value={folder.role} disabled={!!working}
                           onChange={(event) => { const to = event.target.value as FillerRole; void run(`move-${key}`, async () => { await tunarrApi.moveMediaFile(folder.role, file.name, to); return `Moved ${file.name} to ${ROLE_LABELS[to]}. Both lists follow after Tunarr’s next scan.`; }); }}>
                           {FILLER_ROLES.map((role) => <option key={role} value={role}>{ROLE_LABELS[role]}</option>)}

@@ -8,6 +8,30 @@ were renamed 2026.10.1 and 2026.10.2.
 
 ## [Unreleased]
 
+### Seeing every channel
+
+- **Guide grid** (`G`): every channel and three hours across, from Tunarr's guide, driven by the remote; OK opens a program in the desk. Group by network (group title).
+- **Week view** (`W`): the channel's week as blocks, with **week and month program-log exports**.
+- **Watch live** (`L`): play a channel in the desk. The stream comes through the companion, which rewrites Tunarr's HLS playlist and refuses anything that points elsewhere. Uploaded filler clips can be played in Filler Folders.
+- **Viewer counts** on each channel (counts only).
+
+### Catching mistakes
+
+- **Check Lineup** (`C`, and a badge in the toolbar): missing programs, zero-length items, dead or self redirects, redirect loops, breaks from deleted lists, flex that shows the offline screen, repeats in a day or in a row, commercial minutes over a per-channel limit, mature ratings in family hours. Each jumps to where it airs. **Ask AI for a review** suggests changes (read-only).
+- **Align Programs to Clock…**: programs start on :00/:30 (or every 15 or 60 minutes), every pass.
+
+### Programming tools
+
+- **Marathon…**: a season back to back on a date with breaks between episodes.
+- **Copy Selection to Channel…**, **Simulcast Selection on Network…**, **Share Commercials With Network…**; the network is Tunarr's group title.
+- **Halloween** and **Christmas** templates, meant as seasonal overlays.
+
+### Safety over time
+
+- **Snapshots**: the companion keeps each channel's lineup before every save, reset and scheduled change (last 15) in `LINEUP_DATA_DIR/snapshots`. Restore one as an edit, or export and import a lineup as a file.
+- **Drafts follow you**: unsaved work is also kept on the companion (`LINEUP_DATA_DIR/drafts`), so it opens on any device.
+- **Scheduled changes** with `LINEUP_SCHEDULER=on` (off by default): **Save Later…**, **Save as Seasonal Overlay…**, and **Air once** for events. Each goes in only if the channel is still as planned; otherwise it's skipped with the reason. **File → Scheduled Changes…** lists and cancels them.
+
 ## [2026.10.3] - 2026-10-18
 
 ### Reset Channel, and Detach that really drops the slot schedule

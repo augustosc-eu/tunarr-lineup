@@ -467,7 +467,8 @@ input[type=checkbox] { width:1.25rem; height:1.25rem; margin:0; accent-color:var
 .media-setup { margin-bottom:0.75rem; }
 .media-setup-copy { display:flex; flex-wrap:wrap; align-items:center; gap:0.75rem; margin:0; }
 .media-setup pre { margin:0.5rem 0; padding:0.5rem 0.75rem; overflow-x:auto; background:#fff; border:1px solid #888; box-shadow:inset 1px 1px 0 #555, inset -1px -1px 0 #ddd; font-family:Monaco,"Courier New",monospace; font-size:0.875rem; line-height:1.35; white-space:pre; }
-.file-row { grid-template-columns:minmax(0,1fr) auto auto; min-height:2.75rem; }
+.file-row { grid-template-columns:minmax(0,1fr) auto auto auto; min-height:2.75rem; }
+.clip-preview { grid-column:1 / -1; width:100%; max-height:18rem; background:#000; border:1px solid #111; }
 .file-row > span:first-child { min-width:0; }
 .file-row b,.file-row small { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .file-row select,.source-head select { height:2.125rem; padding:0 0.375rem; background:#fff; border:1px solid #111; border-radius:0; box-shadow:inset 1px 1px #777,inset -1px -1px #fff; }
@@ -581,6 +582,112 @@ input[type=checkbox] { width:1.25rem; height:1.25rem; margin:0; accent-color:var
 .event-preview { margin:0.5rem 0; padding:0.5rem 0.625rem; display:grid; gap:0.25rem; background:#fff; border:1px solid #888; font-size:0.875rem; }
 @keyframes toast-in { from { opacity:0; transform:translate(-50%,0.25rem); } to { opacity:1; transform:translate(-50%,0); } }
 
+/* Guide grid, week view, lineup check, player and the other tools (2026-10-19). */
+.viewer-badge { display:inline-block; margin-left:0.375rem; padding:0 0.25rem; color:#fff; background:#b3261e; border:1px solid #5e130f; font-style:normal; font-size:0.6875rem; font-weight:700; letter-spacing:.02em; text-shadow:none; vertical-align:0.0625rem; }
+.channel.active .viewer-badge { border-color:#fff; }
+.check-badge { min-height:1.75rem; padding:0 0.5rem; font-size:0.8125rem; }
+.check-badge.has-issues { background:linear-gradient(#fff6c8,#ffe680 48%,#f0cf4c 52%,#fbe490); border-color:#6b5a14; }
+.watch-button { margin-top:0.375rem; }
+.check-toggle { display:flex; align-items:center; gap:0.375rem; font-size:0.875rem; }
+.check-toggle small { color:#555; }
+.air-once { margin:0.5rem 0; }
+.guide-overlay { padding:0.75rem; }
+.guide-modal { width:100%; max-width:120rem; height:calc(var(--vh) - var(--bar) - 1.5rem); max-height:none; display:flex; flex-direction:column; outline:1px solid #fff; }
+.guide-modal:focus { outline:1px solid #fff; }
+.guide-modal:before { content:'Guide'; }
+.guide-head { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:0.5rem 1rem; }
+.guide-head h2 { margin:0.25rem 0; }
+.guide-controls { display:flex; flex-wrap:wrap; align-items:center; gap:0.375rem; }
+.guide-grid { flex:1; min-height:0; overflow:auto; margin-top:0.5rem; background:#fff; border:1px solid #777; box-shadow:inset 1px 1px #bbb; }
+.guide-row { display:grid; grid-template-columns:minmax(10rem,15rem) minmax(0,1fr); min-height:3.5rem; border-bottom:1px solid #ccc; }
+.guide-row.current { background:#eef0fb; }
+.guide-row.focus-row .guide-channel { box-shadow:inset 0.25rem 0 0 var(--selection); }
+.guide-times { position:sticky; z-index:3; top:0; min-height:1.75rem; background:var(--platinum); border-bottom:1px solid #777; font-size:0.8125rem; font-weight:700; }
+.guide-channel { position:sticky; z-index:2; left:0; padding:0.25rem 0.5rem; display:flex; align-items:center; gap:0.5rem; min-width:0; background:inherit; background-color:#f3f3f3; border-right:1px solid #999; font-size:0.875rem; }
+.guide-times .guide-channel { background-color:var(--platinum); }
+.guide-channel span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.guide-channel .channel-logo { width:2.75rem; height:1.875rem; font-size:0.8125rem; }
+.guide-track { position:relative; min-width:36rem; overflow:hidden; }
+.guide-tick { position:absolute; top:0; bottom:0; padding:0.25rem 0.375rem; border-left:1px solid #999; }
+.guide-network { padding:0.25rem 0.5rem; background:repeating-linear-gradient(0deg,#c9c9c9 0,#c9c9c9 1px,#e6e6e6 1px,#e6e6e6 0.1875rem); border-bottom:1px solid #888; font-size:0.875rem; font-weight:700; text-shadow:1px 1px #fff; }
+.guide-network span { position:sticky; left:0.5rem; }
+.guide-cell { position:absolute; top:0.1875rem; bottom:0.1875rem; min-height:0; padding:0.1875rem 0.375rem; display:grid; align-content:center; overflow:hidden; text-align:left; border-radius:0; background:linear-gradient(#fff,#ececec); box-shadow:inset 1px 1px #fff,inset -1px -1px #999; }
+.guide-cell b,.guide-cell small { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.guide-cell b { font-size:0.875rem; }
+.guide-cell small { color:#555; font-size:0.75rem; }
+.guide-cell.airing { background:linear-gradient(#fffbe6,#fff0b3); }
+.guide-cell.type-flex { background:repeating-linear-gradient(135deg,#fafafa 0,#fafafa 0.375rem,#eeeeee 0.375rem,#eeeeee 0.75rem); }
+.guide-cell.type-redirect { background:#ececec; }
+.guide-cell.focused,.guide-cell:focus-visible { z-index:1; color:#fff; background:var(--selection); outline:0.125rem solid var(--focus); outline-offset:0; text-shadow:none; }
+.guide-cell.focused small,.guide-cell:focus-visible small { color:#dde; }
+.guide-cell.clip-start { border-left-style:dashed; }
+.guide-cell.clip-end { border-right-style:dashed; }
+.guide-now { position:absolute; z-index:2; top:0; bottom:0; width:2px; background:#c0261c; pointer-events:none; }
+.guide-loading,.guide-empty { position:absolute; inset:0; padding:0.75rem; color:#555; font-size:0.875rem; }
+.week-modal { width:min(110rem,100%); max-height:calc(var(--vh) - var(--bar) - 2rem); display:flex; flex-direction:column; }
+.week-modal:before { content:'Week View'; }
+.week-grid { flex:1; min-height:0; margin-top:0.5rem; display:grid; grid-template-columns:repeat(7,minmax(9rem,1fr)); gap:0.25rem; overflow:auto; }
+.week-day { display:flex; flex-direction:column; gap:0.125rem; min-width:0; background:#fff; border:1px solid #777; box-shadow:inset 1px 1px #bbb; }
+.week-day h3 { position:sticky; top:0; z-index:1; margin:0; padding:0.25rem 0.375rem; background:var(--platinum); border-bottom:1px solid #777; font-size:0.875rem; }
+.week-block { min-height:0; margin:0 0.125rem; padding:0.1875rem 0.375rem; display:grid; grid-template-columns:2.75rem minmax(0,1fr); gap:0.25rem; text-align:left; border-radius:0; border-color:#bbb; background:var(--kind-bg,#fff); box-shadow:inset 0.1875rem 0 0 var(--kind,#555); font-size:0.8125rem; }
+.week-block time { font-family:Monaco,"Courier New",monospace; font-size:0.75rem; }
+.week-block b,.week-block small { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.week-block small { color:#555; }
+.week-block:focus-visible { color:#fff; background:var(--selection); }
+.week-block:focus-visible small { color:#dde; }
+.check-modal { width:min(52rem,100%); }
+.check-modal:before { content:'Check Lineup'; }
+.check-counts { font-size:0.875rem; font-weight:700; }
+.issue-list,.snapshot-list,.change-list,.network-results { max-height:min(26rem,45vh); overflow:auto; margin:0.25rem 0; padding:0; list-style:none; background:#fff; border:1px solid #777; box-shadow:inset 1px 1px #bbb; }
+.issue { width:100%; min-height:3rem; padding:0.375rem 0.5rem; display:grid; grid-template-columns:5.5rem minmax(0,1fr) auto; align-items:center; gap:0.5rem; text-align:left; border:0; border-bottom:1px solid #ddd; border-radius:0; background:#fff; box-shadow:none; }
+.issue:disabled { color:inherit; text-shadow:none; cursor:default; }
+.issue b,.issue small { display:block; }
+.issue small { color:#555; font-size:0.8125rem; }
+.issue time { color:#333; font-size:0.8125rem; white-space:nowrap; }
+.issue-badge { padding:0 0.25rem; text-align:center; font-style:normal; font-size:0.6875rem; font-weight:700; letter-spacing:.04em; text-transform:uppercase; border:1px solid #111; }
+.severity-error .issue-badge { color:#fff; background:#b3261e; }
+.severity-warning .issue-badge { background:var(--yellow); }
+.severity-info .issue-badge { background:#e7effa; }
+.issue:focus-visible { color:#fff; background:var(--selection); outline-offset:-0.125rem; }
+.issue:focus-visible small,.issue:focus-visible time { color:#dde; }
+.issue-empty { padding:0.75rem; color:#555; font-size:0.875rem; }
+.check-settings { margin:0.5rem 0; }
+.check-settings summary { cursor:pointer; font-size:0.875rem; font-weight:700; }
+.ai-review { margin-top:0.5rem; padding:0.375rem 0.5rem; background:#f3f3fb; border:1px solid #9aa0cc; }
+.review p { margin:0.25rem 0; }
+.review ol { margin:0.25rem 0; padding-left:1.25rem; display:grid; gap:0.375rem; font-size:0.875rem; }
+.review li span { display:block; color:#333; }
+.review li small { padding:0 0.25rem; border:1px solid #888; text-transform:uppercase; font-size:0.6875rem; }
+.review .priority-high small { color:#fff; background:#b3261e; }
+.align-modal { width:min(44rem,100%); }
+.align-modal:before { content:'Align to Clock'; }
+.pick-lists { margin:0.5rem 0; padding:0.375rem 0.5rem; display:flex; flex-wrap:wrap; gap:0.25rem 1rem; border:1px solid #888; }
+.pick-lists legend { padding:0 0.25rem; font-size:0.875rem; font-weight:700; }
+.network-list { display:grid; max-height:min(22rem,40vh); overflow:auto; }
+.network-modal { width:min(52rem,100%); }
+.network-modal:before { content:'Network'; }
+.network-results li { padding:0.375rem 0.5rem; border-bottom:1px solid #ddd; font-size:0.875rem; }
+.network-results li.failed b { color:#a1271d; }
+.marathon-modal:before { content:'Marathon'; }
+.snapshots-modal,.scheduled-modal { width:min(52rem,100%); }
+.snapshots-modal:before { content:'Snapshots'; }
+.scheduled-modal:before { content:'Scheduled Changes'; }
+.snapshot-list li,.change-list li { min-height:3rem; padding:0.375rem 0.5rem; display:grid; grid-template-columns:minmax(0,1fr) auto auto; align-items:center; gap:0.375rem; border-bottom:1px solid #ddd; }
+.change-list li { grid-template-columns:minmax(0,1fr) auto; }
+.snapshot-list b,.snapshot-list small,.change-list b,.change-list small { display:block; }
+.snapshot-list small,.change-list small { color:#555; font-size:0.8125rem; }
+.change.status-skipped small,.change.status-failed small { color:#8a2a14; }
+.list-heading { margin:0.75rem 0 0.25rem; font-size:0.9375rem; }
+.toolbar-buttons { display:flex; flex-wrap:wrap; gap:0.375rem; }
+.plan-modal { width:min(44rem,100%); }
+.plan-modal:before { content:'Schedule a Change'; }
+.watch-modal { width:min(80rem,100%); }
+.watch-modal:before { content:'Watch Live'; }
+.watch-frame { position:relative; width:min(100%, calc((var(--vh) - var(--bar) - 12rem) * 16 / 9)); margin:0.5rem auto 0; background:#000; border:1px solid #111; aspect-ratio:16 / 9; }
+.watch-frame video { width:100%; height:100%; display:block; background:#000; }
+.watch-status { position:absolute; left:0.75rem; right:0.75rem; bottom:3.5rem; margin:0; padding:0.375rem 0.5rem; color:#fff; background:rgba(0,0,0,.65); font-size:0.875rem; }
+.watch-status.warning { color:#111; background:var(--yellow); }
+
 /* Responsive layout. Desktop and TV get three columns. Up to 1180px, Program Info
    becomes a sheet over the lineup: collapsed it shows the program and its everyday
    actions, and its title bar expands it to the full details. Up to 760px (phones), the
@@ -621,6 +728,11 @@ input[type=checkbox] { width:1.25rem; height:1.25rem; margin:0; accent-color:var
 }
 
 @media (max-width:760px) {
+  .guide-row { grid-template-columns:7.5rem minmax(0,1fr); }
+  .guide-channel .channel-logo { display:none; }
+  .guide-track { min-width:28rem; }
+  .week-grid { grid-template-columns:repeat(7,minmax(10rem,1fr)); }
+  .issue { grid-template-columns:1fr; }
   .menu.full { display:none; }
   .menu.compact { display:block; }
   .menu-sheet { position:fixed; top:var(--bar); left:0; right:0; min-width:0; max-height:calc(var(--vh) - var(--bar)); overflow-y:auto; overscroll-behavior:contain; padding:0.25rem 0 calc(0.5rem + env(safe-area-inset-bottom)); border-inline:0; box-shadow:0 0.25rem 0 rgba(0,0,0,.35); }

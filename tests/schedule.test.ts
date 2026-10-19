@@ -26,6 +26,7 @@ import { programmingVersion } from '../server/lineupVersion';
 import { buildSchedule, defaultSchedule, programPool, slotSourceKey, validateExtraPrograms, validateSeed } from '../server/slotSchedule';
 import { createProxyConfig, handleTunarrApi, type ProxyConfig } from '../server/tunarrProxy';
 import { mixedLineup } from './fixtures';
+import { testDataDir } from './tempData';
 
 const SHOW_A = '1aaf2f16-1ead-4fd2-bc7a-bfde35229faf';
 const SHOW_B = '2bbf2f16-1ead-4fd2-bc7a-bfde35229faf';
@@ -179,7 +180,7 @@ describe('slot schedule routes (proxy)', () => {
   const harness = (current: Record<string, unknown>) => {
     const calls: Call[] = [];
     const config: ProxyConfig = {
-      ...createProxyConfig({ TUNARR_URL: 'http://tunarr:8000' }),
+      ...createProxyConfig({ LINEUP_DATA_DIR: testDataDir, TUNARR_URL: 'http://tunarr:8000' }),
       fetchImpl: (async (input: string | URL | Request, init?: RequestInit) => {
         calls.push({ url: String(input), method: init?.method ?? 'GET', body: init?.body ? JSON.parse(String(init.body)) : undefined });
         const url = String(input);

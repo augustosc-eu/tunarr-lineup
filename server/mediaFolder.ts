@@ -7,7 +7,7 @@
 // is never overwritten and a broken upload never leaves a partial video.
 import { randomUUID } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
-import { link, mkdir, readdir, rename, rm, stat, unlink } from 'node:fs/promises';
+import { link, lstat, mkdir, readdir, rename, rm, stat, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import type { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
@@ -39,6 +39,8 @@ export type MediaFolder = {
   save(role: FillerRole, name: string, body: Readable, length: number): Promise<MediaFile>;
   move(role: FillerRole, name: string, to: FillerRole): Promise<void>;
   remove(role: FillerRole, name: string): Promise<void>;
+  /** A file to play back in the browser (preview): its path and size. Never a symlink or a folder. */
+  open(role: FillerRole, name: string): Promise<{ path: string; size: number; modifiedAt: number }>;
 };
 
 /**
@@ -163,6 +165,12 @@ export function createMediaFolderAt(root: string, tunarrRoot: string, maxBytes: 
         throw new StoreError(500, 'media_unwritable', 'The media folder could not be created. Check that LINEUP_MEDIA_DIR is writable.');
       }
       await placeNew(path.join(folder(role), name), path.join(folder(to), name));
+    },
+    async open(role, name) {
+      const file = path.join(folder(role), name);
+      const info = await lstat(file).catch(() => null);
+      if (!info || !info.isFile()) throw notFound();
+      return { path: file, size: info.size, modifiedAt: info.mtimeMs };
     },
     async remove(role, name) {
       try {

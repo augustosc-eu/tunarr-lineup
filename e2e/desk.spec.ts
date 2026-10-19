@@ -7,11 +7,17 @@ const FAKE = 'http://127.0.0.1:18000';
 const NEWS = '5d0c1e8a-7b6a-4d4c-9e2f-0000000000aa';
 
 type FakeState = { lineups: Record<string, Array<{ id?: string; type: string }>>; saves: number };
+/** The companion keeps unsaved work for every browser; start each test without any. */
+const clearSharedDrafts = async (page: Page) => {
+  const drafts = (await (await page.request.get('/api/tunarr/drafts')).json()) as Array<{ channelId: string }>;
+  for (const draft of drafts) await page.request.delete(`/api/tunarr/drafts/${draft.channelId}`);
+};
 const fakeState = async (page: Page) => (await (await page.request.get(`${FAKE}/__test/state`)).json()) as FakeState;
 const newsOrder = async (page: Page) => (await fakeState(page)).lineups[NEWS].map((item) => item.id?.slice(-1) ?? item.type);
 
 test.beforeEach(async ({ page }) => {
   await page.request.post(`${FAKE}/__test/reset`);
+  await clearSharedDrafts(page);
   await page.goto('/');
   await expect(page.locator('.channel.active')).toContainText('Desk News');
   await expect(page.locator('.program').first()).toBeVisible();

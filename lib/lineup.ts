@@ -40,6 +40,8 @@ export type Channel = {
   duration: number;
   programCount?: number;
   icon?: { path?: string };
+  /** Tunarr's group title, which Lineup treats as the channel's network. */
+  groupTitle?: string;
 };
 
 export type GuideProgram = {

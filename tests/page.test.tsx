@@ -46,7 +46,7 @@ const today = () => {
 };
 
 /** A stateful fake of the companion's /api/tunarr routes. */
-function fakeCompanion(options: { schedule?: { type: string; slots: unknown[]; [key: string]: unknown }; health?: Reply; programming?: Reply; lineupStatus?: number; lineup?: LineupItem[]; startTime?: number; stationIds?: boolean; ownStationIds?: boolean; namedIds?: boolean } = {}) {
+function fakeCompanion(options: { schedule?: { type: string; slots: unknown[]; [key: string]: unknown }; health?: Reply; programming?: Reply; lineupStatus?: number; lineup?: LineupItem[]; startTime?: number; stationIds?: boolean; ownStationIds?: boolean; namedIds?: boolean; scheduler?: boolean } = {}) {
   const startTime = options.startTime ?? dayRange(today()).from.getTime() - 60 * 60_000;
   const state = {
     lineup: options.lineup ?? (mixedLineup() as LineupItem[]),
@@ -67,6 +67,9 @@ function fakeCompanion(options: { schedule?: { type: string; slots: unknown[]; [
       [OWN_ID_LIST]: [{ type: 'content', id: IDENT_C, duration: 5_000, program: { type: 'other_video', title: 'Newsroom ident' } }],
     } as Record<string, unknown[]>,
     templates: [] as unknown[],
+    plans: [] as Array<{ group: string; changes: Array<Record<string, unknown>> }>,
+    snapshots: [{ id: '5b000000-0000-4000-8000-000000000001', channelId: 'chan-news', takenAt: Date.now() - 86_400_000, reason: 'Before a lineup save', version: 'old', hadSchedule: false, items: 1, length: 3_600_000 }],
+    otherLineup: [{ type: 'content', id: 'prog-alpha', duration: 30 * 60_000 }] as LineupItem[],
     sources: [{ id: 'src-1', name: 'Plex', type: 'plex', libraries: [{ id: 'lib-movies', name: 'Movies', mediaType: 'movies', enabled: true }] }] as Array<{ id: string; name: string; type: string; libraries: unknown[] }>,
     settings: { id: 'chan-news', name: 'Newsroom', number: 3, streamMode: 'hls', transcodeConfigId: 'p0000000-0000-4000-8000-000000000001', icon: { path: '' }, fillerCollections: (options.ownStationIds ? [{ id: OWN_ID_LIST, weight: 1, cooldownSeconds: 0 }] : []) as unknown[], fillerRepeatCooldown: 30000, disableFillerOverlay: false, guideMinimumDuration: 30000, guideFlexTitle: '', groupTitle: 'tunarr', startTime },
   };
@@ -127,6 +130,30 @@ function fakeCompanion(options: { schedule?: { type: string; slots: unknown[]; [
       return reply({ status: 200, body: saved });
     }
     if (url.pathname === '/api/tunarr/ai') return reply({ status: 200, body: { enabled: true, provider: 'anthropic', model: 'claude-sonnet-5-5' } });
+    // Watching, checks, snapshots and scheduled changes (server/watch.ts, server/lineupRoutes.ts).
+    if (url.pathname === '/api/tunarr/sessions') return reply({ status: 200, body: { 'chan-movies': { viewers: 2, streams: 1 } } });
+    if (url.pathname === '/api/tunarr/guide') {
+      const from = new Date(url.searchParams.get('from')!).getTime();
+      const to = new Date(url.searchParams.get('to')!).getTime();
+      return reply({ status: 200, body: { from: url.searchParams.get('from'), to: url.searchParams.get('to'), channels: channels.map((channel) => ({ id: channel.id, number: channel.number, name: channel.name, programs: guideFor(state.lineup, channel.startTime, from, to).map((entry) => ({ start: entry.start, stop: entry.stop, type: entry.type, title: String(entry.title ?? (entry.type === 'content' ? 'Alpha Movie' : 'Flex time')), detail: '', id: entry.id })) })) } });
+    }
+    if (url.pathname === '/api/tunarr/redirects') return reply({ status: 200, body: { edges: [] } });
+    if (url.pathname === '/api/tunarr/ai/review') return reply({ status: 200, body: { summary: 'A tidy evening.', suggestions: [{ title: 'Fix the dead redirect', detail: 'Channel Two is gone.', priority: 'high' }] } });
+    if (url.pathname === '/api/tunarr/scheduled' && method === 'GET') return reply({ status: 200, body: options.scheduler ? { enabled: true, changes: [] } : { enabled: false, message: 'Scheduled changes are off.', changes: [] } });
+    if (url.pathname === '/api/tunarr/scheduled' && method === 'POST') {
+      const plan = JSON.parse(String(init!.body)) as { group: string; changes: Array<Record<string, unknown>> };
+      state.plans.push(plan);
+      return reply({ status: 201, body: plan.changes.map((change, index) => ({ ...change, id: `c${index}`, status: 'pending' })) });
+    }
+    if (url.pathname === '/api/tunarr/channels/chan-news/snapshots') return reply({ status: 200, body: state.snapshots });
+    if (url.pathname === `/api/tunarr/channels/chan-news/snapshots/${state.snapshots[0].id}`) return reply({ status: 200, body: { ...state.snapshots[0], lineup: [state.lineup[5], state.lineup[0]], programs: {} } });
+    if (url.pathname === '/api/tunarr/channels/chan-movies/programming' && method === 'GET') return reply({ status: 200, body: { lineup: state.otherLineup, programs: mixedPrograms() } });
+    if (url.pathname === '/api/tunarr/channels/chan-movies/programming' && method === 'POST') {
+      const ifMatch = String((init?.headers as Record<string, string>)['if-match'] ?? '').replaceAll('"', '');
+      if (ifMatch !== programmingVersion(state.otherLineup, undefined)) return reply({ status: 412, body: { error: { code: 'lineup_changed', message: 'Changed.' } } });
+      state.otherLineup = (JSON.parse(String(init!.body)) as { lineup: LineupItem[] }).lineup;
+      return reply({ status: 200, body: { lineup: state.otherLineup } });
+    }
     if (url.pathname === '/api/tunarr/ai/template') return reply({ status: 200, body: AI_PROPOSAL });
     if (url.pathname === '/api/tunarr/smart-collections/preview') return reply({ status: 200, body: { totalHits: 12, sample: [{ id: 'm1', title: 'Toy Story', type: 'movie', year: 1995 }] } });
     if (url.pathname === '/api/tunarr/smart-collections/create') {
@@ -1507,5 +1534,143 @@ describe('station IDs, commercials and flex time', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save settings' }));
     await waitFor(() => expect(count(requests, 'PUT', '/api/tunarr/channels/chan-news/settings')).toBe(1));
     expect(state.settings.fillerCollections).toEqual([{ id: ID_LIST, weight: 1, cooldownSeconds: 0 }]);
+  });
+});
+
+describe('guide, checks and planning', () => {
+  const menu = (title: string, item: RegExp) => {
+    fireEvent.click(screen.getByRole('menuitem', { name: title }));
+    fireEvent.click(screen.getByRole('menuitem', { name: item }));
+  };
+
+  it('shows who is watching each channel, as a count', async () => {
+    fakeCompanion();
+    render(<Home />);
+    expect(await screen.findByLabelText('2 watching')).toBeTruthy();
+  });
+
+  it('opens the guide grid for every channel and goes to a program in the desk', async () => {
+    const { requests } = fakeCompanion();
+    render(<Home />);
+    await screen.findAllByText('Alpha Movie');
+    fireEvent.keyDown(document.body, { key: 'g' });
+    const grid = await screen.findByRole('grid', { name: 'Program guide' });
+    await waitFor(() => expect(within(grid).getAllByRole('gridcell').length).toBeGreaterThan(2));
+    expect(requests.some((r) => r.path === '/api/tunarr/guide' && r.search.has('from') && r.search.has('to'))).toBe(true);
+    expect(within(grid).getByText('Movie Night')).toBeTruthy();
+    // Back closes it.
+    fireEvent.keyDown(grid, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('grid', { name: 'Program guide' })).toBeNull());
+  });
+
+  it('checks the lineup, jumps to a problem, and asks the AI for a review', async () => {
+    const { requests } = fakeCompanion();
+    render(<Home />);
+    await screen.findAllByText('Alpha Movie');
+    // The redirect to Channel Two (not a channel here) is a problem; the toolbar badge counts it.
+    const badge = await screen.findByRole('button', { name: /Check lineup: \d+ issue/ });
+    fireEvent.click(badge);
+    const dialog = await screen.findByRole('dialog', { name: 'Check lineup' });
+    expect(within(dialog).getByText(/A redirect to Channel Two that no longer exists/)).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Ask AI for a review' }));
+    expect(await within(dialog).findByText('A tidy evening.')).toBeTruthy();
+    const review = requests.find((r) => r.path === '/api/tunarr/ai/review')!;
+    expect((review.body as { issues: string[] }).issues.some((issue) => issue.includes('Channel Two'))).toBe(true);
+    fireEvent.click(within(dialog).getByRole('button', { name: /A redirect to Channel Two/ }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Check lineup' })).toBeNull());
+    expect(document.querySelector('.program.selected')?.textContent).toContain('Channel Two');
+  });
+
+  it('aligns programs to the clock as one undoable edit', async () => {
+    fakeCompanion();
+    render(<Home />);
+    await screen.findAllByText('Alpha Movie');
+    menu('Edit', /^Align Programs to Clock/);
+    const dialog = await screen.findByRole('dialog', { name: 'Align programs to the clock' });
+    expect(within(dialog).getByRole('status', { name: 'Alignment preview' }).textContent).toMatch(/Adds /);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Align' }));
+    expect(await screen.findByText('Aligned programs to the 30-minute clock')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Save lineup' })).toBeTruthy();
+  });
+
+  it('restores a snapshot into the desk as an edit, without saving', async () => {
+    const { requests } = fakeCompanion();
+    render(<Home />);
+    await screen.findAllByText('Alpha Movie');
+    menu('File', /^Snapshots/);
+    const dialog = await screen.findByRole('dialog', { name: 'Snapshots' });
+    fireEvent.click(await within(dialog).findByRole('button', { name: 'Restore…' }));
+    expect(await screen.findByText(/^Restored the lineup from /)).toBeTruthy();
+    expect(count(requests, 'POST', '/api/tunarr/channels/chan-news/programming')).toBe(0);
+    expect(screen.getByRole('button', { name: 'Save lineup' })).toBeTruthy();
+  });
+
+  it('plans a dated save against the version in Tunarr', async () => {
+    const { state } = fakeCompanion({ scheduler: true });
+    render(<Home />);
+    await pickAlpha();
+    fireEvent.click(screen.getByRole('button', { name: /Later/ }));
+    menu('File', /^Save Later/);
+    const dialog = await screen.findByRole('dialog', { name: 'Save later' });
+    fireEvent.change(within(dialog).getByLabelText('Plan name'), { target: { value: 'Fall schedule' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Schedule save' }));
+    await waitFor(() => expect(state.plans).toHaveLength(1));
+    const [change] = state.plans[0].changes as Array<{ action: { kind: string; lineup: LineupItem[]; expectVersion: string }; label: string }>;
+    expect(state.plans[0].group).toBe('save');
+    expect(change.label).toBe('Fall schedule');
+    expect(change.action.expectVersion).toBe(programmingVersion(mixedLineup(), undefined));
+    // Alpha moved one place later: the edited order is what gets saved on the day.
+    expect(change.action.lineup[0].type).toBe('flex');
+    expect(change.action.lineup[1].id).toBe('prog-alpha');
+  });
+
+  it('schedules an event to air once as two patches for the companion', async () => {
+    const { state } = fakeCompanion({ scheduler: true });
+    render(<Home />);
+    await screen.findAllByText('Alpha Movie');
+    menu('Edit', /^Schedule Event/);
+    const dialog = await screen.findByRole('dialog', { name: 'Schedule an event' });
+    const tomorrow = new Date(`${today()}T12:00:00`);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    fireEvent.change(within(dialog).getByLabelText('Event date'), { target: { value: `${tomorrow.getFullYear()}-${String(tomorrow.getMonth() + 1).padStart(2, '0')}-${String(tomorrow.getDate()).padStart(2, '0')}` } });
+    fireEvent.change(within(dialog).getByLabelText('What airs'), { target: { value: 'flex' } });
+    fireEvent.change(within(dialog).getByLabelText('Event length minutes'), { target: { value: '20' } });
+    fireEvent.click(within(dialog).getByRole('checkbox', { name: /Air once/ }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Schedule to air once' }));
+    await waitFor(() => expect(state.plans).toHaveLength(1));
+    const [apply, undo] = state.plans[0].changes as Array<{ at: number; action: { kind: string; remove: string[]; insert: unknown[] } }>;
+    expect(state.plans[0].group).toBe('event');
+    expect(apply.action.kind).toBe('patch');
+    expect(undo.at).toBeGreaterThan(apply.at);
+    expect(undo.action.insert).toHaveLength(apply.action.remove.length);
+    // Nothing changed in the desk: the companion does it on the day.
+    expect(screen.getByRole('button', { name: 'Saved' })).toBeTruthy();
+  });
+
+  it('copies the selection to another channel with that channel’s own conditional save', async () => {
+    const { state, requests } = fakeCompanion();
+    render(<Home />);
+    await pickAlpha();
+    menu('Edit', /^Copy Selection to Channel/);
+    const dialog = await screen.findByRole('dialog', { name: 'Copy to another channel' });
+    fireEvent.change(within(dialog).getByLabelText('Where to copy'), { target: { value: 'end' } });
+    await within(dialog).findByText(/Goes to position #2 of CH 7 Movie Night/);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Copy and save' }));
+    await waitFor(() => expect(state.otherLineup).toHaveLength(2));
+    expect(state.otherLineup[1]).toMatchObject({ type: 'content', id: 'prog-alpha', persisted: true });
+    const post = requests.find((r) => r.method === 'POST' && r.path === '/api/tunarr/channels/chan-movies/programming')!;
+    expect(post.body).toMatchObject({ type: 'manual', append: false });
+  });
+
+  it('shows the week as blocks and goes to a day from it', async () => {
+    fakeCompanion();
+    render(<Home />);
+    await screen.findAllByText('Alpha Movie');
+    fireEvent.keyDown(document.body, { key: 'w' });
+    const week = await screen.findByRole('grid', { name: 'Week' });
+    expect(within(week).getAllByRole('columnheader')).toHaveLength(7);
+    expect(within(week).getAllByText('Alpha Movie').length).toBeGreaterThan(6);
+    fireEvent.click(within(week).getAllByRole('gridcell')[0]);
+    await waitFor(() => expect(screen.queryByRole('grid', { name: 'Week' })).toBeNull());
   });
 });

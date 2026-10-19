@@ -1,4 +1,6 @@
+import { createReadStream } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import path from 'node:path';
 import { StoreError } from './jsonFile.js';
 import { matchLineupRoute } from './lineupRoutes.js';
 import type { FillerRole } from './fillerRoles.js';
@@ -82,10 +84,82 @@ async function handleUpload(req: IncomingMessage, res: ServerResponse, config: P
   }
 }
 
+const PLAYBACK_TYPES: Record<string, string> = {
+  '.mp4': 'video/mp4', '.m4v': 'video/mp4', '.webm': 'video/webm', '.mov': 'video/quicktime', '.mkv': 'video/x-matroska',
+  '.ts': 'video/mp2t', '.m2ts': 'video/mp2t', '.mpg': 'video/mpeg', '.mpeg': 'video/mpeg', '.avi': 'video/x-msvideo', '.wmv': 'video/x-ms-wmv', '.flv': 'video/x-flv',
+};
+
+/** One `bytes=a-b` range within a file of `size` bytes, or null for anything else (then the whole file is sent). */
+export function parseRange(header: string | undefined, size: number): { start: number; end: number } | 'unsatisfiable' | null {
+  const match = /^bytes=(\d*)-(\d*)$/.exec(header?.trim() ?? '');
+  if (!match || (!match[1] && !match[2])) return null;
+  let start: number;
+  let end: number;
+  if (!match[1]) {
+    // A suffix: the last N bytes.
+    start = Math.max(0, size - Number(match[2]));
+    end = size - 1;
+  } else {
+    start = Number(match[1]);
+    end = match[2] ? Math.min(Number(match[2]), size - 1) : size - 1;
+  }
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start > end || start >= size) return 'unsatisfiable';
+  return { start, end };
+}
+
+/**
+ * Plays back a video from the media folder (GET /api/tunarr/media-folder/:role/:file),
+ * so a filler clip can be watched before it's tagged. Streamed with byte ranges
+ * for seeking; only files that pass `mediaFileName` in a role folder.
+ */
+async function handlePlayback(req: IncomingMessage, res: ServerResponse, config: ProxyConfig) {
+  const reply = (result: ProxyResponse) => send(res, result.status, result.headers, result.body);
+  const media = config.mediaFolder;
+  if (!media || 'off' in media) return reply(fail(503, 'media_folder_off', media && 'off' in media ? media.off : 'The media folder is off.'));
+  if (isCrossOrigin({ host: req.headers.host, origin: req.headers.origin, 'x-forwarded-host': req.headers['x-forwarded-host'] })) return reply(fail(403, 'cross_origin_blocked', 'Requests must come from this app.'));
+  const [pathname, query] = (req.url ?? '/').split('?');
+  if (query !== undefined) return reply(fail(400, 'invalid_query', 'This route does not accept query parameters.'));
+  const route = matchLineupRoute(pathname.slice(API_PREFIX.length));
+  if (route && 'invalid' in route) return reply(fail(400, 'invalid_parameter', route.invalid));
+  if (!route || route.name !== 'media-file') return reply(fail(405, 'method_not_allowed', 'Only files can be played.'));
+  let file: { path: string; size: number };
+  try {
+    file = await media.open(route.role, route.file);
+  } catch (error) {
+    return reply(error instanceof StoreError ? fail(error.status, error.code, error.message) : fail(500, 'internal_error', 'The file could not be read.'));
+  }
+  const headers: Record<string, string> = {
+    'content-type': PLAYBACK_TYPES[path.extname(file.path).toLowerCase()] ?? 'application/octet-stream',
+    'accept-ranges': 'bytes',
+    'cache-control': 'private, no-cache',
+    'x-content-type-options': 'nosniff',
+    'content-security-policy': "default-src 'none'; sandbox",
+  };
+  const range = parseRange(req.headers.range, file.size);
+  if (range === 'unsatisfiable') {
+    res.writeHead(416, { ...headers, 'content-range': `bytes */${file.size}` });
+    res.end();
+    return;
+  }
+  const start = range?.start ?? 0;
+  const end = range?.end ?? file.size - 1;
+  res.writeHead(range ? 206 : 200, { ...headers, 'content-length': String(Math.max(0, end - start + 1)), ...(range ? { 'content-range': `bytes ${start}-${end}/${file.size}` } : {}) });
+  if (req.method === 'HEAD' || file.size === 0) {
+    res.end();
+    return;
+  }
+  const stream = createReadStream(file.path, { start, end });
+  stream.on('error', () => res.destroy());
+  res.on('close', () => stream.destroy());
+  stream.pipe(res);
+}
+
 /** Adapts Node's http request/response to the framework-free proxy handler. */
 export async function handleNodeApiRequest(req: IncomingMessage, res: ServerResponse, config: ProxyConfig) {
   const method = req.method ?? 'GET';
   if (method === 'PUT' && (req.url ?? '').startsWith(MEDIA_PREFIX)) return handleUpload(req, res, config);
+  // Playing a media-folder file back; /move and the folder listing go to the proxy as usual.
+  if ((method === 'GET' || method === 'HEAD') && (req.url ?? '').startsWith(MEDIA_PREFIX) && !(req.url ?? '').split('?')[0].endsWith('/move')) return handlePlayback(req, res, config);
   let body: string | undefined;
   if (method === 'POST' || method === 'PUT') {
     const raw = await readBody(req, MAX_BODY_BYTES);

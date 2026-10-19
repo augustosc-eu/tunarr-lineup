@@ -162,5 +162,79 @@ export function createDraftStore(factory: IDBFactory | undefined = typeof indexe
   };
 }
 
+/** The companion's copy of drafts (GET/PUT/DELETE /api/tunarr/drafts), so they follow the user between devices. */
+export type CompanionDrafts = {
+  list(): Promise<Array<Pick<StoredDraft, 'channelId' | 'version' | 'updatedAt' | 'dirty'>>>;
+  get(channelId: string): Promise<StoredDraft | undefined>;
+  put(draft: StoredDraft): Promise<void>;
+  delete(channelId: string): Promise<void>;
+};
+
+const draftPath = (channelId: string) => `/api/tunarr/drafts/${encodeURIComponent(channelId)}`;
+
+/** Talks to the companion's draft routes; a missing route (hosted preview, older companion) rejects. */
+export function companionDrafts(doFetch: typeof fetch = (...args) => fetch(...args)): CompanionDrafts {
+  const call = async (path: string, init?: RequestInit) => {
+    const response = await doFetch(path, { credentials: 'same-origin', ...init, headers: { accept: 'application/json', ...init?.headers } });
+    if (!response.ok) throw new Error(`Drafts: HTTP ${response.status}`);
+    return response.json() as Promise<unknown>;
+  };
+  return {
+    async list() {
+      const data = await call('/api/tunarr/drafts');
+      if (!Array.isArray(data)) throw new Error('Drafts: not a list');
+      return data as Array<Pick<StoredDraft, 'channelId' | 'version' | 'updatedAt' | 'dirty'>>;
+    },
+    async get(channelId) { return ((await call(draftPath(channelId))) as StoredDraft | null) ?? undefined; },
+    async put(draft) { await call(draftPath(draft.channelId), { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(draft) }); },
+    async delete(channelId) { await call(draftPath(channelId), { method: 'DELETE' }); },
+  };
+}
+
+/**
+ * Drafts kept in this browser and, when the companion keeps them too, on the
+ * companion: whichever copy is newer wins, so work started on the TV opens on
+ * a laptop. The companion is checked once; without it, this is the local store.
+ */
+export function sharedDraftStore(local: DraftStore, remote: CompanionDrafts): DraftStore & { readonly shared: boolean } {
+  let available: Promise<boolean> | null = null;
+  const online = () => (available ??= remote.list().then(() => true, () => false));
+  const newer = (a: StoredDraft | undefined, b: StoredDraft | undefined) => (!a ? b : !b ? a : b.updatedAt > a.updatedAt ? b : a);
+  let shared = false;
+  return {
+    get persistent() { return local.persistent || shared; },
+    get shared() { return shared; },
+    async get(channelId) {
+      const [mine, theirs] = await Promise.all([local.get(channelId), online().then((ok) => (ok ? remote.get(channelId).catch(() => undefined) : undefined))]);
+      shared = await online();
+      return newer(mine, theirs);
+    },
+    async put(draft) {
+      await local.put(draft);
+      if (await online()) {
+        shared = true;
+        await remote.put(draft).catch(() => { /* Kept locally; the next write tries again. */ });
+      }
+    },
+    async delete(channelId) {
+      await local.delete(channelId);
+      if (await online()) await remote.delete(channelId).catch(() => {});
+    },
+    async list() {
+      const mine = await local.list();
+      if (!(await online())) return mine;
+      shared = true;
+      const theirs = await remote.list().catch(() => []);
+      const byChannel = new Map(mine.map((draft) => [draft.channelId, draft]));
+      // Summaries are enough for the channel list's "unsaved" marks.
+      for (const summary of theirs) {
+        const known = byChannel.get(summary.channelId);
+        if (!known || summary.updatedAt > known.updatedAt) byChannel.set(summary.channelId, { current: [], past: [], future: [], ...known, ...summary });
+      }
+      return [...byChannel.values()];
+    },
+  };
+}
+
 let shared: DraftStore | undefined;
-export const draftStore = () => (shared ??= createDraftStore());
+export const draftStore = () => (shared ??= sharedDraftStore(createDraftStore(), companionDrafts()));

@@ -48,3 +48,12 @@ export function keptStartTime(startTime: number, oldLength: number, newLength: n
   const passes = Math.max(0, Math.floor((now - startTime) / oldLength));
   return Math.max(0, Math.round(startTime + passes * (oldLength - newLength)));
 }
+
+/**
+ * What makes two lineup entries "the same item" across a save round trip (or
+ * a scheduled patch): its type, what it plays, and its length.
+ */
+export function itemIdentity(item: { type?: unknown; duration?: unknown; [key: string]: unknown }) {
+  const field = (name: string) => (typeof item[name] === 'string' || typeof item[name] === 'number' ? String(item[name]) : '');
+  return [item.type, field('id'), field('channel'), field('customShowId'), field('fillerListId'), field('index'), item.duration].join('|');
+}

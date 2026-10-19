@@ -39,7 +39,7 @@ see [Run with Docker Compose](#run-with-docker-compose-recommended).
   - Press `?` for the full list.
 - **Phones and tablets.** The desk adapts to the screen. On narrow screens Program Info is a sheet over the lineup with Earlier/Later, Move or swap, Insert and Remove; tap its title bar for the details. On phones, **Menu** opens every menu in one list and the channels are a strip you can swipe.
 - **Edit list.** Step-by-step undo and redo (⌘Z / ⇧⌘Z, or Ctrl+Z / Ctrl+Y). Changed rows are marked, and **Revert all** discards every edit.
-  - Unsaved work and the edit list are kept per channel in the browser (IndexedDB). They survive switching channels, reloading the page and turning the TV off.
+  - Unsaved work and the edit list are kept per channel in the browser (IndexedDB) and on the Lineup server (`LINEUP_DATA_DIR/drafts`), so work started on the TV opens on a laptop. They survive switching channels, reloading the page and turning the TV off; the newer copy wins.
   - The edit list carries over a save, so a save can be undone and saved again.
   - Channels with unsaved work are marked "unsaved" in the channel list.
 - **Slot schedules.** For channels Tunarr generates from a random-slot or time-slot schedule, **Channel → Edit Slot Schedule…** opens the slots.
@@ -57,6 +57,16 @@ see [Run with Docker Compose](#run-with-docker-compose-recommended).
   - redirects to another channel
 
   **Remove** (or `Delete`) takes items out. Flex, breaks and redirects have an adjustable length in the inspector. Every edit is in the edit list and the stored draft. The dialog says when inserted items will air. Because a manual lineup repeats from the channel's start time, a longer lineup moves later passes; tick **Keep what's on air in place** to have the companion move the start time on save so the current pass keeps its times.
+- **Guide grid.** **View → Guide Grid** (or `G`) shows every channel down the side and three hours across, like a cable box, from Tunarr's own guide. Arrows move between programs (paging at the edges), OK opens the program in the desk, `L` watches that channel. Tick **By network** to group channels by their group title.
+- **Week view and longer logs.** **View → Week View** (`W`) shows the channel's week, Monday to Sunday, as blocks (episodes of a show merged, breaks folded in), projected from the lineup. Export the week or the month as a program log (CSV).
+- **Watch live.** **Channel → Watch Live** (`L`, or **▶ Watch live** on the program on air) plays the channel in the desk. The stream comes through the Lineup server, which rewrites Tunarr's HLS playlist so the browser never contacts Tunarr. CH± changes channel. Uploaded filler clips have a **Play** button in Filler Folders.
+- **Who's watching.** The channel list and the guide show how many viewers each channel has right now (from Tunarr's sessions; counts only, never who).
+- **Lineup check.** **View → Check Lineup** (`C`, or the ✓/⚠ badge in the toolbar) finds what a broadcaster catches before air, for the day or the next 7 days: programs Tunarr no longer has, items with no length, redirects to channels that are gone or to the channel itself, redirect loops across channels (on request), breaks filled from deleted lists, flex time with no filler (the offline screen), the same episode twice in a day or twice in a row, hours over your commercial limit, and mature ratings in family hours (both set per channel). Each finding jumps to where it airs. With AI set up, **Ask AI for a review** reads the week and the findings and suggests changes; it never edits.
+- **Align programs to the clock.** **Edit → Align Programs to Clock…** pads a manual lineup so programs start on the hour, half hour or quarter hour, putting the time into the break before each program (or new padding from your commercial lists), and makes the whole cycle a whole number of steps so every pass lines up. One undoable edit.
+- **Marathons.** **Edit → Marathon…** puts a season (or any run of programs) on a date, back to back with a commercial break between episodes, opening each break with a station ID if you like.
+- **Across channels.** **Edit → Copy Selection to Channel…** copies the selected block to another channel (at a time, its start or its end); **Edit → Simulcast Selection on Network…** puts a redirect to this channel at the same time on every channel with the same group title (the network); **Channel → Share Commercials With Network…** gives them this channel's commercial settings. Each channel is saved with its own conditional save.
+- **Snapshots.** The Lineup server keeps each channel's lineup as it was before every save, reset and scheduled change (the last 15). **File → Snapshots, Export and Import…** restores one into the desk as an edit, takes one now, or exports and imports a lineup as a file.
+- **Scheduled changes** (with `LINEUP_SCHEDULER=on`): **File → Save Later…** saves the desk's lineup on a date; **File → Save as Seasonal Overlay…** puts a lineup (your edits, or a slot preview, such as the Halloween and Christmas templates) in on one date and brings the old one back on another; **Schedule Event → Air once** airs an event once and then puts back what it replaced. The Lineup server saves each one when it's due, only if the channel is as it was when planned; otherwise it's skipped and says why. **File → Scheduled Changes…** lists and cancels them.
 - **Library browser.** Browse or search any media source and library Tunarr has indexed (Plex, Jellyfin, Emby, local folders), and drill into shows and seasons. Libraries of up to 1,000 items are listed in episode order (by the number in each title, whatever its language) and searched by number as you type: "capitulo 2" finds "Chapter 2". Picks are listed before you insert them.
 - **Commercials and filler.**
   - **Setup → Filler Folders…** keeps station IDs, commercials, promos and bumpers as video files in folders, and Lineup picks them up by itself: the upload folder (one subfolder per role; upload, move or delete files from the desk), folders you add with a role, and any Tunarr library named for a role ("Commercials", "station-ids"). Each becomes a filler list with its role, and the list follows its folder after every Tunarr scan. See [Filler folders](#filler-folders) for the Docker setup.
@@ -157,6 +167,15 @@ accident.
 | `GET /api/tunarr/filler-folders`, `POST …/sync`, `POST …/add` | Automatic pickup: which lists follow which folders; `sync` adds the upload folder to Tunarr, makes lists for folders named for a role and refreshes followed lists after a newer scan; `add` adds a folder on the Tunarr server with a role (`POST {TUNARR_URL}/api/media-sources`) |
 | `GET /api/tunarr/media-folder`, `PUT`/`DELETE …/:role/:file`, `POST …/:role/:file/move` | Lineup's media folder (`LINEUP_MEDIA_DIR`): list, upload (raw video bytes, streamed to disk), delete and move files between role folders |
 | `GET /api/tunarr/ai`, `POST /api/tunarr/ai/template` | Lineup's AI assistant: status, and a template from `{ prompt, channelId?, includeLibrary, baseTemplate? }`. Reads context from Tunarr (search, lists, channel programming) and calls the configured AI provider |
+| `GET /api/tunarr/guide?from=…&to=…` | `GET {TUNARR_URL}/api/guide/channels` (every channel, up to 24 hours; reduced to times, titles and one line of detail) |
+| `GET /api/tunarr/sessions` | `GET {TUNARR_URL}/api/sessions` (viewer and stream counts per channel; addresses and user agents are dropped) |
+| `GET /api/tunarr/redirects` | Every channel's programming, for the redirect graph (loops) |
+| `GET /api/tunarr/channels/:id/stream.m3u8`, `GET …/hls/:file` | `GET {TUNARR_URL}/stream/channels/:id.m3u8?mode=hls` and `/stream/channels/:id/hls/:file`. Playlists are rewritten to point at the companion; one naming anything but this channel's HLS files is refused. Segments only of video/audio types |
+| `GET /api/tunarr/media-folder/:role/:file` | Plays a media-folder file back (byte ranges), for previews |
+| `GET`/`POST /api/tunarr/channels/:id/snapshots`, `GET`/`DELETE …/:snapshotId` | Lineup's own snapshots (`LINEUP_DATA_DIR/snapshots`); `POST` takes one from Tunarr's current copy |
+| `GET /api/tunarr/drafts`, `GET`/`PUT`/`DELETE …/:channelId` | Lineup's own shared drafts (`LINEUP_DATA_DIR/drafts`) |
+| `GET`/`POST /api/tunarr/scheduled`, `DELETE …/:id` | Lineup's own scheduled changes (`LINEUP_DATA_DIR/scheduled.json`), saved to Tunarr by the scheduler |
+| `POST /api/tunarr/ai/review` | The AI review of a week: `{ channelName, summary, issues }` to the configured provider; returns suggestions only |
 | `GET /api/tunarr/programs/:id/artwork/:type` | `GET {TUNARR_URL}/api/programs/:id/artwork/:type` (image types only; `:id` must be a UUID; `:type` is `poster`, `thumbnail`, `landscape` or `banner`) |
 
 The proxy is deliberately narrow (`server/tunarrProxy.ts`):
@@ -271,7 +290,8 @@ Server environment variables:
 | `TUNARR_TIMEOUT_MS` | `10000` | Upstream timeout for reads |
 | `TUNARR_SAVE_TIMEOUT_MS` | `30000` | Upstream timeout for saves |
 | `LINEUP_EXTERNAL_LOGOS` | `true` | Set to `false` to stop the companion fetching channel logos hosted on public sites |
-| `LINEUP_DATA_DIR` | `./data` (`/data` in Docker) | Where saved templates (`templates.json`) and filler-list roles (`filler-roles.json`) are kept |
+| `LINEUP_DATA_DIR` | `./data` (`/data` in Docker) | Where Lineup keeps its own data: saved templates, filler-list roles, snapshots, shared drafts and scheduled changes |
+| `LINEUP_SCHEDULER` | `off` | `on` lets the Lineup server save scheduled changes (dated saves, seasonal overlays, events that air once) when they're due |
 | `LINEUP_MEDIA_DIR` | (none: uploads off) | The media folder for filler videos, as Lineup sees it. Must also be mounted into Tunarr |
 | `LINEUP_MEDIA_TUNARR_DIR` | same as `LINEUP_MEDIA_DIR` | The same folder as Tunarr sees it, e.g. `/media/lineup` |
 | `LINEUP_MEDIA_MAX_MB` | `4096` | Largest file Lineup accepts, in MB |

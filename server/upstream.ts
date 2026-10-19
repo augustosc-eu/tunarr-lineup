@@ -46,12 +46,12 @@ export async function fetchUpstream(
   target: TunarrTarget,
   method: UpstreamMethod,
   path: string,
-  options: { accept: string; body?: string; notFound: string },
+  options: { accept: string; body?: string; notFound: string; timeoutMs?: number },
 ): Promise<{ response: Response; bytes: Uint8Array }> {
   const headers: Record<string, string> = { accept: options.accept };
   if (options.body !== undefined) headers['content-type'] = 'application/json';
   if (target.authorization) headers.authorization = target.authorization;
-  const timeoutMs = method === 'GET' ? config.timeoutMs : config.saveTimeoutMs;
+  const timeoutMs = options.timeoutMs ?? (method === 'GET' ? config.timeoutMs : config.saveTimeoutMs);
   const doFetch = config.fetchImpl ?? fetch;
 
   let response: Response;

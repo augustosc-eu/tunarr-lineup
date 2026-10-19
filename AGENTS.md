@@ -71,6 +71,10 @@ Chromium with `npx playwright install chromium`. CI runs all of them
      browser.
    - Slot schedules are validated in `server/slotSchedule.ts` (`buildSchedule`), and
      the program pool is computed server-side.
+   - Watching routes live in `server/watch.ts` (`matchWatchRoute`, owner decision
+     2026-10-19): the all-channel guide, viewer counts (never addresses or user agents)
+     and a channel's HLS stream. Stream playlists are rewritten to companion paths, and a
+     playlist naming anything but that channel's own HLS files is refused.
    - Adding a route means validating its params and body, adding tests, and documenting
      it in `docs/ARCHITECTURE.md`.
    - Keep the SSRF guards: fixed upstream origin, ID regexes, `redirect: 'manual'`,
@@ -113,12 +117,19 @@ Chromium with `npx playwright install chromium`. CI runs all of them
    the user picks "Use demo data". Keep demo mode visibly labeled.
 7. **Server stays dependency-free.** The runtime Docker stage copies only `dist-server/`
    and `dist-local/`, with no `node_modules`. Use Node built-ins in `server/`, or update
-   the Dockerfile deliberately. Its only stored state is saved templates in
-   `LINEUP_DATA_DIR/templates.json` (`server/templateStore.ts`) and filler-list roles in
-   `LINEUP_DATA_DIR/filler-roles.json` (`server/fillerRoleStore.ts`, owner decision
-   2026-10-07), both through `server/jsonFile.ts`: atomic writes, and a file it can't
-   parse is never overwritten. When `LINEUP_MEDIA_DIR` is set, it also holds the
-   filler videos users upload there.
+   the Dockerfile deliberately (client-only packages such as `hls.js` are bundled into
+   `dist-local/`). Its stored state, all through `server/jsonFile.ts` (atomic writes; a
+   file it can't parse is never overwritten): saved templates (`templates.json`,
+   `server/templateStore.ts`), filler-list roles (`filler-roles.json`,
+   `server/fillerRoleStore.ts`, owner decision 2026-10-07), and since the owner decision
+   of 2026-10-19 snapshots (`snapshots/<channel>.json`, `server/snapshotStore.ts`),
+   shared drafts (`drafts/`, `server/sharedDraftStore.ts`) and scheduled changes
+   (`scheduled.json`, `server/scheduler.ts`). When `LINEUP_MEDIA_DIR` is set, it also
+   holds the filler videos users upload there.
+   - **The scheduler** (`LINEUP_SCHEDULER=on`, off by default) is the only thing that
+     writes to Tunarr without someone at the desk. It uses the same conditional save
+     under `withChannelLock` (`server/channelLock.ts`), takes a snapshot first, and skips
+     (never forces) a change whose channel no longer matches what was planned.
 8. **Keep the desk TV/remote-operable.** Every action must be reachable without a
    mouse: arrow keys, Enter/OK, Escape/Back, PageUp/PageDown or CH±, the menus and
    the `?` shortcut list. Don't add hover-only or drag-only features.
@@ -145,20 +156,27 @@ Chromium with `npx playwright install chromium`. CI runs all of them
   editing (seasons, linked slots), `templates.ts` (presets, ad styles, `templateToDraft`,
   `scheduleToTemplate`), `networkTemplates.ts` (the network catalog), `templateCatalog.ts`,
   `events.ts` (placing events on dates), `fillerRoles.ts` (filler-list roles, spot lengths),
-  `airKinds.ts` (station-log kinds: breaks, IDs, flex; hour summaries, break rundowns), and
-  `programInfo.ts` for titles, artwork and logo URLs.
+  `airKinds.ts` (station-log kinds: breaks, IDs, flex; hour summaries, break rundowns),
+  `lineupCheck.ts` (the lineup check), `weekLog.ts` (several days: week view, logs, AI
+  summary), `guideGrid.ts` (guide grid layout and focus), and `programInfo.ts` for titles,
+  artwork and logo URLs.
 - **Put HTTP and validation logic in `server/`:** `tunarrProxy.ts` (framework-free),
   `content.ts`, `admin.ts`, `logos.ts`, `smartCollection.ts`, `templateSchema.ts`,
   `templateStore.ts`, `fillerRoles.ts`, `fillerRoleStore.ts`, `mediaFolder.ts`, `jsonFile.ts`, `lineupRoutes.ts`, `ai.ts`, `upstream.ts`,
+  `watch.ts`, `snapshotStore.ts`, `sharedDraftStore.ts`, `scheduler.ts`, `channelLock.ts`, `lineupItems.ts`,
   `slotSchedule.ts`, `recreateChannel.ts`, `lineupVersion.ts`, `auth.ts`, `hosts.ts` and `app.ts`. `lib/` and
   `app/` may import pure modules from `server/` (`lineupVersion`, `slotSchedule`,
-  `smartCollection`, `templateSchema`, `fillerRoles`) but never Node APIs (`logos.ts`,
-  `jsonFile.ts`, `mediaFolder.ts` and the stores use Node built-ins).
+  `smartCollection`, `templateSchema`, `fillerRoles`; types from any module) but never Node
+  APIs (`logos.ts`, `jsonFile.ts`, `mediaFolder.ts`, the stores and the scheduler use Node
+  built-ins).
 - **Keep `app/page.tsx` for UI state and rendering,** and `app/components/` for larger
   UI pieces: `MenuBar`, `MoveDialog`, `ScheduleEditor`, `InsertDialog`,
   `LibraryBrowser`, `ListsManager`, `ChannelSettingsDialog`, `NewChannelDialog`,
   `SmartCollectionsManager`, `MediaSourcesDialog`, `FillerFoldersDialog`, `TranscodeProfilesDialog`,
-  `TemplatesDialog` (gallery, AI panel), `TemplateEditor`, `EventDialog`, `DayStrip`.
+  `TemplatesDialog` (gallery, AI panel), `TemplateEditor`, `EventDialog`, `DayStrip`,
+  `GuideGrid`, `WeekView`, `LineupCheckDialog`, `AlignDialog`, `MarathonDialog`,
+  `NetworkDialog` (copy, simulcast, shared commercials), `WatchDialog`, `SnapshotsDialog`,
+  `PlanDialog` (Save Later, seasonal overlays), `ScheduledDialog`.
   `app/useFillerSpots.ts` loads filler lists, their roles and spots for the day view.
 - **Add or update tests** for any behavior change.
   - Unit and UI tests go in `tests/`. Proxy tests inject `fetchImpl`; UI tests mock

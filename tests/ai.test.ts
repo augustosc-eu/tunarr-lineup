@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { buildUserMessage, callModel, createAiConfig, resolveProposal, type AiConfig, type AiContext } from '../server/ai';
 import { createTemplateStore } from '../server/templateStore';
 import { createProxyConfig, handleTunarrApi, type ProxyConfig, type ProxyRequest } from '../server/tunarrProxy';
+import { testDataDir } from './tempData';
 
 const SHOW = '0e2d2a41-5f2f-4a7e-9d3a-2b1f0c9e8d7a';
 const COLLECTION = '1e2d2a41-5f2f-4a7e-9d3a-2b1f0c9e8d7b';
@@ -137,7 +138,7 @@ describe('Lineup routes', () => {
       return Response.json({ content: [{ type: 'tool_use', input: aiReply }] });
     }) as unknown as typeof fetch;
     const config: ProxyConfig = {
-      ...createProxyConfig({ TUNARR_URL: 'http://tunarr:8000' }),
+      ...createProxyConfig({ LINEUP_DATA_DIR: testDataDir, TUNARR_URL: 'http://tunarr:8000' }),
       fetchImpl: tunarr,
       templates: createTemplateStore(await mkdtemp(path.join(tmpdir(), 'lineup-routes-'))),
       ai: { provider: 'anthropic', model: 'claude-sonnet-5-5', baseUrl: 'https://api.anthropic.com', apiKey: 'secret-key', timeoutMs: 1000, fetchImpl: aiFetch },

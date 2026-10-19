@@ -2,7 +2,7 @@
 // (saved templates, filler-list roles): serialized writes, atomic replace,
 // and a file that can't be parsed is never overwritten.
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 export class StoreError extends Error {
@@ -18,6 +18,8 @@ export type JsonFile = {
   /** The parsed file, or undefined when it doesn't exist yet. */
   read(): Promise<unknown>;
   write(data: unknown): Promise<void>;
+  /** Deletes the file; a file that is already gone is fine. */
+  remove(): Promise<void>;
 };
 
 /** `what` names the contents in errors ("saved templates", "filler-list roles"). */
@@ -54,6 +56,13 @@ export function createJsonFile(dir: string, name: string, what: string): JsonFil
         await rename(tmp, file);
       } catch {
         throw new StoreError(500, 'store_unwritable', `The ${what} could not be saved. Check that LINEUP_DATA_DIR (${dir}) is writable.`);
+      }
+    },
+    async remove() {
+      try {
+        await unlink(file);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw new StoreError(500, 'store_unwritable', `The ${what} could not be deleted.`);
       }
     },
   };

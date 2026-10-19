@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { handleNodeApiRequest } from '../server/nodeAdapter';
 import { keptStartTime, lineupLength, programmingVersion } from '../server/lineupVersion';
 import { createProxyConfig, handleTunarrApi, type ProxyConfig, type ProxyRequest } from '../server/tunarrProxy';
+import { testDataDir } from './tempData';
 
 type Call = { url: string; init: RequestInit };
 
@@ -13,7 +14,7 @@ function setup(responder: (url: string, init: RequestInit) => Promise<Response> 
     calls.push({ url: String(input), init: init ?? {} });
     return responder(String(input), init ?? {});
   });
-  const config: ProxyConfig = { ...createProxyConfig({ TUNARR_URL: 'http://tunarr:8000', ...env }), fetchImpl: fetchImpl as unknown as typeof fetch };
+  const config: ProxyConfig = { ...createProxyConfig({ LINEUP_DATA_DIR: testDataDir, TUNARR_URL: 'http://tunarr:8000', ...env }), fetchImpl: fetchImpl as unknown as typeof fetch };
   return { calls, config, fetchImpl };
 }
 
@@ -404,7 +405,7 @@ describe('over real HTTP', () => {
       res.writeHead(200, { 'content-type': 'application/json', 'set-cookie': 'tunarr=1' });
       res.end(JSON.stringify(channels));
     }));
-    const config = createProxyConfig({ TUNARR_URL: `http://127.0.0.1:${tunarrPort}` });
+    const config = createProxyConfig({ LINEUP_DATA_DIR: testDataDir, TUNARR_URL: `http://127.0.0.1:${tunarrPort}` });
     const appPort = await listen(http.createServer((req, res) => void handleNodeApiRequest(req, res, config)));
 
     const response = await fetch(`http://127.0.0.1:${appPort}/api/tunarr/channels`, {
@@ -430,7 +431,7 @@ describe('over real HTTP', () => {
         res.end(JSON.stringify({ id: '0e2d2a41-5f2f-4a7e-9d3a-2b1f0c9e8d7a' }));
       });
     }));
-    const config = createProxyConfig({ TUNARR_URL: `http://127.0.0.1:${tunarrPort}` });
+    const config = createProxyConfig({ LINEUP_DATA_DIR: testDataDir, TUNARR_URL: `http://127.0.0.1:${tunarrPort}` });
     const appPort = await listen(http.createServer((req, res) => void handleNodeApiRequest(req, res, config)));
     const response = await fetch(`http://127.0.0.1:${appPort}/api/tunarr/filler-lists/0e2d2a41-5f2f-4a7e-9d3a-2b1f0c9e8d7a`, {
       method: 'PUT',
@@ -442,7 +443,7 @@ describe('over real HTTP', () => {
   });
 
   it('rejects oversized request bodies', async () => {
-    const config = createProxyConfig({ TUNARR_URL: 'http://127.0.0.1:9' });
+    const config = createProxyConfig({ LINEUP_DATA_DIR: testDataDir, TUNARR_URL: 'http://127.0.0.1:9' });
     const appPort = await listen(http.createServer((req, res) => void handleNodeApiRequest(req, res, config)));
     const response = await fetch(`http://127.0.0.1:${appPort}/api/tunarr/channels/abc/programming`, {
       method: 'POST',

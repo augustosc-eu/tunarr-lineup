@@ -94,6 +94,8 @@ function initialState() {
       [ids.ep2]: episode(ids.ep2, 'Rotation Finale'),
     },
     saves: 0,
+    // Stream paths the companion asked for (watching from the desk).
+    streamRequests: [],
   };
 }
 
@@ -156,7 +158,7 @@ http.createServer(async (req, res) => {
     state = initialState();
     return send(res, 200, { ok: true });
   }
-  if (path === '/__test/state') return send(res, 200, { lineups: state.lineups, saves: state.saves, schedules: state.schedules, lastScheduleSave: state.lastScheduleSave, fillerLists: state.fillerLists, smartCollections: state.smartCollections, mediaSources: state.mediaSources, transcodeConfigs: state.transcodeConfigs, channels: state.channels.map((channel) => ({ ...channel, ...state.channelExtras[channel.id] })) });
+  if (path === '/__test/state') return send(res, 200, { streamRequests: state.streamRequests, lineups: state.lineups, saves: state.saves, schedules: state.schedules, lastScheduleSave: state.lastScheduleSave, fillerLists: state.fillerLists, smartCollections: state.smartCollections, mediaSources: state.mediaSources, transcodeConfigs: state.transcodeConfigs, channels: state.channels.map((channel) => ({ ...channel, ...state.channelExtras[channel.id] })) });
 
   // Tunarr setup: uploaded images, channels, transcode profiles, media sources, smart collections.
   if (/^\/images\/uploads\/[^/]+$/.test(path)) return send(res, 200, PNG, 'image/png');
@@ -299,6 +301,29 @@ http.createServer(async (req, res) => {
   }
 
   if (path === '/api/channels' && req.method === 'GET') return send(res, 200, state.channels);
+
+  // Every channel's guide at once (the guide grid).
+  if (path === '/api/guide/channels' && req.method === 'GET') {
+    const from = Date.parse(url.searchParams.get('dateFrom'));
+    const to = Date.parse(url.searchParams.get('dateTo'));
+    return send(res, 200, Object.fromEntries(state.channels.map((item) => [item.id, { id: item.id, name: item.name, number: item.number, icon: item.icon, programs: guide(item, state.lineups[item.id], from, to) }])));
+  }
+  // Who's watching: Tunarr includes viewer addresses, which the companion must drop.
+  if (path === '/api/sessions' && req.method === 'GET') {
+    return send(res, 200, { [ids.news]: [{ type: 'hls', state: 'started', numConnections: 3, connections: [{ ip: '10.9.8.7', userAgent: 'LivingRoomTV' }] }] });
+  }
+  // Live streams: a master playlist, a variant, and a couple of tiny MPEG-TS segments.
+  const stream = /^\/stream\/channels\/([^/]+?)(\.m3u8|\/hls\/([^/]+))$/.exec(path);
+  if (stream && req.method === 'GET') {
+    state.streamRequests.push(`${path}${url.search}`);
+    const id = stream[1];
+    if (stream[2] === '.m3u8') return send(res, 200, `#EXTM3U\n#EXT-X-VERSION:6\n#EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=640x360\n/stream/channels/${id}/hls/stream.m3u8\n`, 'application/vnd.apple.mpegurl');
+    if (stream[3] === 'stream.m3u8') return send(res, 200, `#EXTM3U\n#EXT-X-VERSION:6\n#EXT-X-TARGETDURATION:4\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:4.0,\n/stream/channels/${id}/hls/data000000.ts\n#EXTINF:4.0,\ndata000001.ts\n`, 'application/vnd.apple.mpegurl');
+    // Null MPEG-TS packets: valid framing, no picture.
+    const packet = Buffer.alloc(188, 0xff);
+    packet[0] = 0x47; packet[1] = 0x1f; packet[2] = 0xff; packet[3] = 0x10;
+    return send(res, 200, Buffer.concat(Array.from({ length: 8 }, () => packet)), 'video/mp2t');
+  }
 
   const artwork = /^\/api\/programs\/([^/]+)\/artwork\/([^/]+)$/.exec(path);
   if (artwork && req.method === 'GET') return state.programs[artwork[1]] ? send(res, 200, PNG, 'image/png') : send(res, 404, '', 'text/plain');

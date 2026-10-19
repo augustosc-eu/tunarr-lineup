@@ -433,3 +433,43 @@ on the `broadcast-programming` branch.
   - **The cost is shown first.** The dialogs say the internal id changes and name the channels whose lineup or slots redirect here (`GET …/recreate`).
 - **Not built:** rewriting other channels' redirects to the new id. It would mean saving other channels' programming, and a manual save also clears their `scheduleSeed`.
 - **Consequence:** detached and reset channels have a new Tunarr id. Lineup's draft for the old id is deleted. Anything outside Lineup that stored the old id has to be updated; channel numbers stay the same.
+
+## D49. Watching from the desk goes through allowlisted stream routes
+
+- **Status:** Explicit: the owner asked to build every feature on a proposed list and chose "allowlisted routes" for watching and viewer counts (2026-10-19). Evidenced: `server/watch.ts`, `app/components/WatchDialog.tsx`, `tests/watch.test.ts`, the watching e2e test.
+- **Decision:**
+  - **`GET /api/tunarr/channels/:id/stream.m3u8` and `…/hls/:file`** fetch Tunarr's `/stream/channels/:id.m3u8?mode=hls` and `/stream/channels/:id/hls/:file` (read on a real Tunarr 2026.9.3: a master playlist pointing at `hls/stream.m3u8`, which lists `dataNNNNNN.ts`). File names must match `STREAM_FILE`.
+  - **Playlists are rewritten, failing closed.** Every address (lines and `URI="…"` attributes) must resolve to this channel's own HLS files on `TUNARR_URL`; otherwise the whole playlist is refused (502 `stream_unexpected`). Segments pass only with video/audio types, up to 64 MB each.
+  - **Always HLS**, whatever the channel's stream mode, because that's what a browser plays. Safari and TV browsers play it natively; elsewhere `hls.js` (client bundle only, loaded on first use) does.
+  - **Viewer counts** come from `/api/sessions` reduced to `{ viewers, streams }` per channel; IPs and user agents never leave the companion.
+  - The page CSP gains `media-src 'self' blob:` and `worker-src 'self' blob:` for MSE playback; `connect-src` stays `'self'`.
+- **Consequence:** watching starts a Tunarr session like any player, and counts as a viewer. Segments are buffered whole by the proxy (they are a few seconds each). Previewing a library program before inserting it isn't possible: Tunarr has no per-program stream route; uploaded filler files can be played from the media folder.
+
+## D50. The companion keeps snapshots and shared drafts
+
+- **Status:** Explicit: owner, 2026-10-19 ("allow companion storage"). This widens invariant 7. Evidenced: `server/snapshotStore.ts`, `server/sharedDraftStore.ts`, `sharedDraftStore` in `lib/draftStore.ts`, `tests/companionStores.test.ts`.
+- **Decision:**
+  - **Snapshots:** before every manual or schedule save, reset, recreate and scheduled change, the companion keeps the programming it's about to replace (one file per channel, newest first, at most 15 and 40 MB; repeats of the same version are skipped; slim titles kept). A snapshot that can't be written doesn't block the save. Restoring loads it into the desk as an edit, saved like any other, so it never bypasses the conditional save. A recreated channel's snapshots move to its new id.
+  - **Shared drafts:** the browser writes each draft both to IndexedDB and to the companion (`/drafts/:channelId`), and reads whichever is newer, so work started on the TV opens on a laptop. The companion validates the draft's shape (positions, edits, added items) and keeps up to 120. A missing route (hosted preview) leaves drafts local.
+  - **Export and import** of a lineup as a JSON file are browser-only and also load as an edit.
+- **Consequence:** two devices editing one channel see the last-written draft when they next load it; there is no live merge. Tests that share a companion must clear its drafts (the e2e suite does).
+
+## D51. Changes on a date are saved by a companion scheduler, off by default
+
+- **Status:** Explicit: owner, 2026-10-19 ("build it, off by default"). Evidenced: `server/scheduler.ts`, `app/components/PlanDialog.tsx`, `ScheduledDialog.tsx`, the air-once option in `EventDialog`, `tests/scheduler.test.ts`.
+- **Decision:**
+  - **`LINEUP_SCHEDULER=on`** starts a 30-second timer in the companion. Without it, plans are refused (503) and the list says how to turn it on.
+  - **Three kinds of change:** `lineup` (save this manual lineup, only if the channel's version is still `expectVersion`), `patch` (swap items in place, only if the items being removed are still there by `itemIdentity`), and `restore` (put back the snapshot a `lineup` change replaced, only if nothing changed since it went in).
+  - **Plans:** Save Later is one `lineup` change; a seasonal overlay is a `lineup` change and a `restore`; an event that airs once is two `patch`es (in 10 minutes before it starts, not after it starts; out when it ends), and only for "replace" placements that keep the cycle's length.
+  - **Every run** reads Tunarr inside `withChannelLock`, takes a snapshot, saves, and records the version it left. Conditions that fail mark the change skipped with the reason; Tunarr being unreachable retries until the change's `notAfter` (default 12 hours late). Cancelling one half of a plan cancels the rest.
+- **Consequence:** the scheduler is the one writer with nobody at the desk, so it never forces anything. A manual lineup repeats from the channel's start, so a dated lineup airs from wherever its cycle is at that time. Overlays don't repeat yearly.
+
+## D52. The lineup check, alignment and network tools work on the desk's own model
+
+- **Status:** Explicit: part of the same list (2026-10-19). Evidenced: `lib/lineupCheck.ts`, `alignToClock` in `lib/broadcast.ts`, `buildMarathon` and `airOncePatches` in `lib/events.ts`, `app/components/NetworkDialog.tsx`, `tests/deskTools.test.ts`.
+- **Decision:**
+  - **The check is pure** and runs on projected rows plus what's known (filler lists, the channel's filler, optionally every redirect). Settings (commercial limit, family hours, mature ratings) are per channel in the browser's `localStorage`, a convenience only. "Ad level against the template" isn't checked: a channel doesn't record which template it came from.
+  - **Alignment** pads the break or flex before a program (or adds padding from chosen commercial lists) and pads the end so the cycle is a whole number of grid steps; it ignores daylight-saving shifts and says so.
+  - **A network is Tunarr's group title.** Copy, simulcast (a redirect placed with `placeEvent` replace) and shared commercials save each channel separately with its own version or settings merge; failures are reported per channel.
+  - **The AI review** (`/ai/review`) gets a bounded text summary of the week and the check's findings, answers through a forced `review_schedule` tool, and only suggests (see D39).
+- **Consequence:** the check doesn't know ratings a media server doesn't send; Tunarr's group title defaults to "tunarr", so by default every channel is one network.

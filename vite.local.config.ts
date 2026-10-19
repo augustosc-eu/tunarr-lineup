@@ -16,6 +16,9 @@ function tunarrApi(env: Record<string, string>): Plugin {
   return {
     name: 'tunarr-lineup-api',
     configureServer(server) {
+      // Dated changes run in the dev server too when LINEUP_SCHEDULER=on.
+      config.scheduler?.start();
+      server.httpServer?.once('close', () => config.scheduler?.stop());
       // Runs before Vite's own host check, so it repeats the companion's.
       server.middlewares.use((req, res, next) => {
         if (!auth && !isAllowedHost(req.headers.host, hosts)) {

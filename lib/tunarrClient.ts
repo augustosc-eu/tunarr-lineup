@@ -7,6 +7,10 @@ import type { Template } from '../server/templateSchema';
 import type { ChannelSettings, ContentProgram, ListSummary, ManagedSource, MediaSource, NamedItem, NewMediaSource, SearchResult, SmartCollectionView, TranscodeProfile } from './library';
 import type { SchedulePreview, Slot, SlotSchedule } from './schedule';
 import type { ChannelRef, RecreateResult as RecreatedChannel } from '../server/recreateChannel';
+import type { ChangeSummary } from '../server/scheduler';
+import type { Snapshot, SnapshotSummary } from '../server/snapshotStore';
+import type { GuideChannel } from '../server/watch';
+import type { Review } from '../server/ai';
 
 export type ScheduleDraft = { type: SlotSchedule['type']; settings?: Record<string, unknown>; slots: Slot[]; extraPrograms?: string[] };
 export type AiStatus = { enabled: true; provider: string; model: string } | { enabled: false; message: string };
@@ -16,6 +20,28 @@ export type MediaFile = { name: string; size: number; modifiedAt: number };
 export type MediaRoleFolder = { role: FillerRole; folder: string; files: MediaFile[]; tunarr: { mediaSourceId: string; libraryId: string; lastScannedAt?: number; scanning: boolean } | null };
 export type MediaFolderStatus = { enabled: true; maxBytes: number; folders: MediaRoleFolder[]; tunarrError?: string } | { enabled: false; message: string };
 export type FillerSync = { connected: boolean; created: Array<{ id: string; name: string; count: number; role: FillerRole }>; updated: Array<{ id: string; count: number }>; errors: string[] };
+export type { ChangeSummary, Review, Snapshot, SnapshotSummary };
+export type ScheduledList = { enabled: boolean; message?: string; changes: ChangeSummary[] };
+/** One change in a plan sent to the scheduler (server/scheduler.ts validatePlan). */
+export type PlannedChange = {
+  channelId: string;
+  channelName: string;
+  label: string;
+  at: number;
+  notAfter?: number;
+  action:
+    | { kind: 'lineup'; lineup: unknown[]; expectVersion: string }
+    | { kind: 'patch'; index: number; remove: string[]; insert: unknown[] }
+    | { kind: 'restore'; after: number | string };
+  programs?: Record<string, unknown>;
+};
+export type ViewerCounts = Record<string, { viewers: number; streams: number }>;
+
+/** The channel's live stream as HLS, through the companion (server/watch.ts). */
+export const streamUrl = (channelId: string) => `/api/tunarr/channels/${encodeURIComponent(channelId)}/stream.m3u8`;
+/** A media-folder file, played back by the companion (for previews). */
+export const mediaFileUrl = (role: FillerRole, name: string) => `/api/tunarr/media-folder/${encodeURIComponent(role)}/${encodeURIComponent(name)}`;
+
 export type LibraryQuery = { mediaSourceId: string; libraryId?: string; text?: string; type?: string; parentId?: string; page?: number; limit?: number };
 
 const jsonBody = (method: string, body: unknown): RequestInit => ({ method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
@@ -209,6 +235,17 @@ export const tunarrApi = {
   deleteTemplate: (id: string) => request<unknown>(`/api/tunarr/templates/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   aiStatus: () => request<AiStatus>('/api/tunarr/ai'),
   aiTemplate: (body: { prompt: string; channelId?: string; includeLibrary: boolean; baseTemplate?: Template }) => request<AiProposal>('/api/tunarr/ai/template', jsonBody('POST', body)),
+  guide: (from: Date, to: Date) => request<{ from: string; to: string; channels: GuideChannel[] }>(`/api/tunarr/guide?${new URLSearchParams({ from: from.toISOString(), to: to.toISOString() })}`),
+  sessions: () => request<ViewerCounts>('/api/tunarr/sessions'),
+  redirects: () => request<{ edges: Array<{ from: string; to: string }> }>('/api/tunarr/redirects'),
+  snapshots: (id: string) => request<SnapshotSummary[]>(`${channelPath(id)}/snapshots`),
+  snapshot: (id: string, snapshotId: string) => request<Snapshot>(`${channelPath(id)}/snapshots/${encodeURIComponent(snapshotId)}`),
+  takeSnapshot: (id: string) => request<SnapshotSummary | { unchanged: true; message: string }>(`${channelPath(id)}/snapshots`, jsonBody('POST', {})),
+  deleteSnapshot: (id: string, snapshotId: string) => request<unknown>(`${channelPath(id)}/snapshots/${encodeURIComponent(snapshotId)}`, { method: 'DELETE' }),
+  scheduled: () => request<ScheduledList>('/api/tunarr/scheduled'),
+  schedulePlan: (group: 'save' | 'event' | 'overlay', changes: PlannedChange[]) => request<ChangeSummary[]>('/api/tunarr/scheduled', jsonBody('POST', { group, changes })),
+  cancelScheduled: (id: string) => request<unknown>(`/api/tunarr/scheduled/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  aiReview: (body: { channelName: string; summary: string; issues: string[] }) => request<Review>('/api/tunarr/ai/review', jsonBody('POST', body)),
   lineup: (id: string, from: Date, to: Date) =>
     request<ChannelLineup>(`${channelPath(id)}/lineup?${new URLSearchParams({ from: from.toISOString(), to: to.toISOString() })}`),
 };

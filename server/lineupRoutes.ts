@@ -1,7 +1,9 @@
 // Lineup's own routes (not Tunarr's): saved programming templates, filler-list
 // roles, the media folder (LINEUP_MEDIA_DIR) and the AI programming assistant. They share the proxy's pipeline (method allowlist,
 // Origin check, JSON bodies, optional sign-in) but answer from the companion.
-import { aiFailure, buildUserMessage, callModel, gatherContext, MAX_PROMPT_CHARS, resolveProposal, SYSTEM_PROMPT, type AiConfig } from './ai.js';
+import { aiFailure, buildUserMessage, callModel, gatherContext, MAX_PROMPT_CHARS, MAX_REVIEW_ISSUES, MAX_REVIEW_SUMMARY_CHARS, resolveProposal, resolveReview, REVIEW_PROMPT, REVIEW_SCHEMA, SYSTEM_PROMPT, type AiConfig } from './ai.js';
+import { isChangeId, summarize, validatePlan } from './scheduler.js';
+import { validateDraft } from './sharedDraftStore.js';
 import { buildFromLibrary } from './content.js';
 import { validateMediaSourceAdd } from './admin.js';
 import { FILLER_ROLES, folderRole, isFillerRole, ROLE_LABELS, type FillerRole } from './fillerRoles.js';
@@ -24,10 +26,18 @@ export type LineupRoute =
   | { name: 'media-file'; methods: string[]; role: FillerRole; file: string }
   | { name: 'media-file-move'; methods: string[]; role: FillerRole; file: string }
   | { name: 'ai-status'; methods: string[] }
-  | { name: 'ai-template'; methods: string[] };
+  | { name: 'ai-template'; methods: string[] }
+  | { name: 'ai-review'; methods: string[] }
+  | { name: 'snapshots'; methods: string[]; channelId: string }
+  | { name: 'snapshot'; methods: string[]; channelId: string; id: string }
+  | { name: 'drafts'; methods: string[] }
+  | { name: 'draft'; methods: string[]; channelId: string }
+  | { name: 'scheduled'; methods: string[] }
+  | { name: 'scheduled-change'; methods: string[]; id: string };
 
 const TEMPLATE_ID = /^[a-z0-9][a-z0-9-]{0,47}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const CHANNEL_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 
 export function matchLineupRoute(path: string): LineupRoute | { invalid: string } | null {
   if (path === '/templates') return { name: 'templates', methods: ['GET', 'POST'] };
@@ -54,6 +64,19 @@ export function matchLineupRoute(path: string): LineupRoute | { invalid: string 
   }
   if (path === '/ai') return { name: 'ai-status', methods: ['GET'] };
   if (path === '/ai/template') return { name: 'ai-template', methods: ['POST'] };
+  if (path === '/ai/review') return { name: 'ai-review', methods: ['POST'] };
+  if (path === '/drafts') return { name: 'drafts', methods: ['GET'] };
+  if (path === '/scheduled') return { name: 'scheduled', methods: ['GET', 'POST'] };
+  const scheduled = /^\/scheduled\/([^/]+)$/.exec(path);
+  if (scheduled) return isChangeId(scheduled[1]) ? { name: 'scheduled-change', methods: ['DELETE'], id: scheduled[1] } : { invalid: 'Change id is not valid.' };
+  const draft = /^\/drafts\/([^/]+)$/.exec(path);
+  if (draft) return CHANNEL_ID.test(draft[1]) ? { name: 'draft', methods: ['GET', 'PUT', 'DELETE'], channelId: draft[1] } : { invalid: 'Channel id is not valid.' };
+  const snapshots = /^\/channels\/([^/]+)\/snapshots(?:\/([^/]+))?$/.exec(path);
+  if (snapshots) {
+    if (!CHANNEL_ID.test(snapshots[1])) return { invalid: 'Channel id is not valid.' };
+    if (!snapshots[2]) return { name: 'snapshots', methods: ['GET', 'POST'], channelId: snapshots[1] };
+    return UUID.test(snapshots[2]) ? { name: 'snapshot', methods: ['GET', 'DELETE'], channelId: snapshots[1], id: snapshots[2] } : { invalid: 'Snapshot id is not valid.' };
+  }
   const match = /^\/templates\/([^/]+)$/.exec(path);
   if (match) return TEMPLATE_ID.test(match[1]) ? { name: 'template', methods: ['PUT', 'DELETE'], id: match[1] } : { invalid: 'Template id is not valid.' };
   return null;
@@ -61,7 +84,6 @@ export function matchLineupRoute(path: string): LineupRoute | { invalid: string 
 
 type Json = Record<string, unknown>;
 const isObject = (value: unknown): value is Json => !!value && typeof value === 'object' && !Array.isArray(value);
-const CHANNEL_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const LOCAL_SOURCE_NAME = 'Lineup media folder';
 const lastSegment = (path: string) => path.split(/[\\/]/).filter(Boolean).pop() ?? path;
 
@@ -270,6 +292,75 @@ export async function handleLineupRoute(route: LineupRoute, { config, target, me
         const checked = validateTemplate({ ...(isObject(body) ? body : {}), id: route.id });
         if ('error' in checked) return fail(400, 'invalid_template', checked.error);
         return json(200, await store.save(checked.template));
+      }
+      case 'snapshots': {
+        const snapshots = config.snapshots;
+        if (!snapshots) return fail(503, 'store_off', 'Snapshots are not available on this server.');
+        if (method === 'GET') return json(200, await snapshots.list(route.channelId));
+        // Take one now, from Tunarr's current copy.
+        const current = await callTunarr(config, target!, 'GET', `/api/channels/${route.channelId}/programming`);
+        const taken = await snapshots.take(route.channelId, current, 'Taken by hand');
+        return taken ? json(201, taken) : json(200, { unchanged: true, message: 'The newest snapshot already matches the channel (or it has no lineup), so no new one was taken.' });
+      }
+      case 'snapshot': {
+        const snapshots = config.snapshots;
+        if (!snapshots) return fail(503, 'store_off', 'Snapshots are not available on this server.');
+        if (method === 'DELETE') return (await snapshots.remove(route.channelId, route.id)) ? json(200, { deleted: true }) : fail(404, 'not_found', 'That snapshot is not kept.');
+        const snapshot = await snapshots.get(route.channelId, route.id);
+        return snapshot ? json(200, snapshot) : fail(404, 'not_found', 'That snapshot is not kept.');
+      }
+      case 'drafts': {
+        if (!config.drafts) return fail(503, 'store_off', 'Shared drafts are not available on this server.');
+        return json(200, await config.drafts.list());
+      }
+      case 'draft': {
+        const drafts = config.drafts;
+        if (!drafts) return fail(503, 'store_off', 'Shared drafts are not available on this server.');
+        if (method === 'DELETE') {
+          await drafts.remove(route.channelId);
+          return json(200, { deleted: true });
+        }
+        if (method === 'GET') {
+          // No draft is the usual case, not an error (a 404 would show in every browser console).
+          return json(200, (await drafts.get(route.channelId)) ?? null);
+        }
+        const checked = validateDraft(body, route.channelId);
+        if ('error' in checked) return fail(400, 'invalid_draft', checked.error);
+        const saved = await drafts.put(checked.draft);
+        return json(200, { channelId: saved.channelId, version: saved.version, updatedAt: saved.updatedAt, dirty: saved.dirty });
+      }
+      case 'scheduled': {
+        const scheduler = config.scheduler;
+        const off = 'Scheduled changes are off. Set LINEUP_SCHEDULER=on on the Lineup server to save changes on a date.';
+        if (method === 'GET') {
+          const changes = scheduler ? (await scheduler.store.list()).map(summarize) : [];
+          return json(200, scheduler?.enabled ? { enabled: true, changes } : { enabled: false, message: off, changes });
+        }
+        if (!scheduler?.enabled) return fail(503, 'scheduler_off', off);
+        const plan = validatePlan(body, Date.now(), await scheduler.store.list());
+        if ('error' in plan) return fail(400, 'invalid_plan', plan.error);
+        const created = await scheduler.store.add(plan);
+        // A change due right away (an overlay starting today) shouldn't wait for the next tick.
+        if (created.some((change) => change.at <= Date.now())) void scheduler.runDue().catch(() => {});
+        return json(201, created.map(summarize));
+      }
+      case 'scheduled-change': {
+        const scheduler = config.scheduler;
+        if (!scheduler) return fail(503, 'scheduler_off', 'Scheduled changes are off.');
+        return (await scheduler.store.cancel(route.id)) ? json(200, { cancelled: true }) : fail(409, 'not_pending', 'That change has already run or was cancelled.');
+      }
+      case 'ai-review': {
+        const ai = config.ai;
+        if (!ai || 'off' in ai) return fail(503, 'ai_off', ai && 'off' in ai ? ai.off : 'AI is not set up on this server.');
+        if (!isObject(body) || typeof body.summary !== 'string' || !body.summary.trim()) return fail(400, 'invalid_request', 'Send { "channelName", "summary", "issues" }.');
+        if (body.summary.length > MAX_REVIEW_SUMMARY_CHARS) return fail(400, 'invalid_request', 'The week is too long to review at once.');
+        const issues = Array.isArray(body.issues) ? body.issues.filter((issue): issue is string => typeof issue === 'string').slice(0, MAX_REVIEW_ISSUES).map((issue) => issue.slice(0, 300)) : [];
+        const channelName = typeof body.channelName === 'string' ? body.channelName.slice(0, 120) : 'this channel';
+        const user = `Channel: ${channelName}\n\nThe week as it airs:\n${body.summary}\n\nWhat the automatic check found:\n${issues.length ? issues.map((issue) => `- ${issue}`).join('\n') : '- nothing'}`;
+        const raw = await callModel(ai as AiConfig, REVIEW_PROMPT, user, { name: 'review_schedule', description: 'Give your review of the channel’s week.', schema: REVIEW_SCHEMA });
+        const review = resolveReview(raw);
+        if ('error' in review) return fail(502, 'ai_invalid', review.error);
+        return json(200, review);
       }
       case 'ai-status': {
         const ai = config.ai;

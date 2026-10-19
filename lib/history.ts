@@ -2,6 +2,7 @@
 // Snapshots share item objects, so each entry costs one array.
 import type { LineupItem } from './lineup';
 import type { Block } from './broadcast';
+import { itemIdentity } from '../server/lineupVersion';
 
 export type HistoryEntry = {
   label: string;
@@ -34,11 +35,7 @@ export function redo(history: History): { history: History; entry: HistoryEntry 
   return { history: { past: [...history.past, entry], future: rest }, entry };
 }
 
-/** What makes two lineup entries "the same item" across a save round trip. */
-export function itemIdentity(item: LineupItem) {
-  const field = (name: string) => (typeof item[name] === 'string' || typeof item[name] === 'number' ? String(item[name]) : '');
-  return [item.type, field('id'), field('channel'), field('customShowId'), field('fillerListId'), field('index'), item.duration].join('|');
-}
+export { itemIdentity } from '../server/lineupVersion';
 
 /**
  * After a save, Tunarr returns fresh objects for the lineup that was saved.

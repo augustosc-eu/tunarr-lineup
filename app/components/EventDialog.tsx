@@ -19,6 +19,11 @@ type Props = {
   generated: boolean;
   onClose: () => void;
   onPlace: (placement: EventPlacement, label: string, meta: Record<string, ContentProgram>, date: string) => void;
+  /**
+   * Air the event once: the companion's scheduler puts it in just before it
+   * starts and takes it out when it ends. `unavailable` says why it can't.
+   */
+  airOnce?: { unavailable?: string; onSchedule: (placement: EventPlacement, label: string, meta: Record<string, ContentProgram>) => Promise<void> };
 };
 
 type What = 'programs' | 'redirect' | 'flex';
@@ -28,7 +33,7 @@ const inputDate = (ms: number) => {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 };
 
-export function EventDialog({ channel, channels, lineup, programs, date, generated, onClose, onPlace }: Props) {
+export function EventDialog({ channel, channels, lineup, programs, date, generated, onClose, onPlace, airOnce }: Props) {
   const [day, setDay] = useState(date);
   const [time, setTime] = useState('20:00');
   const [what, setWhat] = useState<What>('programs');
@@ -39,6 +44,11 @@ export function EventDialog({ channel, channels, lineup, programs, date, generat
   const [snap, setSnap] = useState<EventSnap>('after');
   const [mode, setMode] = useState<EventMode>('replace');
   const [browsing, setBrowsing] = useState(false);
+  const [once, setOnce] = useState(false);
+  // When the dialog opened: "too soon to schedule" is judged against it, not re-read every render.
+  const [openedAt] = useState(() => Date.now());
+  const [scheduling, setScheduling] = useState(false);
+  const [scheduleError, setScheduleError] = useState('');
 
   const at = new Date(`${day}T${time}:00`).getTime();
   const items = useMemo((): LineupItem[] => {
@@ -52,6 +62,9 @@ export function EventDialog({ channel, channels, lineup, programs, date, generat
   const placement = Number.isFinite(at) && items.length ? placeEvent(lineup, channel.startTime, at, items, mode, snap) : null;
   const title = name.trim() || (what === 'programs' ? (picked.length === 1 ? String((picked[0].program as { title?: string }).title ?? 'Event') : `${picked.length} programs`) : what === 'redirect' ? `Simulcast of CH ${channels.find((item) => item.id === redirectTo)?.number ?? ''}` : 'Off-air break');
   const removedTitles = placement?.removed.map((item) => programTitle(item, programs)) ?? [];
+  const onceProblem = !airOnce ? '' : airOnce.unavailable ?? (mode !== 'replace' ? 'Only “Replace what was on” can air once: pushing would move every later program while it’s in.' : placement && placement.overrun > 0 ? 'It runs past the end of the lineup, so it can’t air once.' : placement && placement.start - 60_000 < openedAt ? 'It starts too soon to schedule.' : '');
+  const airingOnce = once && !!airOnce && !onceProblem;
+  const meta = () => Object.fromEntries(picked.map((program) => lineupEntry(program).meta));
 
   return (
     <div className="overlay" role="presentation" onKeyDown={(event) => {
@@ -100,15 +113,26 @@ export function EventDialog({ channel, channels, lineup, programs, date, generat
           {mode === 'replace' && <span>Takes off: {removedTitles.length ? `${removedTitles.slice(0, 6).join(', ')}${removedTitles.length > 6 ? ` and ${removedTitles.length - 6} more` : ''}` : 'nothing'}{placement.pad ? `; then ${durationTimecode(placement.pad)} of flex so everything after stays on time` : ''}.</span>}
           {mode === 'replace' && placement.overrun > 0 && <span>It runs {durationTimecode(placement.overrun)} past the end of the lineup, so the lineup gets that much longer and later repeats air that much later.</span>}
           {mode === 'push' && <span>Everything after it moves {durationTimecode(placement.end - placement.start)} later.</span>}
-          <span>This lineup repeats {repeatLabel(placement.cycle)}, so the event also airs on {inputDate(placement.start + placement.cycle)}{placement.cycle < 14 * 86_400_000 ? ' and every repeat after that' : ''}.</span>
+          {airingOnce
+            ? <span>Airs once. The Lineup server puts it in a few minutes before {when(placement.start)} and puts back what it replaced at {when(placement.end)}, each time only if the programs around it haven’t changed. Your lineup on screen stays as it is.</span>
+            : <span>This lineup repeats {repeatLabel(placement.cycle)}, so the event also airs on {inputDate(placement.start + placement.cycle)}{placement.cycle < 14 * 86_400_000 ? ' and every repeat after that' : ''}.</span>}
           {generated && <span>Saving the slot schedule (or changing the start time) regenerates the lineup and removes the event.</span>}
         </div>}
         {!lineup.length && <p className="slot-problem">This channel has no lineup yet. Add programming first.</p>}
+        {airOnce && <label className="check-toggle air-once"><input type="checkbox" checked={once} disabled={!!onceProblem} onChange={(event) => setOnce(event.target.checked)} /> Air once, then put back what it replaced{onceProblem && <small> ({onceProblem})</small>}</label>}
+        {scheduleError && <div className="warning" role="alert"><b>Not scheduled</b><span>{scheduleError}</span></div>}
 
         <div className="dialog-actions">
           <button onClick={onClose}>Cancel</button>
           <span className="spacer" />
-          <button className="primary" disabled={!placement} onClick={() => placement && onPlace(placement, title, Object.fromEntries(picked.map((program) => lineupEntry(program).meta)), inputDate(placement.start))}>Place event</button>
+          {airingOnce
+            ? <button className="primary" disabled={!placement || scheduling} onClick={() => {
+              if (!placement || !airOnce) return;
+              setScheduling(true);
+              setScheduleError('');
+              airOnce.onSchedule(placement, title, meta()).catch((error) => setScheduleError(error instanceof Error ? error.message : 'The Lineup server didn’t accept it.')).finally(() => setScheduling(false));
+            }}>{scheduling ? 'Scheduling…' : 'Schedule to air once'}</button>
+            : <button className="primary" disabled={!placement} onClick={() => placement && onPlace(placement, title, meta(), inputDate(placement.start))}>Place event</button>}
         </div>
       </section>
       {browsing && <LibraryBrowser title="Programs for the event" mode="programs" confirmLabel="Use" onClose={() => setBrowsing(false)} onPick={(pick) => {

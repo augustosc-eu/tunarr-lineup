@@ -13,6 +13,7 @@ import { roleLibraries } from '../server/lineupRoutes';
 import { createMediaFolder, createMediaFolderAt, mediaFileName } from '../server/mediaFolder';
 import { planUpload } from '../server/nodeAdapter';
 import { createProxyConfig, handleTunarrApi, type ProxyConfig, type ProxyRequest } from '../server/tunarrProxy';
+import { testDataDir } from './tempData';
 
 const SOURCE = 'fb9b2110-d086-49b3-997c-9873de64ef75';
 const LIBRARY = '0e2d2a41-5f2f-4a7e-9d3a-2b1f0c9e8d7a';
@@ -148,7 +149,7 @@ type Call = { url: string; method: string; body?: unknown };
 function harness(env: Record<string, string>, reply: (url: string, method: string, body: unknown) => unknown) {
   const calls: Call[] = [];
   const config: ProxyConfig = {
-    ...createProxyConfig({ TUNARR_URL: 'http://tunarr:8000', ...env }),
+    ...createProxyConfig({ LINEUP_DATA_DIR: testDataDir, TUNARR_URL: 'http://tunarr:8000', ...env }),
     fetchImpl: (async (input: string | URL | Request, init?: RequestInit) => {
       const url = String(input).replace('http://tunarr:8000', '');
       const method = init?.method ?? 'GET';

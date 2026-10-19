@@ -59,6 +59,32 @@ export async function findRedirectsTo(call: Call, channelId: string): Promise<Ch
   return found.sort((a, b) => a.number - b.number);
 }
 
+/** Channels a programming's lineup items or redirect slots send viewers to. */
+export function redirectTargets(programming: unknown): string[] {
+  if (!isObject(programming)) return [];
+  const targets = new Set<string>();
+  for (const item of Array.isArray(programming.lineup) ? programming.lineup : []) if (isObject(item) && item.type === 'redirect' && typeof item.channel === 'string') targets.add(item.channel);
+  const slots = isObject(programming.schedule) && Array.isArray(programming.schedule.slots) ? programming.schedule.slots : [];
+  for (const slot of slots) if (isObject(slot) && slot.type === 'redirect' && typeof slot.channelId === 'string') targets.add(slot.channelId);
+  return [...targets];
+}
+
+/**
+ * Every redirect between channels, for spotting loops (A → B → A, which
+ * Tunarr can't resolve) and redirects to channels that are gone. Reads each
+ * channel's programming, a few at a time, so it's run on request only.
+ */
+export async function redirectEdges(call: Call): Promise<Array<{ from: string; to: string }>> {
+  const channels = channelRefs(await call('GET', '/api/channels'));
+  const edges: Array<{ from: string; to: string }> = [];
+  for (let start = 0; start < channels.length; start += 4) {
+    const batch = channels.slice(start, start + 4);
+    const reads = await Promise.all(batch.map((channel) => call('GET', `/api/channels/${channel.id}/programming`).catch(() => null)));
+    batch.forEach((channel, index) => { for (const to of redirectTargets(reads[index])) edges.push({ from: channel.id, to }); });
+  }
+  return edges;
+}
+
 /** The old channel's fields as a create request (Tunarr assigns the id). */
 function saveable(channel: Json, number: number): Json {
   const next: Json = { ...channel, number };

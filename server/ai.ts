@@ -251,7 +251,11 @@ export class AiError extends Error {
 }
 
 /** Calls the model and returns the tool input it produced. */
-export async function callModel(ai: AiConfig, system: string, user: string): Promise<unknown> {
+export type ModelTool = { name: string; description: string; schema: unknown };
+const PROPOSE_TOOL: ModelTool = { name: 'propose_schedule', description: 'Propose the programming template.', schema: PROPOSAL_SCHEMA };
+
+/** Calls the configured provider and returns the arguments it gave the forced `tool`. */
+export async function callModel(ai: AiConfig, system: string, user: string, modelTool: ModelTool = PROPOSE_TOOL): Promise<unknown> {
   const doFetch = ai.fetchImpl ?? fetch;
   const anthropic = ai.provider === 'anthropic';
   const url = anthropic ? `${ai.baseUrl}/v1/messages` : `${ai.baseUrl}/chat/completions`;
@@ -260,10 +264,10 @@ export async function callModel(ai: AiConfig, system: string, user: string): Pro
     headers['x-api-key'] = ai.apiKey ?? '';
     headers['anthropic-version'] = '2023-06-01';
   } else if (ai.apiKey) headers.authorization = `Bearer ${ai.apiKey}`;
-  const tool = { name: 'propose_schedule', description: 'Propose the programming template.' };
+  const tool = { name: modelTool.name, description: modelTool.description };
   const body = anthropic
-    ? { model: ai.model, max_tokens: 16_000, system, messages: [{ role: 'user', content: user }], tools: [{ ...tool, input_schema: PROPOSAL_SCHEMA }], tool_choice: { type: 'tool', name: tool.name } }
-    : { model: ai.model, messages: [{ role: 'system', content: system }, { role: 'user', content: user }], tools: [{ type: 'function', function: { ...tool, parameters: PROPOSAL_SCHEMA } }], tool_choice: { type: 'function', function: { name: tool.name } } };
+    ? { model: ai.model, max_tokens: 16_000, system, messages: [{ role: 'user', content: user }], tools: [{ ...tool, input_schema: modelTool.schema }], tool_choice: { type: 'tool', name: tool.name } }
+    : { model: ai.model, messages: [{ role: 'system', content: system }, { role: 'user', content: user }], tools: [{ type: 'function', function: { ...tool, parameters: modelTool.schema } }], tool_choice: { type: 'function', function: { name: tool.name } } };
 
   let response: Response;
   try {
@@ -296,7 +300,7 @@ export async function callModel(ai: AiConfig, system: string, user: string): Pro
   if (anthropic) {
     const content = Array.isArray(data.content) ? data.content : [];
     const use = content.find((part) => isObject(part) && part.type === 'tool_use' && isObject(part.input));
-    if (!use) throw new AiError(502, 'ai_invalid', 'The AI did not return a schedule. Try rephrasing the prompt.');
+    if (!use) throw new AiError(502, 'ai_invalid', modelTool === PROPOSE_TOOL ? 'The AI did not return a schedule. Try rephrasing the prompt.' : 'The AI did not return an answer. Try again.');
     return (use as Json).input;
   }
   const message = Array.isArray(data.choices) && isObject(data.choices[0]) && isObject(data.choices[0].message) ? data.choices[0].message : null;
@@ -312,7 +316,7 @@ export async function callModel(ai: AiConfig, system: string, user: string): Pro
       // Fall through.
     }
   }
-  throw new AiError(502, 'ai_invalid', 'The AI did not return a schedule. Try rephrasing the prompt, or a more capable model.');
+  throw new AiError(502, 'ai_invalid', modelTool === PROPOSE_TOOL ? 'The AI did not return a schedule. Try rephrasing the prompt, or a more capable model.' : 'The AI did not return an answer. Try again, or a more capable model.');
 }
 
 // ----------------------------------------------------------------- resolve
@@ -384,4 +388,47 @@ export function resolveProposal(raw: unknown, context: AiContext, id: string): P
 export function aiFailure(error: unknown) {
   if (error instanceof AiError || error instanceof UpstreamError) return error;
   return new AiError(500, 'ai_failed', 'The AI request failed.');
+}
+
+// ---------------------------------------------------------------- reviews
+
+export const MAX_REVIEW_SUMMARY_CHARS = 40_000;
+export const MAX_REVIEW_ISSUES = 100;
+
+export const REVIEW_SCHEMA = {
+  type: 'object',
+  properties: {
+    summary: { type: 'string', description: 'Two or three sentences: how the week reads as a channel, from a programming director’s point of view.' },
+    suggestions: {
+      type: 'array',
+      maxItems: 12,
+      items: {
+        type: 'object',
+        properties: {
+          title: { type: 'string', description: 'A short headline for the suggestion.' },
+          detail: { type: 'string', description: 'What to change and why, naming the days, times and shows involved.' },
+          priority: { type: 'string', enum: ['high', 'medium', 'low'] },
+        },
+        required: ['title', 'detail', 'priority'],
+      },
+    },
+  },
+  required: ['summary', 'suggestions'],
+};
+
+export const REVIEW_PROMPT = `You are an experienced broadcast television programming director reviewing one channel's week for its owner, who self-hosts the channel with Tunarr. You get the channel's week as a log (what airs when, and commercial minutes per hour) and the problems an automatic check already found.
+
+Review it the way a network would: daypart fit (kids' shows in the morning, adult drama late), stripping and consistency across weekdays, repeats and back-to-back duplicates, commercial load against the channel's style, dead air and flex time, tentpoles and lead-ins, weekend counter-programming. Be concrete: name days, times and shows. Suggest changes that can be made with the programs already on the channel. Don't repeat the automatic check's findings word for word; prioritize them and add what it can't see. Answer only by calling review_schedule.`;
+
+export type Review = { summary: string; suggestions: Array<{ title: string; detail: string; priority: 'high' | 'medium' | 'low' }> };
+
+/** The model's review, kept to plain bounded strings. */
+export function resolveReview(raw: unknown): Review | { error: string } {
+  if (!isObject(raw) || typeof raw.summary !== 'string') return { error: 'The AI did not return a review. Try again.' };
+  const suggestions = (Array.isArray(raw.suggestions) ? raw.suggestions : []).filter(isObject).slice(0, 12).flatMap((item) => {
+    if (typeof item.title !== 'string' || typeof item.detail !== 'string') return [];
+    const priority = item.priority === 'high' || item.priority === 'low' ? item.priority : 'medium';
+    return [{ title: item.title.slice(0, 200), detail: item.detail.slice(0, 2000), priority } as Review['suggestions'][number]];
+  });
+  return { summary: raw.summary.slice(0, 2000), suggestions };
 }

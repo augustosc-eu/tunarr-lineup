@@ -12,9 +12,11 @@ shows a channel's schedule for any day and lets the user:
 
 Everything is saved through Tunarr's own API.
 
-It works only with media Tunarr has already indexed. It doesn't add media
-sources, scan libraries, change transcoding or streaming, or create and delete
-channels. Those stay in Tunarr's own interface.
+It works only with media Tunarr has already indexed. It can also set Tunarr up
+(channels, media sources, transcode profiles; see 4c), show every channel's guide,
+play a channel live, check a lineup for problems, keep snapshots, and save changes
+on a date. Tunarr's global settings (FFmpeg, HDHomeRun, XMLTV) stay in Tunarr's
+own interface.
 
 The interface imitates classic Mac OS 9: platinum window chrome, striped title
 bars, bevelled buttons, Geneva/Charcoal-style type. The visual identity is
@@ -210,11 +212,53 @@ the schedule. Tunarr can't remove a schedule from a channel, so this recreates
 the channel with the same number, name, logo and settings (a new internal id),
 and first names any channels that redirect to it.
 
+### 5a. See every channel, the week, and what's playing
+
+- **Guide grid** (View → Guide Grid, `G`): every channel down the side, three hours across, from Tunarr's guide. ← → move between programs (paging the window at its edges), ↑ ↓ change channel, PgUp/PgDn page channels, `N` goes to now, OK opens the program in the desk, `L` watches the channel, Back closes. **By network** groups channels by group title.
+- **Week view** (View → Week View, `W`): Monday to Sunday as blocks, projected from the lineup (including unsaved changes and slot previews). ← → change day (and week at the edges), ↑ ↓ move through a day, PgUp/PgDn change week, OK opens that day in the desk. **Export week log…** and **Export month log…** download CSV.
+- **Watch live** (Channel → Watch Live, `L`, or **▶ Watch live** on the program on air): the channel's stream in a player, through the companion. CH± changes channel; Back stops. It counts as a viewer in Tunarr.
+- **Viewer counts**: a red badge on each channel with viewers (rail and guide), refreshed every 30 seconds while the desk is visible.
+
+### 5b. Check the lineup
+
+**View → Check Lineup** (`C`, or the toolbar badge, which counts the day's problems and warnings): problems, warnings and notes for this day or 7 days. Each jumps to where it airs and selects the item. It finds:
+- programs Tunarr no longer has; items with no length (left out on save)
+- redirects to a channel that's gone or to the channel itself; redirect loops across channels (**Check redirect loops** reads every channel)
+- commercial breaks filled from a deleted filler list; flex time on a channel with no filler lists (the offline screen); flex over 30 minutes in one stretch (a note)
+- the same episode more than once in a day, and the same program twice in a row (breaks and IDs between don't count)
+- clock hours over the commercial limit (default 18 minutes, per channel, can be turned off)
+- mature ratings (TV-MA, R…, editable) inside family hours, when turned on for the channel
+
+With AI set up, **Ask AI for a review** sends the next 7 days and the findings to the AI and shows its summary and suggestions. It changes nothing.
+
+### 5c. Align, marathons, and other channels
+
+- **Edit → Align Programs to Clock…**: pads the lineup so programs (longer than a set length) start every 15, 30 or 60 minutes, lengthening the break or flex before them or adding padding from chosen commercial lists, and pads the end so every pass lines up. One undoable edit; "Keep what's on air in place" applies as for inserts.
+- **Edit → Marathon…**: a season or any run of programs on a date, with a break of N minutes between episodes (from chosen lists, optionally opening with a station ID). It's placed like an event (replace or push) and repeats with the lineup.
+- **Edit → Copy Selection to Channel…**: the selected block, items unchanged, into another channel at a date and time, its start or its end, saved to that channel at once with its own version check.
+- **Edit → Simulcast Selection on Network…**: each picked channel with the same group title gets a redirect to this channel for the block's length at its air time (replacing what it would air; a channel joins when its program on air ends).
+- **Channel → Share Commercials With Network…**: gives the picked channels this channel's filler lists, repeat cooldown and watermark setting.
+
+### 5d. Snapshots and files
+
+**File → Snapshots, Export and Import…** lists the snapshots the companion took before each save, reset and scheduled change (newest first, 15 per channel). **Restore…** loads one into the desk as an edit; nothing reaches Tunarr until it's saved. **Take a snapshot now**, **Export to a file** (the lineup on screen, as JSON) and **Import a file…** (also loaded as an edit).
+
+### 5e. Changes on a date
+
+With `LINEUP_SCHEDULER=on` on the companion:
+- **File → Save Later…**: the desk's lineup (or a slot preview) is saved on a date and time.
+- **File → Save as Seasonal Overlay…**: it goes in on one date, and the lineup it replaced comes back on another. The **Halloween** and **Christmas** templates are made for this: apply, preview, then save as an overlay.
+- **Schedule Event → Air once**: the event goes in shortly before it starts and what it replaced comes back when it ends. Only for "Replace what was on", and only when the desk has no unsaved edits.
+- **File → Scheduled Changes…** lists waiting and recent changes on every channel, with why any was skipped, and cancels them.
+
+Each change goes in only if the channel is as it was when planned (for an event: the programs it replaces are still there); otherwise it's skipped, never forced.
+
 ### 6. Export a program log
 
 **File → Export Program Log…** downloads the visible day as CSV: date,
 start, end, duration, type, title, detail and lineup position. If the lineup
-has unsaved changes, the filename says `-unsaved`.
+has unsaved changes, the filename says `-unsaved`. The week view exports a week
+or a month.
 
 ### 7. Drive it with a remote or keyboard
 
@@ -226,6 +270,7 @@ has unsaved changes, the filename says `-unsaved`.
 | OK / Enter | Pick up or drop |
 | Back / Esc | Cancel a move, or close a dialog |
 | `N` / `T` / `M` / `?` | Now / today / Move dialog / shortcuts |
+| `G` / `W` / `C` / `L` | Guide grid / week view / check lineup / watch live |
 | ⌘ or Ctrl + Z, Shift+Z (or Y), S | Undo, redo, save |
 
 The menus can also be operated with the arrows, OK and Back.
@@ -254,14 +299,16 @@ The menus can also be operated with the arrows, OK and Back.
 - **Generated schedules:** saving manually can detach a channel from its generated schedule. Tunarr may also regenerate over manual edits.
 - **TV readability and remote operation:** text must stay large and anti-aliased, and every action must work without a mouse. The UI scales with the viewport (width, capped by height), and phones and tablets get a compact layout with a Menu sheet and a collapsible Program Info sheet.
 - **Conflict check window:** the companion checks and writes under a per-channel lock, so two Lineup sessions can't overwrite each other. Tunarr's API has no conditional save, so an edit made in Tunarr's own UI in the milliseconds between check and write would still be overwritten.
-- **Drafts are per browser:** unsaved work on the TV isn't visible from a laptop, and vice versa.
+- **Drafts are shared through the companion:** unsaved work on the TV opens on a laptop (the newer copy wins). The hosted preview keeps drafts per browser.
 
 ## Out of scope (as built)
 
 The code does not implement:
 - uploading logo or media files (logos are set by address), Plex OAuth sign-in (a token is entered), and Tunarr's global settings (FFmpeg, HDHomeRun, XMLTV)
-- events that air once only (an event repeats with the lineup's cycle) or that cut into a program mid-way
+- events that cut into a program mid-way (an event airs once only through the scheduler, with `LINEUP_SCHEDULER=on`)
+- seasonal overlays that repeat every year
+- previewing a library program's video before inserting it (Tunarr has no per-program stream)
 - AI-written lineups that bypass preview (the AI only writes templates)
 - time-slot per-slot padding/lateness overrides
 - user accounts or roles beyond the single optional password
-- syncing drafts between devices (drafts live in each browser), or persisting slot-schedule drafts across reloads
+- live merging of one channel's draft edited on two devices at once, or persisting slot-schedule drafts across reloads

@@ -3,6 +3,7 @@ import { manageableSources, validateMediaSourceAdd, validateTranscodeChanges } f
 import { clearLogoCache, isPublicAddress, logoSource } from '../server/logos';
 import { describeRules, filterToRules, rulesToFilter } from '../server/smartCollection';
 import { createProxyConfig, handleTunarrApi, type ProxyConfig, type ProxyRequest, type TunarrTarget } from '../server/tunarrProxy';
+import { testDataDir } from './tempData';
 
 const UUID_A = '0e2d2a41-5f2f-4a7e-9d3a-2b1f0c9e8d7a';
 const UUID_B = '1e2d2a41-5f2f-4a7e-9d3a-2b1f0c9e8d7b';
@@ -13,7 +14,7 @@ type Call = { url: string; method: string; body?: unknown };
 function harness(reply: (url: string, method: string, body: unknown) => unknown, extra: Partial<ProxyConfig> = {}) {
   const calls: Call[] = [];
   const config: ProxyConfig = {
-    ...createProxyConfig({ TUNARR_URL: 'http://tunarr:8000' }),
+    ...createProxyConfig({ LINEUP_DATA_DIR: testDataDir, TUNARR_URL: 'http://tunarr:8000' }),
     ...extra,
     fetchImpl: (async (input: string | URL | Request, init?: RequestInit) => {
       const url = String(input).replace('http://tunarr:8000', '');

@@ -247,3 +247,55 @@ export function openBreaksWithIds(lineup: LineupItem[], ids: Array<{ id: string;
   });
   return added ? { lineup: next, added } : null;
 }
+
+/** How far `ms` is past the last `gridMs` boundary on the local clock (grids that divide an hour or a day). */
+export function clockRemainder(ms: number, gridMs: number) {
+  const date = new Date(ms);
+  const sinceMidnight = ((date.getHours() * 60 + date.getMinutes()) * 60 + date.getSeconds()) * 1000 + date.getMilliseconds();
+  return sinceMidnight % gridMs;
+}
+
+export type ClockAlignment = { lineup: LineupItem[]; pads: number; added: number };
+
+/**
+ * Pads a lineup so programs start on the clock (:00 and :30 for a 30-minute
+ * grid), the way stations run. The time goes into the break or flex just
+ * before a program when there is one, otherwise into new padding, and the end
+ * of the lineup is padded so the whole cycle is a multiple of the grid: then
+ * every pass lines up, not only the first. Short items (spots, IDs) are left
+ * where they fall. Null when everything already starts on the grid.
+ */
+export function alignToClock(
+  lineup: LineupItem[],
+  startTime: number,
+  gridMs: number,
+  isProgram: (item: LineupItem) => boolean,
+  makePad: (ms: number) => LineupItem,
+): ClockAlignment | null {
+  if (!lineup.length || gridMs < 60_000) return null;
+  const next: LineupItem[] = [];
+  let cursor = startTime;
+  let pads = 0;
+  let added = 0;
+  const pad = (need: number) => {
+    const previous = next[next.length - 1];
+    // Lengthen the break or flex already there rather than adding a second one.
+    if (previous && previous.type === 'flex') next[next.length - 1] = { ...previous, duration: Math.round(previous.duration + need) };
+    else { next.push(makePad(Math.round(need))); pads += 1; }
+    added += need;
+    cursor += need;
+  };
+  for (const item of lineup) {
+    if (isProgram(item)) {
+      const rest = clockRemainder(cursor, gridMs);
+      const need = rest === 0 ? 0 : gridMs - rest;
+      // Under a second off counts as on time (Tunarr can't play padding that short).
+      if (need >= 1000 && rest >= 1000) pad(need);
+    }
+    next.push(item);
+    cursor += Math.max(0, item.duration || 0);
+  }
+  const over = (cursor - startTime) % gridMs;
+  if (over >= 1000 && gridMs - over >= 1000) pad(gridMs - over);
+  return added > 0 ? { lineup: next, pads, added } : null;
+}

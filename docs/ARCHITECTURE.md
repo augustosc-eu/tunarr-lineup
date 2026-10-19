@@ -50,6 +50,15 @@ server implements those paths.
 | `app/components/TemplateEditor.tsx` | Template editor: details, day plan mode, blocks (start, role, ad level), roles (label, hint, order, suggestion kind and genres), start-time grid, lateness, commercial style. |
 | `app/components/EventDialog.tsx` | Schedule an event on a date: programs, simulcast (redirect) or off-air; snap and replace/push; live placement preview. |
 | `app/components/MoveDialog.tsx` | The "Move or swap" dialog: move to time (with preview), move to position, and a searchable candidate list capped at `MAX_CANDIDATES` (200). |
+| `app/components/GuideGrid.tsx` | The guide grid: every channel × three hours from `/guide` (or the demo lineup projected), remote focus model (`stepFocus`, paging at the edges), network grouping (`byNetwork`), viewer badges. |
+| `app/components/WeekView.tsx` | Monday–Sunday blocks (`dayBlocks`), keyboard focus across days, week/month exports. |
+| `app/components/LineupCheckDialog.tsx` | The lineup check (`checkLineup`) for one or 7 days, per-channel settings in `localStorage` (`loadCheckSettings`), the redirect-loop read, and the AI review. |
+| `app/components/AlignDialog.tsx` | Align programs to the clock (`alignToClock`) with a preview. |
+| `app/components/MarathonDialog.tsx` | A run of programs with breaks between (`buildMarathon`), placed with `placeEvent`. |
+| `app/components/NetworkDialog.tsx` | Copy the selection to a channel, simulcast it on the network (redirects placed with `placeEvent`), or share commercial settings; each target saved with its own version or settings merge. |
+| `app/components/WatchDialog.tsx` | The live player: native HLS or `hls.js` (dynamic import) on `streamUrl(channelId)`. |
+| `app/components/SnapshotsDialog.tsx` | Snapshot list, restore, take now, delete; lineup export/import files (`readExport`). |
+| `app/components/PlanDialog.tsx` / `ScheduledDialog.tsx` | Save Later and seasonal overlays; the list of scheduled changes with cancel. |
 | `app/layout.tsx` | Hosted-only root layout: Geist fonts (`next/font/google`), metadata, OpenGraph. Not used by the companion build. |
 | `app/globals.css` | All styling (Mac OS 9 theme, rem-based scaling, responsive rules). Imports Tailwind. |
 | `lib/lineup.ts` | Domain types and schedule math: projection, guide mapping, `scheduleForDay`, `reorderLineup`, `buildManualSave`. |
@@ -62,6 +71,9 @@ server implements those paths.
 | `lib/networkTemplates.ts` | Network-inspired templates for Japan, Argentina, the United States, Canada, Spain, the United Kingdom and Italy, including music-channel formats (`NETWORK_TEMPLATES`, `REGIONS`). |
 | `lib/templateCatalog.ts` | `BUILT_IN_TEMPLATES`, gallery groups (`TEMPLATE_GROUPS`, `inGroup`) and search. |
 | `lib/events.ts` | `boundaryAt` (the insert position nearest a time, on the lengthened cycle), `insertedStart`, `passesBefore`, `placeEvent` (snap to a program boundary; replace with flex padding, or push), `repeatLabel` and `airTimeLabel`. |
+| `lib/lineupCheck.ts` | `checkLineup` (issues with severity, first air time and lineup position), `redirectLoop`, `DEFAULT_CHECK_SETTINGS`, `issueLines`. |
+| `lib/weekLog.ts` | `dateRange`, `weekStart`, `projectDays`, `dayBlocks`, `logRows` (multi-day CSV), `weekSummary` (bounded text for the AI review). |
+| `lib/guideGrid.ts` | `windowStart`, `cellsFor`, `entryAt`, `stepFocus`, `byNetwork`. |
 | `lib/programInfo.ts` | `getProgram`, `programTitle`, `programDetail`, `programArtwork`, `channelLogoUrl`. |
 | `lib/tunarrClient.ts` | Browser client for `/api/tunarr/*`: `checkHealth`, `tunarrApi`, `TunarrApiError`, `ConnectionState`. |
 | `lib/demoData.ts` | Demo channels and lineup (`demoChannels`, `demoProgramming()`, `demoDate`). |
@@ -83,6 +95,12 @@ server implements those paths.
 | `server/smartCollection.ts` | Smart-collection rules ↔ Tunarr search filters: `RULE_FIELDS`, `rulesToFilter`, `filterToRules`, `describeRules`. Pure; the browser imports it. |
 | `server/logos.ts` | Channel logos: `channelLogo`, `logoSource`, `fetchPublicImage`, `isPublicAddress`, in-memory cache. Uses Node built-ins. |
 | `server/content.ts` | Library, list and channel-settings routes: `matchContentRoute`, `handleContentRoute`, `sanitizeMediaSources`, `buildLibrarySearch`, `validateFillerListBody`, `validateCustomShowBody`, `channelSettings`, `validateChannelSettings`. |
+| `server/watch.ts` | Watching routes: `matchWatchRoute`, `handleWatchRoute`, `slimGuide`/`guideEntry`, `viewerCounts`, `rewritePlaylist`, `validateGuideRange`, and the redirect graph route. |
+| `server/snapshotStore.ts` | Snapshots per channel (`LINEUP_DATA_DIR/snapshots/<id>.json`): `take` (skips repeats), `list`, `get`, `remove`, `moveChannel`. |
+| `server/sharedDraftStore.ts` | Shared drafts (`LINEUP_DATA_DIR/drafts/`, with `index.json`): `validateDraft`, `createSharedDraftStore`. |
+| `server/scheduler.ts` | Scheduled changes (`scheduled.json`): `validatePlan`, `findPatch`, `applyChange`, `createSchedulerStore`, `createScheduler` (`runDue`, `start`, `stop`), `summarize`. |
+| `server/channelLock.ts` | `withChannelLock`, shared by the proxy, the recreate route and the scheduler. |
+| `server/lineupItems.ts` | `lineupItemsError` (shared item validation), `slimPrograms`. |
 | `server/upstream.ts` | Shared upstream plumbing: `fetchUpstream`, `callTunarr` (GET/POST/PUT/DELETE), `UpstreamError`, `json`, `fail`. |
 | `server/lineupVersion.ts` | `programmingVersion(lineup, schedule)`: a non-cryptographic fingerprint (two cyrb53 hashes plus length), shared by the browser and the proxy for `If-Match`. |
 | `server/auth.ts` | Optional HTTP Basic sign-in: `createAuthConfig`, `isAuthorized`, `AUTH_CHALLENGE`. |
@@ -144,7 +162,11 @@ a deployed Worker was not verified.
 7. **A missing path with a file extension** → `404`. **Anything else** → `index.html` (SPA fallback).
 
 Static responses carry `securityHeaders`, including CSP `default-src 'self'`,
-`connect-src 'self'`, `img-src 'self' data:` and `frame-ancestors 'none'`.
+`connect-src 'self'`, `img-src 'self' data:`, `media-src 'self' blob:` and
+`worker-src 'self' blob:` (MSE playback for the live player) and `frame-ancestors 'none'`.
+`GET`/`HEAD /api/tunarr/media-folder/:role/:file` is served by `nodeAdapter`
+(`handlePlayback`): a media-folder file streamed with single byte ranges (`parseRange`),
+for previews.
 
 The Vite dev middleware in `vite.local.config.ts` applies the same host and
 sign-in checks to every request, including `/healthz`, before handling
@@ -332,6 +354,52 @@ pipeline as the content routes but answer from the companion.
 | `/ai` | GET | `{ enabled, provider, model }`, or `{ enabled: false, message }` saying what to set |
 | `/ai/template` | POST | `{ prompt (≤ 2000 chars), channelId?, includeLibrary, baseTemplate? }`. `gatherContext` reads smart collections, custom shows and filler lists, and optionally the library (shows and movies via `POST /api/programs/search`, up to 600 and 300) and the channel's programming (a most-aired summary). `callModel` sends `SYSTEM_PROMPT` plus `buildUserMessage`; the model must call `propose_schedule` (`PROPOSAL_SCHEMA`). `resolveProposal` converts blocks, keeps role sources only when the id is in the catalog, drops suggestions `rulesToFilter` rejects, picks lists only from known ids, and validates the result with an `ai-…` id. Provider errors become `ai_auth`, `ai_rate_limited`, `ai_timeout`, `ai_unreachable` or `ai_invalid`. |
 
+Further Lineup routes (owner decision 2026-10-19, D50–D52):
+
+| Route | Methods | Behaviour |
+| --- | --- | --- |
+| `/channels/:id/snapshots` | GET, POST | List the channel's snapshots (summaries); POST reads Tunarr's programming and takes one now (needs `TUNARR_URL`) |
+| `/channels/:id/snapshots/:snapshotId` | GET, DELETE | One snapshot with its lineup and slim programs; delete it |
+| `/drafts` | GET | Draft summaries `{ channelId, version, updatedAt, dirty }` |
+| `/drafts/:channelId` | GET, PUT, DELETE | The draft (or `null`); PUT checks it with `validateDraft` |
+| `/scheduled` | GET, POST | `{ enabled, message?, changes }` (summaries); POST a plan `{ group, changes }` checked by `validatePlan` (503 when `LINEUP_SCHEDULER` is off). A change already due runs at once. |
+| `/scheduled/:id` | DELETE | Cancels a pending change and the rest of its plan |
+| `/ai/review` | POST | `{ channelName, summary (≤ 40,000 chars), issues (≤ 100) }` → `callModel` with `REVIEW_PROMPT` and the `review_schedule` tool → `resolveReview` |
+
+Every programming POST (manual and schedule) takes a snapshot of Tunarr's current
+programming after the version check and before the write; the recreate route takes one
+first and moves the channel's snapshots to the new id afterwards.
+
+### Watching routes (`server/watch.ts`)
+
+Tried after the content routes; GET only, Origin check, and no query except on `/guide`.
+
+| Route | Upstream and rules |
+| --- | --- |
+| `/guide?from&to` | ISO date-times, at most 24 hours (`validateGuideRange`) → `GET /api/guide/channels?dateFrom&dateTo` → `{ from, to, channels: [{ id, number, name, programs: [{ start, stop, type, title, detail, id?, fillerListId?, redirectTo? }] }] }` (`slimGuide`; Tunarr's reply carries full metadata and can be several MB) |
+| `/sessions` | `GET /api/sessions` → `{ [channelId]: { viewers, streams } }` for live sessions only; addresses and user agents dropped |
+| `/redirects` | Every channel's programming, four at a time → `{ edges: [{ from, to }] }` (lineup redirects and redirect slots) |
+| `/channels/:id/stream.m3u8` | `GET /stream/channels/:id.m3u8?mode=hls` (30 s timeout), rewritten by `rewritePlaylist` |
+| `/channels/:id/hls/:file` | `:file` must match `STREAM_FILE`; `GET /stream/channels/:id/hls/:file`. Playlists are rewritten; other parts must be video/audio types, ≤ 64 MB |
+
+`rewritePlaylist` resolves every URI line and `URI="…"` attribute against the upstream
+playlist and allows only `TUNARR_URL`'s origin and base path with `/stream/channels/<this
+id>/hls/<STREAM_FILE>` or `/stream/channels/<this id>.m3u8`; anything else makes the whole
+playlist a 502 `stream_unexpected`.
+
+### Scheduler (`server/scheduler.ts`)
+
+`createProxyConfig` creates it with `enabled` from `LINEUP_SCHEDULER` (`on`, `true`, `1`);
+`server/main.ts` and the Vite dev plugin call `start()`. Every 30 s `runDue` takes the
+pending changes that are due, oldest first. Past `notAfter` (default `at` + 12 h) a change
+is skipped as missed. Otherwise `applyChange` runs under `withChannelLock`: read Tunarr's
+programming, check the change's condition (`lineup`: version equals `expectVersion`;
+`patch`: `findPatch` locates the identities being removed; `restore`: the version equals
+the `appliedVersion` its `lineup` change left), take a snapshot, save a manual lineup
+(zero-length items dropped), read back and record `appliedVersion` and `snapshotId`.
+A failed condition marks it `skipped` with the reason and skips the plan's pending
+restores; Tunarr unreachable retries next tick until `notAfter`.
+
 ### Channel logos (`server/logos.ts`)
 
 `channelLogo` reads the channel's `icon.path` and `logoSource` classifies it:
@@ -510,10 +578,11 @@ position) and downloads it via a `Blob` object URL. The filename gets an
 
 ## 9. Persistence
 
-- **Tunarr** holds all channel data. The companion's only stored state is saved templates (`LINEUP_DATA_DIR/templates.json`) and filler-list roles and folder links (`filler-roles.json`), plus the video files users upload to the media folder (`LINEUP_MEDIA_DIR`, when set); in memory it keeps channel locks and the logo cache.
+- **Tunarr** holds all channel data. The companion stores, in `LINEUP_DATA_DIR`: saved templates (`templates.json`), filler-list roles and folder links (`filler-roles.json`), snapshots (`snapshots/<channel>.json`), shared drafts (`drafts/`) and scheduled changes (`scheduled.json`); plus the video files users upload to the media folder (`LINEUP_MEDIA_DIR`, when set). In memory it keeps channel locks and the logo cache.
 - **The browser** keeps per-channel drafts (unsaved order and edit list) in IndexedDB (database `tunarr-lineup`, store `drafts`, key `channelId`). Each draft is tied to the programming version it was made against and is dropped once that version is gone.
   - If IndexedDB is unavailable or fails, an in-memory store is used and `draftStore().persistent` is false.
-  - Drafts are per browser; they are not shared between devices.
+  - Drafts are also written to the companion (`sharedDraftStore` over `companionDrafts`), and a load takes the newer copy, so they follow the user between devices. Without the companion's draft routes (hosted preview) they stay per browser.
+- **Per-viewer conveniences** in `localStorage`: the lineup check's settings per channel (`lineup-check:<id>`), wrapped in try/catch.
 - **Not persisted:** slot-schedule drafts and demo edits live only in React state.
 
 ## 10. Authentication
@@ -545,7 +614,8 @@ userinfo.
 | `TUNARR_URL` | `createProxyConfig` (via `server/main.ts`, `vite.local.config.ts`) | Upstream Tunarr base URL (server-side only) |
 | `TUNARR_TIMEOUT_MS`, `TUNARR_SAVE_TIMEOUT_MS` | `createProxyConfig` | Upstream timeouts |
 | `LINEUP_EXTERNAL_LOGOS` | `createProxyConfig` | `false` stops fetching channel logos from public sites |
-| `LINEUP_DATA_DIR` | `createProxyConfig` → `createTemplateStore` | Saved templates folder (default `./data`, `/data` in Docker) |
+| `LINEUP_DATA_DIR` | `createProxyConfig` → the stores and the scheduler | Lineup's data folder (default `./data`, `/data` in Docker) |
+| `LINEUP_SCHEDULER` | `createProxyConfig` → `createScheduler` | `on` saves scheduled changes when due (default off) |
 | `LINEUP_MEDIA_DIR`, `LINEUP_MEDIA_TUNARR_DIR`, `LINEUP_MEDIA_MAX_MB` | `createMediaFolder` | The media folder as Lineup sees it (uploads off when unset), as Tunarr sees it (default: the same), and the upload size limit (default 4096 MB) |
 | `LINEUP_AI_PROVIDER`, `LINEUP_AI_API_KEY` (or `ANTHROPIC_API_KEY`/`OPENAI_API_KEY`), `LINEUP_AI_MODEL`, `LINEUP_AI_BASE_URL`, `LINEUP_AI_TIMEOUT_MS` | `createAiConfig` | AI assistant provider (off when unset) |
 | `LINEUP_PASSWORD`, `LINEUP_USERNAME` | `createAuthConfig` | Optional sign-in |
@@ -585,6 +655,7 @@ bundle (`envPrefix`); none are used.
     - slot helpers
     - draft encoding and decoding, the IndexedDB store via `fake-indexeddb`, the memory fallback, `rebaseHistory` and version fingerprints
   - `page.test.tsx` (jsdom): `Home` against a stateful `fakeCompanion()`. The fake enforces `If-Match` like the companion. Covers live loading, saves, 412 conflicts, remote slide and cancel, block moves, the Move dialog, menus, the on-air marker, export, drafts kept across channel switches and reloads, undo past a save, stale drafts dropped, the slot editor (catalog sources, adding slots with commercials and mid-roll, creating a time-slot schedule for a manual channel, preview then save with the seed, discard), library inserts, commercial breaks, remove/length/undo, drafts with inserted items, filler-list creation, and channel filler settings, demo guards, and no silent demo fallback.
+  - `watch.test.ts` (guide, sessions, stream rewriting and refusals, redirect graph), `scheduler.test.ts` (plans, patches, overlays, skips, cancel), `companionStores.test.ts` (snapshots, shared drafts, media playback ranges, AI review), `deskTools.test.ts` (lineup check, alignment, marathons, air-once patches, week log, guide grid, browser draft sync, lineup files). Tests that build a full config use a temporary `LINEUP_DATA_DIR` (`tests/tempData.ts`).
 - **`e2e/` (Playwright):**
   - `responsive.spec.ts` checks a 390×844 touch phone (Menu sheet, Program Info sheet edit and save, channel strip) and that 768×1024, 1280×800 and 2560×1080 fit without horizontal overflow.
   - `desk.spec.ts` runs at 1920×1080 against the built companion and `fake-tunarr.mjs`. The fake mimics Tunarr's guide window and provides `/__test/reset`, `/__test/state` and `/__test/edit-elsewhere` hooks.
@@ -595,6 +666,7 @@ bundle (`envPrefix`); none are used.
     - draft restore after a real reload (IndexedDB)
     - random-slot edit → preview → save (checking the saved schedule, seed and server-built program pool in the fake)
     - keyboard menus, CSV download and phone width
+  - `tools.spec.ts`: viewer counts without addresses, the guide grid by remote, watching through the companion only, the lineup check and snapshot restore, the week view export, and a planned/cancelled dated save. The fake also serves `/api/guide/channels`, `/api/sessions` and `/stream/channels/…`. Each test clears the companion's shared drafts first.
 
 ## 14. Cross-cutting patterns
 
