@@ -8,6 +8,15 @@ were renamed 2026.10.1 and 2026.10.2.
 
 ## [Unreleased]
 
+## [2026.10.5] - 2026-10-19
+
+### Watching like a cable box
+
+- **A sturdier player**: a stream that fails is retried on its own with a growing wait (five tries, with a countdown and **Retry now**); one with no picture after 45 s or stuck buffering for 20 s is restarted; it retries when the network comes back, and plays muted (and says so) when the browser blocks sound.
+- **Tuning like a cable box**: CH± (or ↑ ↓) go up and down the dial by number, digits tune directly, `R` / **LAST** goes back, and `I` / **INFO** shows the channel banner with what's on, its progress and what's next. `M` mutes, `+`/`−` change volume, `F` goes full screen. In the player, CH+ and PgUp now go to a higher channel number.
+- **A remote beside the picture** with every one of those buttons, for a mouse or touch screen (below the picture on phones).
+- **Cable guide** (`G` / **GUIDE** while watching): the on-screen guide of an early-2000s cable box, inside the picture. The channel keeps playing in a corner window beside the focused program's details; below, five channels and ninety minutes at a time. OK tunes.
+
 ## [2026.10.4] - 2026-10-19
 
 ### Seeing every channel
@@ -133,7 +142,8 @@ First public release.
   reaches Tunarr through a narrow allowlisted proxy. Optional HTTP Basic
   sign-in and host-name checks against DNS rebinding.
 
-[Unreleased]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.4...HEAD
+[Unreleased]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.5...HEAD
+[2026.10.5]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.4...v2026.10.5
 [2026.10.4]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.3...v2026.10.4
 [2026.10.3]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.2...v2026.10.3
 [2026.10.2]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.1...v2026.10.2
