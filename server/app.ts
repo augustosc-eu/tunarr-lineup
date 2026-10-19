@@ -24,7 +24,7 @@ const mimeTypes: Record<string, string> = {
 // The page may only talk to its own origin; this also blocks any accidental
 // direct request to Tunarr from the browser.
 const securityHeaders = {
-  'content-security-policy': "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; media-src 'self' blob:; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
+  'content-security-policy': "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; media-src 'self' blob: data:; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
   'x-content-type-options': 'nosniff',
   'referrer-policy': 'no-referrer',
 };

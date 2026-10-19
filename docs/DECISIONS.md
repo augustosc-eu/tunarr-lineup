@@ -440,9 +440,9 @@ on the `broadcast-programming` branch.
 - **Decision:**
   - **`GET /api/tunarr/channels/:id/stream.m3u8` and `…/hls/:file`** fetch Tunarr's `/stream/channels/:id.m3u8?mode=hls` and `/stream/channels/:id/hls/:file` (read on a real Tunarr 2026.9.3: a master playlist pointing at `hls/stream.m3u8`, which lists `dataNNNNNN.ts`). File names must match `STREAM_FILE`.
   - **Playlists are rewritten, failing closed.** Every address (lines and `URI="…"` attributes) must resolve to this channel's own HLS files on `TUNARR_URL`; otherwise the whole playlist is refused (502 `stream_unexpected`). Segments pass only with video/audio types, up to 64 MB each.
-  - **Always HLS**, whatever the channel's stream mode, because that's what a browser plays. Safari and TV browsers play it natively; elsewhere `hls.js` (client bundle only, loaded on first use) does.
+  - **Always HLS**, whatever the channel's stream mode, because that's what a browser plays. `hls.js` (client bundle only, loaded on first use) plays it wherever it runs; only browsers without MSE (older iPhones) use native HLS. Native comes second because Chrome now reports native HLS support, and on Tunarr 2026.10.3 its player dropped every channel after about 12 s and refused some outright (looping "No signal"), while hls.js played the same channels without a break.
   - **Viewer counts** come from `/api/sessions` reduced to `{ viewers, streams }` per channel; IPs and user agents never leave the companion.
-  - The page CSP gains `media-src 'self' blob:` and `worker-src 'self' blob:` for MSE playback; `connect-src` stays `'self'`.
+  - The page CSP gains `media-src 'self' blob: data:` and `worker-src 'self' blob:` for MSE playback (`data:` is the empty subtitle track hls.js adds for channels with subtitles); `connect-src` stays `'self'`.
 - **Consequence:** watching starts a Tunarr session like any player, and counts as a viewer. Segments are buffered whole by the proxy (they are a few seconds each). Previewing a library program before inserting it isn't possible: Tunarr has no per-program stream route; uploaded filler files can be played from the media folder.
 
 ## D50. The companion keeps snapshots and shared drafts

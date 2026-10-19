@@ -57,7 +57,7 @@ server implements those paths.
 | `app/components/MarathonDialog.tsx` | A run of programs with breaks between (`buildMarathon`), placed with `placeEvent`. |
 | `app/components/NetworkDialog.tsx` | Copy the selection to a channel, simulcast it on the network (redirects placed with `placeEvent`), or share commercial settings; each target saved with its own version or settings merge. |
 | `app/components/WatchDialog.tsx` | The live player, run like a cable box: CH±, number entry, LAST, the INFO banner (now/next from the guide), volume, mute and full screen. Owns the cable guide's focus and loads the guide in three-hour chunks with the same loader as the guide grid. |
-| `app/useLiveStream.ts` | Plays `streamUrl(channelId)` (native HLS or `hls.js`, dynamic import) and keeps it playing: retries with a growing wait (`retryDelay`), a 45 s tuning timeout, a 20 s stall watchdog, a retry when the browser comes back online, and muted autoplay when sound is blocked. |
+| `app/useLiveStream.ts` | Plays `streamUrl(channelId)` (`hls.js`, dynamic import, wherever it runs; native HLS only where it can’t, since Chrome’s native player drops Tunarr streams) and keeps it playing: retries with a growing wait (`retryDelay`), a 45 s tuning timeout, a 20 s stall watchdog, a retry when the browser comes back online, and muted autoplay when sound is blocked. |
 | `app/components/TvRemote.tsx` | The on-screen remote beside the picture; every button sends the same `RemoteAction` as its key. |
 | `app/components/CableGuide.tsx` | The early-2000s on-screen guide inside the picture: details and the picture window on top, five channels × ninety minutes below, forward only. |
 | `app/components/SnapshotsDialog.tsx` | Snapshot list, restore, take now, delete; lineup export/import files (`readExport`). |
@@ -166,8 +166,9 @@ a deployed Worker was not verified.
 7. **A missing path with a file extension** → `404`. **Anything else** → `index.html` (SPA fallback).
 
 Static responses carry `securityHeaders`, including CSP `default-src 'self'`,
-`connect-src 'self'`, `img-src 'self' data:`, `media-src 'self' blob:` and
-`worker-src 'self' blob:` (MSE playback for the live player) and `frame-ancestors 'none'`.
+`connect-src 'self'`, `img-src 'self' data:`, `media-src 'self' blob: data:` and
+`worker-src 'self' blob:` (MSE playback for the live player; `data:` for the empty
+subtitle track hls.js adds) and `frame-ancestors 'none'`.
 `GET`/`HEAD /api/tunarr/media-folder/:role/:file` is served by `nodeAdapter`
 (`handlePlayback`): a media-folder file streamed with single byte ranges (`parseRange`),
 for previews.

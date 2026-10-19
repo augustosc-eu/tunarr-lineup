@@ -77,31 +77,41 @@ function playStream(element: HTMLVideoElement, channelId: string, attempts: Atte
   arm(TUNE_TIMEOUT_MS, 'Tunarr didn’t start the stream in time.');
 
   const source = streamUrl(channelId);
-  if (element.canPlayType('application/vnd.apple.mpegurl')) {
+  // Safari's own player (and older iPhones, where hls.js can't run) play HLS natively.
+  const playNative = () => {
     element.src = source;
     start();
     const onError = () => failed('The stream stopped. Tunarr may still be starting it.');
     element.addEventListener('error', onError);
     destroy = () => { element.removeEventListener('error', onError); element.removeAttribute('src'); element.load(); };
-  } else {
-    import('hls.js').then(({ default: Hls }) => {
-      if (cancelled) return;
-      if (!Hls.isSupported()) { attempts.count = MAX_RETRIES; failed('This browser can’t play live streams.'); return; }
-      // Tunarr starts the stream when asked, so the first playlist can take a few seconds.
-      const hls = new Hls({ manifestLoadingTimeOut: 30_000, manifestLoadingMaxRetry: 3, levelLoadingTimeOut: 30_000, fragLoadingMaxRetry: 4, liveSyncDurationCount: 3 });
-      let mediaRecoveries = 0;
-      hls.on(Hls.Events.ERROR, (_event, data) => {
-        if (!data.fatal) return;
-        if (data.type === Hls.ErrorTypes.MEDIA_ERROR && mediaRecoveries < 2) { mediaRecoveries += 1; hls.recoverMediaError(); return; }
-        const code = (data.response as { code?: number } | undefined)?.code;
-        failed(code === 404 ? 'Tunarr has no stream for this channel right now.' : code === 502 || code === 504 ? 'Tunarr didn’t start the stream. Check that the channel has programming.' : 'The stream stopped.');
-      });
-      hls.on(Hls.Events.MANIFEST_PARSED, start);
-      hls.loadSource(source);
-      hls.attachMedia(element);
-      destroy = () => hls.destroy();
-    }).catch(() => { attempts.count = MAX_RETRIES; failed('The player couldn’t load.'); });
-  }
+  };
+  const canPlayNative = () => element.canPlayType('application/vnd.apple.mpegurl') !== '';
+  // hls.js first wherever it runs: Chrome now says it can play HLS itself, but its
+  // player drops Tunarr's live playlists after a few seconds or refuses them outright.
+  import('hls.js').then(({ default: Hls }) => {
+    if (cancelled) return;
+    if (!Hls.isSupported()) {
+      if (canPlayNative()) { playNative(); return; }
+      attempts.count = MAX_RETRIES; failed('This browser can’t play live streams.'); return;
+    }
+    // Tunarr starts the stream when asked, so the first playlist can take a few seconds.
+    const hls = new Hls({ manifestLoadingTimeOut: 30_000, manifestLoadingMaxRetry: 3, levelLoadingTimeOut: 30_000, fragLoadingMaxRetry: 4, liveSyncDurationCount: 3 });
+    let mediaRecoveries = 0;
+    hls.on(Hls.Events.ERROR, (_event, data) => {
+      if (!data.fatal) return;
+      if (data.type === Hls.ErrorTypes.MEDIA_ERROR && mediaRecoveries < 2) { mediaRecoveries += 1; hls.recoverMediaError(); return; }
+      const code = (data.response as { code?: number } | undefined)?.code;
+      failed(code === 404 ? 'Tunarr has no stream for this channel right now.' : code === 502 || code === 504 ? 'Tunarr didn’t start the stream. Check that the channel has programming.' : 'The stream stopped.');
+    });
+    hls.on(Hls.Events.MANIFEST_PARSED, start);
+    hls.loadSource(source);
+    hls.attachMedia(element);
+    destroy = () => hls.destroy();
+  }).catch(() => {
+    if (cancelled) return;
+    if (canPlayNative()) { playNative(); return; }
+    attempts.count = MAX_RETRIES; failed('The player couldn’t load.');
+  });
 
   // Back online after a drop: try again straight away.
   const onOnline = () => { if (done && !cancelled) { attempts.count = 0; on.restart(); } };
