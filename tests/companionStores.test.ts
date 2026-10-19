@@ -5,6 +5,7 @@ import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { createLineupServer } from '../server/app';
 import { programmingVersion } from '../server/lineupVersion';
+import { ROLE_FOLDERS } from '../server/mediaFolder';
 import { parseRange } from '../server/nodeAdapter';
 import { validateDraft } from '../server/sharedDraftStore';
 import { createSnapshotStore, MAX_SNAPSHOTS_PER_CHANNEL } from '../server/snapshotStore';
@@ -100,8 +101,9 @@ describe('media playback', () => {
 
   it('streams a media-folder file with ranges and refuses anything outside it', async () => {
     const media = await tempDir('media');
-    await mkdir(path.join(media, 'Commercials'), { recursive: true });
-    await writeFile(path.join(media, 'Commercials', 'spot.mp4'), Buffer.from('0123456789'));
+    // The role folder's real name: Linux file systems are case-sensitive.
+    await mkdir(path.join(media, ROLE_FOLDERS.commercials), { recursive: true });
+    await writeFile(path.join(media, ROLE_FOLDERS.commercials, 'spot.mp4'), Buffer.from('0123456789'));
     const server = createLineupServer({ config: createProxyConfig({ LINEUP_MEDIA_DIR: media, LINEUP_DATA_DIR: await tempDir('data') }), auth: null, staticRoot: await tempDir('static') });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/tunarr/media-folder`;
