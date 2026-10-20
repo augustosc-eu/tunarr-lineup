@@ -1,5 +1,5 @@
 // Changes that go live on a date, saved by the companion with nobody at the
-// desk (owner decision 2026-10-19; off unless LINEUP_SCHEDULER=on). Three kinds:
+// desk (owner decision 2026-10-19; off unless LINEUP_SCHEDULER=on). Four kinds:
 //
 //   lineup   save this manual lineup (a dated save, or a seasonal overlay
 //            beginning), only if the channel is still the version it was
@@ -8,6 +8,10 @@
 //            being taken out must still be there, matched by itemIdentity
 //   restore  put back what a lineup change replaced (an overlay ending), only
 //            if nothing has changed since that change went in
+//   premiere add programs shortly before they start, at the boundary before
+//            `startsAt` in whatever lineup the channel has then, with flex up
+//            to it, keeping what's on air in place (premierePlacement); only
+//            on a manual lineup
 //
 // Every save is conditional and runs under the channel's lock, exactly like a
 // save from the desk, and a snapshot is kept first. A change whose condition
@@ -15,8 +19,10 @@
 import { randomUUID } from 'node:crypto';
 import { withChannelLock } from './channelLock.js';
 import { createJsonFile, StoreError } from './jsonFile.js';
+import { setChannelStartTime } from './content.js';
 import { lineupItemsError, slimPrograms } from './lineupItems.js';
 import { itemIdentity, programmingVersion } from './lineupVersion.js';
+import { premierePlacement } from './premiere.js';
 import type { SnapshotStore } from './snapshotStore.js';
 import type { ProxyConfig, TunarrTarget } from './tunarrProxy.js';
 import { callTunarr, UpstreamError } from './upstream.js';
@@ -26,6 +32,8 @@ const MAX_FINISHED_KEPT = 200;
 /** How late a change may still run (the companion was off): later than this, it's skipped as missed. */
 export const DEFAULT_GRACE_MS = 12 * 3_600_000;
 const MAX_AHEAD_MS = 400 * 86_400_000;
+/** How long before its start a premiere may be planned to go in. */
+export const MAX_PREMIERE_LEAD_MS = 2 * 86_400_000;
 const CHANNEL_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const VERSION = /^[a-z0-9-]{1,64}$/i;
 const CHANGE_ID = /^[0-9a-f-]{36}$/;
@@ -37,7 +45,8 @@ const isObject = (value: unknown): value is Json => !!value && typeof value === 
 export type ChangeAction =
   | { kind: 'lineup'; lineup: Item[]; expectVersion: string }
   | { kind: 'patch'; index: number; remove: string[]; insert: Item[] }
-  | { kind: 'restore'; after: string };
+  | { kind: 'restore'; after: string }
+  | { kind: 'premiere'; startsAt: number; insert: Item[] };
 
 export type ChangeStatus = 'pending' | 'done' | 'skipped' | 'failed' | 'cancelled';
 
@@ -47,7 +56,7 @@ export type ScheduledChange = {
   channelName: string;
   label: string;
   /** What kind of plan it belongs to, for the list: a dated save, an event that airs once, a seasonal overlay. */
-  group: 'save' | 'event' | 'overlay';
+  group: 'save' | 'event' | 'overlay' | 'premiere';
   /** Links the two halves of an event or overlay. */
   planId: string;
   at: number;
@@ -73,7 +82,7 @@ export function summarize(change: ScheduledChange): ChangeSummary {
   delete rest.action;
   delete rest.programs;
   const { action } = change;
-  return { ...(rest as Omit<ScheduledChange, 'action' | 'programs'>), kind: action.kind, items: action.kind === 'lineup' ? action.lineup.length : action.kind === 'patch' ? action.insert.length : 0 };
+  return { ...(rest as Omit<ScheduledChange, 'action' | 'programs'>), kind: action.kind, items: action.kind === 'lineup' ? action.lineup.length : action.kind === 'patch' || action.kind === 'premiere' ? action.insert.length : 0 };
 }
 
 type NewChange = { channelId: string; channelName: string; label: string; at: number; notAfter?: number; action: ChangeAction; programs: Record<string, unknown> };
@@ -95,6 +104,13 @@ function validateAction(raw: unknown, ids: Set<string>): ChangeAction | { error:
     if (!raw.remove.length && !(raw.insert as unknown[]).length) return { error: 'The change does nothing.' };
     return { kind: 'patch', index: raw.index as number, remove: raw.remove as string[], insert: raw.insert as Item[] };
   }
+  if (raw.kind === 'premiere') {
+    const problem = lineupItemsError(raw.insert, 'Inserted item');
+    if (problem) return { error: problem };
+    if (!(raw.insert as unknown[]).length) return { error: 'The change does nothing.' };
+    if (typeof raw.startsAt !== 'number' || !Number.isFinite(raw.startsAt)) return { error: 'Say when the programs start ("startsAt").' };
+    return { kind: 'premiere', startsAt: raw.startsAt, insert: raw.insert as Item[] };
+  }
   if (raw.kind === 'restore') {
     // `after` names a change in the same request (by its position) or an existing one.
     if (typeof raw.after === 'number' && Number.isInteger(raw.after)) return { kind: 'restore', after: `#${raw.after}` };
@@ -111,7 +127,7 @@ function validateAction(raw: unknown, ids: Set<string>): ChangeAction | { error:
 export function validatePlan(body: unknown, now: number, existing: ScheduledChange[]): { group: ScheduledChange['group']; changes: NewChange[] } | { error: string } {
   if (!isObject(body)) return { error: 'Send { "group", "changes": [...] }.' };
   const group = body.group;
-  if (group !== 'save' && group !== 'event' && group !== 'overlay') return { error: '"group" must be save, event or overlay.' };
+  if (group !== 'save' && group !== 'event' && group !== 'overlay' && group !== 'premiere') return { error: '"group" must be save, event, overlay or premiere.' };
   if (!Array.isArray(body.changes) || !body.changes.length || body.changes.length > 2) return { error: 'A plan has one or two changes.' };
   const ids = new Set(existing.filter((change) => change.action.kind === 'lineup').map((change) => change.id));
   const changes: NewChange[] = [];
@@ -128,10 +144,16 @@ export function validatePlan(body: unknown, now: number, existing: ScheduledChan
       const target = changes[Number(action.after.slice(1))];
       if (!target || target.action.kind !== 'lineup') return { error: 'A restore must follow a scheduled lineup change.' };
     }
-    const items = action.kind === 'lineup' ? action.lineup : action.kind === 'patch' ? action.insert : [];
+    if (action.kind === 'premiere') {
+      if (group !== 'premiere' || body.changes.length !== 1) return { error: 'A premiere is a plan of its own.' };
+      if (action.startsAt < raw.at || action.startsAt - raw.at > MAX_PREMIERE_LEAD_MS) return { error: 'A premiere goes in within two days before it starts.' };
+      if (typeof raw.notAfter === 'number' && raw.notAfter > action.startsAt) return { error: '"notAfter" can’t be after the premiere starts.' };
+    }
+    const items = action.kind === 'lineup' ? action.lineup : action.kind === 'patch' || action.kind === 'premiere' ? action.insert : [];
     changes.push({
       channelId: raw.channelId, channelName: typeof raw.channelName === 'string' ? raw.channelName.slice(0, 120) : '', label, at: raw.at,
-      notAfter: typeof raw.notAfter === 'number' ? raw.notAfter : undefined, action, programs: slimPrograms(items, raw.programs),
+      // A premiere that didn't go in before it starts is missed, not late.
+      notAfter: typeof raw.notAfter === 'number' ? raw.notAfter : action.kind === 'premiere' ? action.startsAt : undefined, action, programs: slimPrograms(items, raw.programs),
     });
   }
   if (changes.length === 2 && changes[1].at <= changes[0].at) return { error: 'The second change must come after the first.' };
@@ -218,6 +240,9 @@ export async function applyChange(config: ProxyConfig, target: TunarrTarget, cha
   const lineup = (Array.isArray(current?.lineup) ? current.lineup : []) as Item[];
   const version = programmingVersion(current?.lineup, current?.schedule);
   let next: unknown[];
+  // Set by a premiere: the channel start that keeps what's on air in place, and a note on when it starts.
+  let startTime: number | undefined;
+  let note = '';
   const action = change.action;
   if (action.kind === 'lineup') {
     if (version !== action.expectVersion) return { status: 'skipped', message: 'The channel changed after this was planned, so it wasn’t saved. Open the channel and plan it again.' };
@@ -226,6 +251,17 @@ export async function applyChange(config: ProxyConfig, target: TunarrTarget, cha
     const at = findPatch(lineup, action.index, action.remove);
     if (at < 0) return { status: 'skipped', message: 'The programs this change replaces are no longer where they were, so nothing was changed.' };
     next = [...lineup.slice(0, at), ...action.insert, ...lineup.slice(at + action.remove.length)];
+  } else if (action.kind === 'premiere') {
+    if (current?.schedule != null) return { status: 'skipped', message: 'This channel is generated from a slot schedule now, so programs can’t be added to its lineup.' };
+    const channel = (await callTunarr(config, target, 'GET', `/api/channels/${change.channelId}`)) as { startTime?: unknown } | null;
+    if (typeof channel?.startTime !== 'number') return { status: 'failed', message: 'Tunarr returned an unexpected channel.' };
+    const added = action.insert.reduce((sum, item) => sum + item.duration, 0);
+    const placement = premierePlacement(lineup, channel.startTime, Date.now(), action.startsAt, added);
+    if (!placement) return { status: 'skipped', message: 'It couldn’t be placed: its start time had passed, or the channel’s lineup is empty.' };
+    next = [...lineup.slice(0, placement.index), ...(placement.gap ? [{ type: 'flex', duration: placement.gap }] : []), ...action.insert, ...lineup.slice(placement.index)];
+    startTime = placement.startTime;
+    const late = Math.round((placement.start - action.startsAt) / 60_000);
+    if (late > 0) note = ` It starts ${late} ${late === 1 ? 'minute' : 'minutes'} late: the program before it was already on.`;
   } else {
     const begun = all.find((item) => item.id === action.after);
     if (!begun || begun.status !== 'done' || !begun.snapshotId || !begun.appliedVersion) return { status: 'skipped', message: 'The change this undoes never went in, so there is nothing to put back.' };
@@ -240,11 +276,20 @@ export async function applyChange(config: ProxyConfig, target: TunarrTarget, cha
   // take() returns null when the newest snapshot already is this version; find that one.
   const snapshotId = snapshot?.id ?? (await snapshots?.list(change.channelId).catch(() => []))?.find((item) => item.version === version)?.id;
   await callTunarr(config, target, 'POST', programmingPath, JSON.stringify({ type: 'manual', lineup: keep, append: false }));
+  if (startTime !== undefined) {
+    const kept = startTime;
+    // Saved first, like the desk: if the start can't move, it's an ordinary save and says so.
+    try {
+      await setChannelStartTime(config, target, change.channelId, () => kept);
+    } catch (error) {
+      note += ` The start time didn’t move, so programs around it shifted: ${error instanceof UpstreamError ? error.message : 'Tunarr did not accept it.'}`;
+    }
+  }
   const saved = (await callTunarr(config, target, 'GET', programmingPath)) as Programming | null;
   const skipped = next.length - keep.length;
   return {
     status: 'done',
-    message: `Saved to Tunarr${skipped ? ` (${skipped} zero-length ${skipped === 1 ? 'item' : 'items'} left out)` : ''}.`,
+    message: `Saved to Tunarr${skipped ? ` (${skipped} zero-length ${skipped === 1 ? 'item' : 'items'} left out)` : ''}.${note}`,
     snapshotId,
     appliedVersion: programmingVersion(saved?.lineup, saved?.schedule),
   };

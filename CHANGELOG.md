@@ -8,6 +8,11 @@ were renamed 2026.10.1 and 2026.10.2.
 
 ## [Unreleased]
 
+### Added
+
+- **Program bin: premieres.** At a time… → Add to the lineup: **Just before they start** schedules the programs instead of adding them now: the Lineup server adds them shortly before they start, exactly on time and keeping what's on air in place, so none of them airs earlier, however short the channel's loop. Listed in File → Scheduled Changes. Needs `LINEUP_SCHEDULER=on`.
+- **Program bin: Slot schedule….** Puts picked shows into the channel's time-slot schedule at a time on chosen days (each show back to back, in episode order that continues from airing to airing). What was on picks up again after them, linked so it continues too. Opens the slot schedule editor with the result to preview and save.
+
 ## [2026.10.10] - 2026-10-20
 
 ### Added

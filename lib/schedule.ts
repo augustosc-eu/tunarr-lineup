@@ -382,3 +382,111 @@ export function setSeasons(slot: Slot, mode: 'all' | 'only' | 'except', seasons:
   const sorted = [...new Set(seasons)].sort((a, b) => a - b);
   return { ...slot, seasonFilter: mode === 'only' ? sorted : [], seasonExcludeFilter: mode === 'except' ? sorted : [] };
 }
+
+// ------------------------------------------------- shows from the program bin
+
+export type ShowPick = { id: string; title: string; mediaSourceId?: string; libraryId?: string };
+
+/**
+ * Shows from the program bin, each in its own time slot of `length` ms, back
+ * to back from `time` (HH:MM) on the chosen weekdays (`Date#getDay()`).
+ * `order: 'next'` plays each show in season and episode order, continuing
+ * from one airing to the next.
+ */
+export type ShowSlotPlan = { time: string; length: number; weekdays: number[]; order: 'next' | 'shuffle' };
+
+export type ShowSlotResult = {
+  draft: ScheduleDraftState;
+  added: number;
+  /** "Slot name 20:30" for what the new slots take the place of. */
+  replaced: string[];
+  /** "Slot name 21:00" for what picks up again after them. */
+  resumed: string[];
+  /** The schedule went from daily to weekly so the days could differ. */
+  toWeek: boolean;
+};
+
+const linkTo = (slot: Slot, group: string): Slot => ({ ...slot, iterationGroup: group, linkMode: slot.linkMode ?? 'continue' });
+
+/** A daily schedule as a weekly one: every slot on all seven days, each one's copies linked so they keep sharing episodes. */
+export function dailyToWeekly(draft: ScheduleDraftState): ScheduleDraftState {
+  const slots = draft.slots.flatMap((slot) => {
+    const group = slotCanLink(slot) ? (typeof slot.iterationGroup === 'string' ? slot.iterationGroup : newSlotId()) : null;
+    return Array.from({ length: 7 }, (_, day) => {
+      const copy = day === 0 ? { ...slot } : duplicateSlot(slot);
+      const timed = { ...copy, startTime: day * DAY_MS + (Number(slot.startTime) || 0) };
+      return group ? linkTo(timed, group) : timed;
+    });
+  });
+  return { ...draft, settings: { ...draft.settings, period: 'week' }, slots: sortTimeSlots(slots) };
+}
+
+/**
+ * Puts shows into a time-slot schedule. Slots that started inside the new
+ * windows are taken out; whatever was on when a window ends picks up again
+ * there (linked, so a show carries on with its next episode). A new schedule
+ * gets open airtime after them. Random schedules have no times: an error.
+ */
+export function addShowSlots(draft: ScheduleDraftState, shows: ShowPick[], plan: ShowSlotPlan): ShowSlotResult | { error: string } {
+  if (!shows.length) return { error: 'Pick a show (or + All on one) to give it a time slot.' };
+  let base = draft;
+  if (base.type === 'random') {
+    if (base.slots.length) return { error: 'This channel’s slot schedule is random, so its slots have no times. Convert it to time slots in the slot schedule editor first.' };
+    base = convertDraft(base, 'time');
+  }
+  const start = clockToOffset(plan.time);
+  if (!Number.isFinite(start)) return { error: 'Choose a start time.' };
+  if (!plan.weekdays.length) return { error: 'Choose at least one day.' };
+  if (!(plan.length >= 60_000) || plan.length * shows.length > DAY_MS) return { error: 'The slots must fit in a day.' };
+  const everyDay = new Set(plan.weekdays).size === 7;
+  const toWeek = !everyDay && base.settings.period !== 'week';
+  if (toWeek) base = dailyToWeekly(base);
+  const period = periodMs({ type: 'time', period: base.settings.period as 'day' | 'week' });
+  const days = period === DAY_MS ? [0] : [...new Set(plan.weekdays)].map((day) => day * DAY_MS);
+  const original = sortTimeSlots(base.slots);
+  const wrap = (time: number) => ((time % period) + period) % period;
+  const inWindow = (time: number, from: number) => wrap(time - from) < plan.length * shows.length;
+  const at = (slot: Slot) => `${period > DAY_MS ? `${WEEKDAY_NAMES[Math.floor(Number(slot.startTime) / DAY_MS)].slice(0, 3)} ` : ''}${offsetToClock(Number(slot.startTime)).slice(0, 5)}`;
+  const covering = (time: number) => [...original].reverse().find((slot) => Number(slot.startTime) <= time) ?? original[original.length - 1];
+
+  const added: Slot[] = [];
+  shows.forEach((show, index) => {
+    const group = days.length > 1 ? newSlotId() : null;
+    for (const day of days) {
+      const slot: Slot = { ...changeSlotSource({ type: 'flex' }, showOption(show)), order: plan.order, startTime: wrap(day + start + index * plan.length) };
+      added.push(group ? { ...slot, iterationGroup: group, linkMode: 'continue' } : slot);
+    }
+  });
+  const windows = days.map((day) => wrap(day + start));
+  const removed = original.filter((slot) => windows.some((from) => inWindow(Number(slot.startTime), from)));
+  let kept = original.filter((slot) => !removed.includes(slot));
+  const resumes: Slot[] = [];
+  const resumed: string[] = [];
+  for (const from of windows) {
+    const end = wrap(from + plan.length * shows.length);
+    if ([...kept, ...added, ...resumes].some((slot) => Number(slot.startTime) === end)) continue;
+    const was = original.length ? covering(end) : null;
+    if (!was) { resumes.push({ type: 'flex', startTime: end }); continue; }
+    let resume: Slot;
+    if (removed.includes(was)) {
+      // It began inside the window: it moves to the window's end instead (same slot, same episodes).
+      resume = { ...was, startTime: end };
+      removed.splice(removed.indexOf(was), 1);
+    } else if (slotCanLink(was)) {
+      const group = typeof was.iterationGroup === 'string' ? was.iterationGroup : newSlotId();
+      kept = kept.map((slot) => (slot === was ? linkTo(slot, group) : slot));
+      resume = linkTo({ ...duplicateSlot(was), order: was.order, direction: was.direction, startTime: end }, group);
+    } else {
+      resume = { ...duplicateSlot(was), startTime: end };
+    }
+    resumes.push(resume);
+    resumed.push(`${slotLabel(resume)} ${at(resume)}`);
+  }
+  return {
+    draft: { ...base, slots: sortTimeSlots([...kept, ...added, ...resumes]) },
+    added: added.length,
+    replaced: removed.map((slot) => `${slotLabel(slot)} ${at(slot)}`),
+    resumed,
+    toWeek,
+  };
+}

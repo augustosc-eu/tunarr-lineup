@@ -668,6 +668,55 @@ test('places programs from the bin in daily time slots, each starting exactly on
   expect(saved.filter((item) => item.id?.startsWith('4d4d4d4d'))).toHaveLength(1);
 });
 
+test('schedules a premiere from the bin: added just before it starts, nothing saved now', async ({ page }) => {
+  await page.keyboard.press('a');
+  const bin = page.getByRole('complementary', { name: 'Program bin' });
+  await bin.getByRole('button', { name: 'Pick Zulu Dawn (1979)' }).click();
+  await bin.getByRole('radio', { name: 'At a time…' }).click();
+  const at = new Date(Date.now() + 5 * 3_600_000);
+  at.setMinutes(7, 0, 0);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  await bin.getByLabel('Place on date').fill(`${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}`);
+  await bin.getByLabel('Place at time').fill(`${pad(at.getHours())}:07`);
+  await bin.getByLabel('Add to the lineup').selectOption('later');
+  await expect(bin.getByLabel('Start')).toHaveCount(0);
+  await expect(bin.getByRole('status', { name: 'Placement' })).toContainText(`Premieres`);
+  await expect(bin.getByRole('status', { name: 'Placement' })).toContainText('nothing of them airs earlier');
+  await bin.getByRole('button', { name: 'Schedule premiere' }).click();
+  await expect(page.getByRole('status').filter({ hasText: 'Premiere: “Zulu Dawn” is scheduled' })).toBeVisible();
+  // Nothing went to Tunarr yet; the companion holds it until just before.
+  expect((await fakeState(page)).saves).toBe(0);
+  const scheduled = (await (await page.request.get('/api/tunarr/scheduled')).json()) as { changes: Array<{ id: string; group: string; kind: string; status: string; at: number }> };
+  const premiere = scheduled.changes.find((change) => change.group === 'premiere' && change.status === 'pending')!;
+  expect(premiere).toMatchObject({ kind: 'premiere' });
+  expect(premiere.at).toBeLessThan(at.getTime());
+  await page.request.delete(`/api/tunarr/scheduled/${premiere.id}`);
+});
+
+test('adds a show from the bin to a time-slot schedule, previewed in the slot editor', async ({ page }) => {
+  await page.keyboard.press('a');
+  const bin = page.getByRole('complementary', { name: 'Program bin' });
+  await bin.getByRole('combobox', { name: 'Library', exact: true }).selectOption({ label: 'Shows' });
+  await bin.getByRole('button', { name: /^Pick all of Rotation Show/ }).click();
+  await bin.getByRole('radio', { name: 'Slot schedule…' }).click();
+  await bin.getByLabel('Slot starts at').fill('20:00');
+  await bin.getByLabel('Minutes for each show').fill('30');
+  const status = bin.getByRole('status', { name: 'Placement' });
+  await expect(status).toContainText('Rotation Show, 20:00–20:30, every day.');
+  await expect(status).toContainText('starts a time-slot schedule that replaces it');
+  await bin.getByRole('button', { name: 'Add to slot schedule…' }).click();
+  const editor = page.getByRole('dialog', { name: /New slot schedule ·/ });
+  await expect(editor.getByLabel('Slot 1 start')).toHaveValue('20:00:00');
+  await expect(editor.getByLabel('Slot 2 start')).toHaveValue('20:30:00');
+  await editor.getByRole('button', { name: 'Preview lineup' }).click();
+  await page.getByRole('region', { name: 'Schedule preview' }).getByRole('button', { name: 'Save schedule' }).click();
+  await expect(page.getByRole('status').filter({ hasText: 'Schedule saved' })).toBeVisible();
+  const schedule = (await fullState(page)).schedules[NEWS] as { type: string; slots: Array<{ type: string; startTime: number; order?: string }> };
+  expect(schedule.type).toBe('time');
+  expect(schedule.slots.map((slot) => [slot.type, slot.startTime / 60_000])).toEqual([['show', 20 * 60], ['flex', 20 * 60 + 30]]);
+  expect(schedule.slots[0].order).toBe('next');
+});
+
 test('drags a poster from the program bin onto a row of the schedule', async ({ page }) => {
   await page.getByRole('button', { name: 'Program Bin' }).click();
   const bin = page.getByRole('complementary', { name: 'Program bin' });

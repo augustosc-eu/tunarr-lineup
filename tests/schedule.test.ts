@@ -4,8 +4,11 @@ import { createDraftStore, decodeDraft, encodeDraft } from '../lib/draftStore';
 import { rebaseHistory, record, type History } from '../lib/history';
 import type { LineupItem } from '../lib/lineup';
 import {
+  addShowSlots,
   changeSlotSource,
   clockToOffset,
+  DEFAULT_SETTINGS,
+  newSlotId,
   DAY_MS,
   convertDraft,
   draftFromSchedule,
@@ -20,6 +23,9 @@ import {
   slotProblems,
   slotWeightShare,
   sourceOptions,
+  type ScheduleDraftState,
+  type ShowPick,
+  type ShowSlotPlan,
   type Slot,
 } from '../lib/schedule';
 import { programmingVersion } from '../server/lineupVersion';
@@ -404,5 +410,64 @@ describe('season filters and linked slots', () => {
     expect(seasonSummary(setSeasons(slot, 'only', [3, 1, 3]))).toBe('Seasons 1, 3');
     expect(setSeasons(slot, 'except', [2])).toMatchObject({ seasonFilter: [], seasonExcludeFilter: [2] });
     expect(seasonSummary(setSeasons(slot, 'except', [2]))).toBe('All but season 2');
+  });
+});
+
+describe('shows from the program bin in a time-slot schedule', () => {
+  const HOUR_MS = 3_600_000;
+  const show = (id: string, title: string): ShowPick => ({ id: `0b6f5c4e-1a2b-4c3d-8e9f-${id.padStart(12, '0')}`, title });
+  const slot = (type: string, hour: number, extra: Record<string, unknown> = {}): Slot => ({ type, startTime: hour * HOUR_MS, ...(type === 'movie' ? { id: newSlotId(), order: 'shuffle', direction: 'asc' } : {}), ...extra });
+  const daily = (slots: Slot[]): ScheduleDraftState => ({ type: 'time', settings: { ...DEFAULT_SETTINGS.time }, slots, extraMovies: [] });
+  const valid = (draft: ScheduleDraftState) => expect(slotProblems({ type: draft.type, period: draft.settings.period as 'day' | 'week' }, draft.slots).filter(Boolean)).toEqual([]);
+  const plan: ShowSlotPlan = { time: '20:00', length: HOUR_MS, weekdays: [0, 1, 2, 3, 4, 5, 6], order: 'next' };
+
+  it('adds a show at a time and lets what it interrupts carry on after it, linked', () => {
+    const result = addShowSlots(daily([slot('flex', 18), slot('movie', 19), slot('flex', 23)]), [show('1', 'Ugly Betty')], plan);
+    if ('error' in result) throw new Error(result.error);
+    const { slots } = result.draft;
+    expect(slots.map((item) => [item.type, Number(item.startTime) / HOUR_MS])).toEqual([['flex', 18], ['movie', 19], ['show', 20], ['movie', 21], ['flex', 23]]);
+    expect(slots[2]).toMatchObject({ order: 'next', show: { title: 'Ugly Betty' } });
+    // The movies from 19:00 resume at 21:00 as the same run.
+    expect(slots[1].iterationGroup).toBeTypeOf('string');
+    expect(slots[3]).toMatchObject({ iterationGroup: slots[1].iterationGroup, linkMode: 'continue' });
+    expect(result).toMatchObject({ added: 1, replaced: [], resumed: ['Movies 21:00'], toWeek: false });
+    valid(result.draft);
+  });
+
+  it('replaces slots that started inside the window, and moves the one still on at its end', () => {
+    const result = addShowSlots(daily([slot('movie', 19), slot('flex', 20.5), slot('redirect', 22, { channelName: 'Desk Movies' })]), [show('1', 'A'), show('2', 'B')], { ...plan, length: HOUR_MS / 2 });
+    if ('error' in result) throw new Error(result.error);
+    // 20:00 A, 20:30 B; the flex that began at 20:30 now begins at 21:00.
+    expect(result.draft.slots.map((item) => [item.type, Number(item.startTime) / HOUR_MS])).toEqual([['movie', 19], ['show', 20], ['show', 20.5], ['flex', 21], ['redirect', 22]]);
+    expect(result.replaced).toEqual([]);
+    const crowded = addShowSlots(daily([slot('flex', 19), slot('flex', 20.25), slot('movie', 20.5), slot('flex', 21)]), [show('1', 'A')], plan);
+    if ('error' in crowded) throw new Error(crowded.error);
+    expect(crowded.replaced).toEqual(['Flex (open airtime) 20:15', 'Movies 20:30']);
+    expect(crowded.resumed).toEqual([]);
+  });
+
+  it('turns a daily schedule weekly for some days, keeping every copy linked', () => {
+    const result = addShowSlots(daily([slot('movie', 0)]), [show('1', 'Ugly Betty')], { ...plan, weekdays: [1, 2, 3, 4, 5] });
+    if ('error' in result) throw new Error(result.error);
+    expect(result).toMatchObject({ toWeek: true, added: 5 });
+    expect(result.draft.settings.period).toBe('week');
+    const shows = result.draft.slots.filter((item) => item.type === 'show');
+    expect(shows.map((item) => Number(item.startTime) / HOUR_MS)).toEqual([24 + 20, 48 + 20, 72 + 20, 96 + 20, 120 + 20]);
+    expect(new Set(shows.map((item) => item.iterationGroup)).size).toBe(1);
+    // Movies on all seven days, then again after each show.
+    expect(new Set(result.draft.slots.filter((item) => item.type === 'movie').map((item) => item.iterationGroup)).size).toBe(1);
+    expect(result.draft.slots.filter((item) => item.type === 'movie')).toHaveLength(7 + 5);
+    valid(result.draft);
+  });
+
+  it('starts a new schedule with open airtime after the show, and refuses random schedules with slots', () => {
+    const fresh = addShowSlots(draftFromSchedule(null, 'random'), [show('1', 'A')], plan);
+    if ('error' in fresh) throw new Error(fresh.error);
+    expect(fresh.draft.type).toBe('time');
+    expect(fresh.draft.slots.map((item) => [item.type, Number(item.startTime) / HOUR_MS])).toEqual([['show', 20], ['flex', 21]]);
+    const random: ScheduleDraftState = { ...draftFromSchedule(null, 'random'), slots: [{ type: 'flex', weight: 1 }] };
+    expect(addShowSlots(random, [show('1', 'A')], plan)).toHaveProperty('error');
+    expect(addShowSlots(daily([]), [], plan)).toHaveProperty('error');
+    expect(addShowSlots(daily([]), [show('1', 'A')], { ...plan, weekdays: [] })).toHaveProperty('error');
   });
 });

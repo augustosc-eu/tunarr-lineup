@@ -283,6 +283,26 @@ function validateOffline(value: unknown, current: unknown): Json | string {
 /** Fields Tunarr returns on a channel but refuses in a channel update. */
 export const NOT_SAVEABLE = ['programCount', 'sessions', 'fallback', 'transcoding'];
 
+/**
+ * Moves a channel's start time to `startFor(current)` (keeping what's on air
+ * in place after its lineup changed length). Returns the start time it has.
+ */
+export async function setChannelStartTime(config: ProxyConfig, target: TunarrTarget, channelId: string, startFor: (from: number) => number) {
+  const channelPath = `/api/channels/${channelId}`;
+  const channel = await callTunarr(config, target, 'GET', channelPath);
+  if (!channel || typeof channel !== 'object' || typeof (channel as { startTime?: unknown }).startTime !== 'number') {
+    throw new UpstreamError(502, 'tunarr_invalid_response', 'Tunarr returned an unexpected channel.');
+  }
+  const from = (channel as { startTime: number }).startTime;
+  const startTime = startFor(from);
+  if (startTime !== from) {
+    const next: Record<string, unknown> = { ...(channel as Record<string, unknown>), startTime };
+    for (const field of NOT_SAVEABLE) delete next[field];
+    await callTunarr(config, target, 'PUT', channelPath, JSON.stringify(next));
+  }
+  return startTime;
+}
+
 export function channelSettings(channel: unknown) {
   if (!isObject(channel)) return {};
   const out: Json = { id: channel.id, duration: channel.duration };

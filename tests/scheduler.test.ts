@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { itemIdentity, programmingVersion } from '../server/lineupVersion';
+import { premierePlacement } from '../server/premiere';
 import { createScheduler, findPatch, validatePlan, type ScheduledChange } from '../server/scheduler';
 import { createSnapshotStore } from '../server/snapshotStore';
 import { createProxyConfig, handleTunarrApi, type ProxyConfig } from '../server/tunarrProxy';
@@ -15,17 +16,22 @@ const EVENT = { type: 'content', id: 'e0000000-0000-4000-8000-000000000001', dur
 const PAD = { type: 'flex', duration: 600_000 };
 
 /** A Tunarr that keeps one channel's lineup and records saves. */
-async function fakeTunarr(initial: unknown[], options: { schedulerOn?: boolean } = {}) {
+async function fakeTunarr(initial: unknown[], options: { schedulerOn?: boolean; startTime?: number; schedule?: unknown } = {}) {
   const dataDir = await mkdtemp(path.join(tmpdir(), 'lineup-scheduler-'));
-  const state = { lineup: initial as unknown[], saves: [] as unknown[][] };
+  const state = { lineup: initial as unknown[], saves: [] as unknown[][], startTime: options.startTime ?? 0, schedule: options.schedule };
   const fetchImpl = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
+    if (url.endsWith(`/api/channels/${CHANNEL}`) && init?.method === 'PUT') {
+      state.startTime = (JSON.parse(String(init.body)) as { startTime: number }).startTime;
+      return new Response('{}', { status: 200 });
+    }
+    if (url.endsWith(`/api/channels/${CHANNEL}`)) return new Response(JSON.stringify({ id: CHANNEL, startTime: state.startTime, programCount: 3 }), { status: 200 });
     if (url.endsWith(`/api/channels/${CHANNEL}/programming`) && init?.method === 'POST') {
       state.lineup = (JSON.parse(String(init.body)) as { lineup: unknown[] }).lineup;
       state.saves.push(state.lineup);
       return new Response(JSON.stringify({ lineup: state.lineup }), { status: 200 });
     }
-    if (url.endsWith(`/api/channels/${CHANNEL}/programming`)) return new Response(JSON.stringify({ lineup: state.lineup, programs: {} }), { status: 200 });
+    if (url.endsWith(`/api/channels/${CHANNEL}/programming`)) return new Response(JSON.stringify({ lineup: state.lineup, programs: {}, ...(state.schedule ? { schedule: state.schedule } : {}) }), { status: 200 });
     return new Response('{}', { status: 404 });
   });
   const config: ProxyConfig = { ...createProxyConfig({ TUNARR_URL: 'http://tunarr:8000', LINEUP_DATA_DIR: dataDir, LINEUP_SCHEDULER: options.schedulerOn === false ? 'off' : 'on' }), fetchImpl: fetchImpl as unknown as typeof fetch };
@@ -57,6 +63,34 @@ describe('scheduled change plans', () => {
     expect(validatePlan({ group: 'overlay', changes: [end] }, now, [])).toHaveProperty('error');
   });
 
+  it('accepts a premiere on its own, going in up to two days before it starts', () => {
+    const premiere = { channelId: CHANNEL, label: 'Pilot', at: now + 60_000, action: { kind: 'premiere', startsAt: now + 3_600_000, insert: [EVENT] } };
+    const plan = validatePlan({ group: 'premiere', changes: [premiere] }, now, []);
+    expect(plan).toMatchObject({ group: 'premiere', changes: [{ notAfter: now + 3_600_000 }] });
+    expect(validatePlan({ group: 'premiere', changes: [{ ...premiere, action: { ...premiere.action, startsAt: now } }] }, now, [])).toHaveProperty('error');
+    expect(validatePlan({ group: 'premiere', changes: [{ ...premiere, action: { ...premiere.action, startsAt: now + 3 * 86_400_000 } }] }, now, [])).toHaveProperty('error');
+    expect(validatePlan({ group: 'save', changes: [premiere] }, now, [])).toHaveProperty('error');
+    expect(validatePlan({ group: 'premiere', changes: [{ ...premiere, action: { ...premiere.action, insert: [] } }] }, now, [])).toHaveProperty('error');
+  });
+
+  it('places a premiere at the boundary before it, with flex up to it, keeping what is on air', () => {
+    const HALF = 1_800_000;
+    const lineup = [A, B, C];
+    // The lineup has played ten times; A is on now.
+    const start = now - 10 * 3 * HALF - 600_000;
+    const at = now - 600_000 + HALF + 1_000_000;
+    const placed = premierePlacement(lineup, start, now, at, EVENT.duration)!;
+    expect(placed).toMatchObject({ index: 1, gap: 1_000_000, start: at });
+    // The pass on air starts where it did, so A and the boundary keep their times.
+    expect(placed.startTime + 10 * (3 * HALF + 1_000_000 + EVENT.duration)).toBe(start + 10 * 3 * HALF);
+    // A start inside the program on now waits for it to end.
+    expect(premierePlacement(lineup, start, now, now + 60_000, EVENT.duration)).toMatchObject({ index: 1, gap: 0, start: now - 600_000 + HALF });
+    // Past the end of this pass: at the end of it.
+    expect(premierePlacement(lineup, start, now, now - 600_000 + 3 * HALF + 300_000, EVENT.duration)).toMatchObject({ index: 3, gap: 300_000 });
+    expect(premierePlacement(lineup, start, now, now - 1000, EVENT.duration)).toBeNull();
+    expect(premierePlacement([], start, now, at, EVENT.duration)).toBeNull();
+  });
+
   it('finds the items a patch replaces where they were, or their only other place', () => {
     const lineup = [A, B, C];
     expect(findPatch(lineup, 1, [itemIdentity(B)])).toBe(1);
@@ -79,6 +113,31 @@ describe('scheduler', () => {
     const [change] = await scheduler.store.list();
     expect(change).toMatchObject({ status: 'done', appliedVersion: programmingVersion([B, A], undefined) });
     expect((await snapshots.list(CHANNEL))[0]).toMatchObject({ reason: 'Before scheduled change “Swap”', items: 2 });
+  });
+
+  it('puts a premiere in just before it starts and moves the start so what is on air stays', async () => {
+    const start = Date.now() - 2 * 5_400_000 - 600_000;
+    const { state, scheduler } = await fakeTunarr([A, B, C], { startTime: start });
+    const startsAt = Date.now() + 1_800_000;
+    await scheduler.store.add({ group: 'premiere', changes: [{ channelId: CHANNEL, channelName: '', label: 'Pilot', at: Date.now() - 1000, notAfter: startsAt, action: { kind: 'premiere', startsAt, insert: [EVENT] }, programs: {} }] });
+    await scheduler.runDue(Date.now());
+    expect(state.lineup.map((item) => (item as { type: string }).type)).toEqual(['content', 'flex', 'content', 'content', 'content']);
+    expect(state.lineup[2]).toEqual(EVENT);
+    const [change] = await scheduler.store.list();
+    expect(change).toMatchObject({ status: 'done', group: 'premiere' });
+    // A is on now and the premiere starts inside B: it goes in after A. On the new
+    // lineup and start time, it airs right on time.
+    const length = state.lineup.reduce((sum: number, item) => sum + (item as { duration: number }).duration, 0);
+    const pass = Math.floor((startsAt - state.startTime) / length);
+    expect(state.startTime + pass * length + A.duration + (state.lineup[1] as { duration: number }).duration).toBe(startsAt);
+  });
+
+  it('skips a premiere on a channel that is now generated from a slot schedule', async () => {
+    const { state, scheduler } = await fakeTunarr([A, B, C], { startTime: Date.now() - 600_000, schedule: { type: 'time', slots: [] } });
+    await scheduler.store.add({ group: 'premiere', changes: [{ channelId: CHANNEL, channelName: '', label: 'Pilot', at: Date.now() - 1000, notAfter: Date.now() + 3_600_000, action: { kind: 'premiere', startsAt: Date.now() + 3_600_000, insert: [EVENT] }, programs: {} }] });
+    await scheduler.runDue(Date.now());
+    expect(state.saves).toHaveLength(0);
+    expect((await scheduler.store.list())[0]).toMatchObject({ status: 'skipped' });
   });
 
   it('skips a dated lineup when the channel changed after it was planned', async () => {

@@ -31,12 +31,13 @@ import {
   type SlotPlan,
 } from '../../lib/programBin';
 import { libraryArtwork } from '../../lib/programInfo';
+import type { ShowPick, ShowSlotPlan } from '../../lib/schedule';
 import { tunarrApi } from '../../lib/tunarrClient';
 import { errorText, useLibraryListing } from '../useLibraryListing';
 
 /** One pick: a single program, or everything in a show, season or album. */
 type Pick = { key: string; item: LibraryItem; programs: ContentProgram[] };
-type Spot = 'after' | 'before' | 'end' | 'time' | 'slots';
+type Spot = 'after' | 'before' | 'end' | 'time' | 'slots' | 'schedule';
 type AfterKind = BinAfter['kind'];
 
 type Props = {
@@ -60,6 +61,17 @@ type Props = {
   /** Works out recurring time slots on the lineup as it is (null when none fit). */
   planSlots: (arranged: Arranged, plan: SlotPlan) => SlotPlacement | null;
   onPlaceSlots: (arranged: Arranged, plan: SlotPlan) => boolean;
+  /**
+   * A premiere: the companion adds them just before they start, so none of
+   * them airs earlier. `plan` says when it would go in; `unavailable` why it can't.
+   */
+  premiere?: { unavailable?: string; plan: (at: number) => { runAt: number; late: boolean } | null; onSchedule: (arranged: Arranged, at: number) => Promise<boolean> };
+  /** The desk's clock (it ticks), for what counts as "from now on". */
+  now: number;
+  /** What the channel runs on, for adding shows to its time-slot schedule. */
+  scheduleType: 'manual' | 'time' | 'random';
+  /** Opens the slot schedule editor with the shows added (previewed before anything is saved). */
+  onScheduleShows: (shows: ShowPick[], plan: ShowSlotPlan) => Promise<boolean>;
   /** Hands the arranged programs to the schedule, to place with the cursor (↑ ↓, OK). */
   onChooseSpot: (arranged: Arranged, side: 'before' | 'after') => void;
   /** A drag toward the schedule began: what it would place (folders load as they're dragged). */
@@ -96,7 +108,7 @@ const hourAfter = (time: string) => {
   return Number.isFinite(hours) && Number.isFinite(minutes) ? `${String((hours + 1) % 24).padStart(2, '0')}:${String(minutes).padStart(2, '0')}` : '';
 };
 
-export function ProgramBin({ live, anchorLabel, emptyLineup, date, time: initialTime, commercialLists, stationIds, startFor, keepOnAir, onPlace, planSlots, onPlaceSlots, onChooseSpot, onDragPrograms, onDragEnd, onClose }: Props) {
+export function ProgramBin({ live, anchorLabel, emptyLineup, date, time: initialTime, commercialLists, stationIds, startFor, keepOnAir, onPlace, planSlots, onPlaceSlots, premiere, now, scheduleType, onScheduleShows, onChooseSpot, onDragPrograms, onDragEnd, onClose }: Props) {
   const listing = useLibraryListing();
   const { usableSources, sources, sourceId, libraries, libraryId, library, source, path, folder, text, query, shown, results, totalHits, loading, error, setError, complete, order } = listing;
   const [picks, setPicks] = useState<Pick[]>([]);
@@ -110,6 +122,10 @@ export function ProgramBin({ live, anchorLabel, emptyLineup, date, time: initial
   const [day, setDay] = useState(date);
   const [time, setTime] = useState(initialTime);
   const [exact, setExact] = useState(true);
+  const [addWhen, setAddWhen] = useState<'now' | 'later'>('now');
+  const [showLength, setShowLength] = useState(60);
+  const [showOrder, setShowOrder] = useState<ShowSlotPlan['order']>('next');
+  const [busy, setBusy] = useState(false);
   const [weekdays, setWeekdays] = useState<number[]>(WEEKDAYS.map(([day]) => day));
   const [fillKind, setFillKind] = useState<SlotPlan['fill']['kind']>('count');
   const [perSlot, setPerSlot] = useState(1);
@@ -142,7 +158,15 @@ export function ProgramBin({ live, anchorLabel, emptyLineup, date, time: initial
   const length = arrangedDuration(arranged);
 
   const at = new Date(`${day}T${time}:00`).getTime();
-  const where: PlaceWhere | null = spot === 'time' ? (Number.isFinite(at) ? { at, snap: exact ? 'exact' : 'after' } : null) : spot === 'slots' ? null : spot;
+  const scheduling = spot === 'time' && addWhen === 'later' && !!premiere && !premiere.unavailable;
+  const where: PlaceWhere | null = spot === 'time' ? (Number.isFinite(at) ? { at, snap: exact || scheduling ? 'exact' : 'after' } : null) : spot === 'slots' || spot === 'schedule' ? null : spot;
+  const premierePlan = scheduling && Number.isFinite(at) && at > now + MINUTE ? premiere.plan(at) : null;
+  // Slot schedules play whole shows: only show picks get slots.
+  const shows: ShowPick[] = picks.filter((pick) => pick.item.type === 'show').map(({ item }) => ({
+    id: item.uuid, title: item.title,
+    ...(typeof item.mediaSourceId === 'string' ? { mediaSourceId: item.mediaSourceId } : {}),
+    ...(typeof item.libraryId === 'string' ? { libraryId: item.libraryId } : {}),
+  }));
   const point = where && arranged.items.length ? startFor(where, length) : null;
   const plan = slotPlan(day, time, weekdays, fillKind, perSlot, until);
   const slots = useMemo(() => {
@@ -176,8 +200,22 @@ export function ProgramBin({ live, anchorLabel, emptyLineup, date, time: initial
     else setPicks((current) => [...current, ...shown.filter((item) => isPlayable(item) && !pickedKeys.has(item.uuid)).map((item) => ({ key: item.uuid, item, programs: [toContentProgram(item)] }))]);
   };
 
-  const place = () => {
+  const place = async () => {
+    if (spot === 'schedule') {
+      if (!shows.length || busy) return;
+      setBusy(true);
+      const done = await onScheduleShows(shows, { time, length: showLength * MINUTE, weekdays, order: showOrder }).finally(() => setBusy(false));
+      if (done) setPicks([]);
+      return;
+    }
     if (!pickedPrograms.length) return;
+    if (scheduling) {
+      if (!premierePlan || busy) return;
+      setBusy(true);
+      const done = await premiere.onSchedule(arranged, at).finally(() => setBusy(false));
+      if (done) setPicks([]);
+      return;
+    }
     if (spot === 'slots' ? plan && slots && onPlaceSlots(arranged, plan) : where && onPlace(arranged, where)) setPicks([]);
   };
   const chooseSpot = () => {
@@ -228,9 +266,20 @@ export function ProgramBin({ live, anchorLabel, emptyLineup, date, time: initial
     ['end', 'At the end', true],
     ['time', 'At a time…', !emptyLineup],
     ['slots', 'In time slots…', !emptyLineup],
+    ['schedule', 'Slot schedule…', scheduleType !== 'random' || spot === 'schedule'],
   ];
   const keepHint = keepOnAir && !keepOnAir.checked ? ' Tick “Keep what’s on air in place” to keep that spot where it is.' : '';
   const toggleWeekday = (weekday: number) => setWeekdays((current) => (current.includes(weekday) ? current.filter((entry) => entry !== weekday) : [...current, weekday]));
+  const dayKey = [...weekdays].sort().join('');
+  const dayNames = weekdays.length === 7 ? 'every day' : dayKey === '12345' ? 'weekdays' : dayKey === '06' ? 'weekends' : WEEKDAYS.filter(([weekday]) => weekdays.includes(weekday)).map(([, label]) => label).join(', ');
+  const scheduleStatus = () => {
+    const others = picks.length - shows.length;
+    if (!shows.length) return 'Slot schedules play whole shows: pick a show with + All (or Space) to give it a time slot.';
+    if (scheduleType === 'random') return 'This channel’s slot schedule is random, so its slots have no times. Convert it to time slots in Channel → Slot Schedule first.';
+    if (!weekdays.length) return 'Choose at least one day.';
+    const end = (() => { const [h, m] = time.split(':').map(Number); const minutes = (h * 60 + m + showLength * shows.length) % 1440; return `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`; })();
+    return <><b>{shows.length === 1 ? shows[0].title : `${shows.length} shows, back to back`}, {time}–{end}, {dayNames}.</b> {showOrder === 'next' ? 'Episodes play in order, each airing picking up where the last one stopped.' : 'Episodes play shuffled.'} {scheduleType === 'manual' ? '' : `Whatever was on then picks up again at ${end}. `}{scheduleType === 'manual' ? 'This channel has a manual lineup: this starts a time-slot schedule that replaces it, with open airtime around the shows until you add more. ' : ''}The slot schedule editor opens with them added, to preview before anything is saved.{others > 0 ? ` ${others} ${others === 1 ? 'pick isn’t a show and is' : 'picks aren’t shows and are'} left out.` : ''}</>;
+  };
   const firstSlot = slots?.slots[0];
   const lastSlot = slots?.slots[slots.slots.length - 1];
 
@@ -332,20 +381,34 @@ export function ProgramBin({ live, anchorLabel, emptyLineup, date, time: initial
         <div className="segmented bin-where" role="radiogroup" aria-label="Where to place them">
           {spots.map(([value, label, enabled]) => <button key={value} title={label} role="radio" aria-checked={spot === value} className={spot === value ? 'primary' : ''} disabled={!enabled} onClick={() => setSpot(value)}>{label}</button>)}
         </div>
-        {(spot === 'time' || spot === 'slots') && <div className="bin-options">
-          <label className="field"><span>{spot === 'slots' ? 'First day' : 'Date'}</span><input type="date" aria-label={spot === 'slots' ? 'First slot on date' : 'Place on date'} value={day} onChange={(event) => setDay(event.target.value)} /></label>
-          <label className="field"><span>Time</span><input type="time" aria-label={spot === 'slots' ? 'Slot time' : 'Place at time'} value={time} onChange={(event) => setTime(event.target.value)} /></label>
-          {spot === 'time' && <label className="field bin-wide"><span>Start</span>
+        {(spot === 'time' || spot === 'slots' || spot === 'schedule') && <div className="bin-options">
+          {spot !== 'schedule' && <label className="field"><span>{spot === 'slots' ? 'First day' : 'Date'}</span><input type="date" aria-label={spot === 'slots' ? 'First slot on date' : 'Place on date'} value={day} onChange={(event) => setDay(event.target.value)} /></label>}
+          <label className="field"><span>{spot === 'schedule' ? 'Starts at' : 'Time'}</span><input type="time" aria-label={spot === 'slots' ? 'Slot time' : spot === 'schedule' ? 'Slot starts at' : 'Place at time'} value={time} onChange={(event) => setTime(event.target.value)} /></label>
+          {spot === 'schedule' && <label className="field"><span>Each show (minutes)</span><input type="number" aria-label="Minutes for each show" min={5} max={720} step={5} value={showLength} onChange={(event) => setShowLength(Math.min(720, Math.max(5, Math.round(Number(event.target.value)) || 60)))} /></label>}
+          {spot === 'time' && premiere && <label className="field bin-wide"><span>Add to the lineup</span>
+            <select aria-label="Add to the lineup" value={scheduling ? 'later' : 'now'} onChange={(event) => setAddWhen(event.target.value as 'now' | 'later')}>
+              <option value="now">Now</option>
+              <option value="later" disabled={!!premiere.unavailable}>Just before they start (premiere){premiere.unavailable ? ' – unavailable' : ''}</option>
+            </select>
+          </label>}
+          {spot === 'time' && !scheduling && <label className="field bin-wide"><span>Start</span>
             <select aria-label="Start" value={exact ? 'exact' : 'after'} onChange={(event) => setExact(event.target.value === 'exact')}>
               <option value="exact">Exactly at this time (open airtime fills the gap)</option>
               <option value="after">When the program airing then ends</option>
             </select>
           </label>}
+          {spot === 'schedule' && <label className="field bin-wide"><span>Episodes</span>
+            <select aria-label="Episodes" value={showOrder} onChange={(event) => setShowOrder(event.target.value as ShowSlotPlan['order'])}>
+              <option value="next">In order, continuing each airing</option>
+              <option value="shuffle">Shuffled</option>
+            </select>
+          </label>}
+        </div>}
+        {spot === 'time' && premiere?.unavailable && <p className="subtle bin-note">Premiere: {premiere.unavailable}</p>}
+        {(spot === 'slots' || spot === 'schedule') && <div className="segmented bin-days" role="group" aria-label="Slot days">
+          {WEEKDAYS.map(([weekday, label]) => <button key={weekday} aria-pressed={weekdays.includes(weekday)} className={weekdays.includes(weekday) ? 'primary' : ''} onClick={() => toggleWeekday(weekday)}>{label}</button>)}
         </div>}
         {spot === 'slots' && <>
-          <div className="segmented bin-days" role="group" aria-label="Slot days">
-            {WEEKDAYS.map(([weekday, label]) => <button key={weekday} aria-pressed={weekdays.includes(weekday)} className={weekdays.includes(weekday) ? 'primary' : ''} onClick={() => toggleWeekday(weekday)}>{label}</button>)}
-          </div>
           <div className="bin-options">
             <label className="field"><span>Each slot</span>
               <select aria-label="Each slot" value={fillKind} onChange={(event) => setFillKind(event.target.value as SlotPlan['fill']['kind'])}>
@@ -360,7 +423,11 @@ export function ProgramBin({ live, anchorLabel, emptyLineup, date, time: initial
         </>}
         <p className="insert-when" role="status" aria-label="Placement">
           {!pickedPrograms.length ? 'Nothing picked yet. You can also drag any card onto a row of the schedule.'
+            : spot === 'schedule' ? scheduleStatus()
             : emptyLineup ? 'This lineup is empty, so these become its first programs.'
+            : scheduling ? (!Number.isFinite(at) || at <= now + MINUTE ? 'Choose a date and time from now on.'
+              : !premierePlan ? 'Choose a date and time.'
+              : <><b>Premieres {airTimeLabel(at)}</b>, ends {clockLabel(at + length)}. The Lineup server adds them to the lineup around {airTimeLabel(premierePlan.runAt)}, so nothing of them airs earlier{premierePlan.late ? ', but the program on before them is already airing, so they start when it ends' : ', and open airtime fills up to the start'}. What’s on air keeps its time. It’s listed in File → Scheduled Changes until then.</>)
             : spot === 'slots' ? (!plan ? 'Choose a first day, a time and at least one day of the week.'
               : !slots || !firstSlot || !lastSlot ? `No slot can start on time there.${keepHint}`
               : <><b>{slots.placed.toLocaleString('en')} {slots.placed === 1 ? 'program' : 'programs'} in {slots.slots.length.toLocaleString('en')} {slots.slots.length === 1 ? 'slot' : 'slots'}</b>, {airTimeLabel(firstSlot.at)}{slots.slots.length > 1 ? ` to ${airTimeLabel(lastSlot.at)}` : ''}{fillKind === 'until' ? ` (until ${until}, ${durationTimecode(slotWindow(time, until))} each)` : ''}. What airs at those times moves later{slots.gaps ? `, and ${durationTimecode(slots.gaps)} of open airtime fills up to the slots so each starts on time` : ''}.
@@ -368,13 +435,17 @@ export function ProgramBin({ live, anchorLabel, emptyLineup, date, time: initial
             : !point ? 'Choose a date and time.'
             : <><b>Starts {airTimeLabel(point.start)}</b>, ends {clockLabel(point.start + length)}.{point.gap ? ` ${durationTimecode(point.gap)} of open airtime fills up to it, and the program airing then moves after these.` : ''} {point.passes > 0 ? (keepOnAir?.checked ? 'What’s on air keeps its time; programs around these still move.' : 'The lineup has repeated, so programs around these move too.') : 'Everything after them airs later.'}</>}
         </p>
-        {spot !== 'slots' && point?.moved && pickedPrograms.length > 0 && <div className="warning bin-moved" role="alert"><b>Not where you chose</b><span>Adding {durationTimecode(length)} lengthens every pass of the lineup that has already aired, so the spot you chose moves to {airTimeLabel(point.start)}.{spot === 'time' ? ' At the time you chose, something else in the lineup airs instead, possibly part-way through these programs.' : ''}{keepHint || (keepOnAir ? ' The lineup repeats between now and then, so that spot can’t stay put.' : '')}</span></div>}
-        {keepOnAir && pickedPrograms.length > 0 && <label className="keep-on-air"><input type="checkbox" checked={keepOnAir.checked} onChange={(event) => keepOnAir.onChange(event.target.checked)} /> Keep what’s on air in place</label>}
+        {spot !== 'slots' && !scheduling && point?.moved && pickedPrograms.length > 0 && <div className="warning bin-moved" role="alert"><b>Not where you chose</b><span>Adding {durationTimecode(length)} lengthens every pass of the lineup that has already aired, so the spot you chose moves to {airTimeLabel(point.start)}.{spot === 'time' ? ' At the time you chose, something else in the lineup airs instead, possibly part-way through these programs.' : ''}{keepHint || (keepOnAir ? ' The lineup repeats between now and then, so that spot can’t stay put.' : '')}</span></div>}
+        {keepOnAir && pickedPrograms.length > 0 && spot !== 'schedule' && !scheduling && <label className="keep-on-air"><input type="checkbox" checked={keepOnAir.checked} onChange={(event) => keepOnAir.onChange(event.target.checked)} /> Keep what’s on air in place</label>}
         <div className="dialog-actions">
           <button disabled={!pickedPrograms.length || emptyLineup} onClick={chooseSpot}>Choose spot on schedule…</button>
-          {spot === 'slots'
-            ? <button className="primary" disabled={!slots} onClick={place}>Place in {slots ? `${slots.slots.length.toLocaleString('en')} ${slots.slots.length === 1 ? 'slot' : 'slots'}` : 'time slots'}</button>
-            : <button className="primary" disabled={!pickedPrograms.length || !where} onClick={place}>Place {pickedPrograms.length ? pickedPrograms.length.toLocaleString('en') : ''} on schedule</button>}
+          {spot === 'schedule'
+            ? <button className="primary" disabled={!shows.length || !weekdays.length || busy} onClick={() => void place()}>{busy ? 'Opening…' : `Add ${shows.length > 1 ? `${shows.length} shows` : 'to slot schedule'}…`}</button>
+            : scheduling
+            ? <button className="primary" disabled={!premierePlan || busy} onClick={() => void place()}>{busy ? 'Scheduling…' : 'Schedule premiere'}</button>
+            : spot === 'slots'
+            ? <button className="primary" disabled={!slots} onClick={() => void place()}>Place in {slots ? `${slots.slots.length.toLocaleString('en')} ${slots.slots.length === 1 ? 'slot' : 'slots'}` : 'time slots'}</button>
+            : <button className="primary" disabled={!pickedPrograms.length || !where} onClick={() => void place()}>Place {pickedPrograms.length ? pickedPrograms.length.toLocaleString('en') : ''} on schedule</button>}
         </div>
       </section>
       </div>

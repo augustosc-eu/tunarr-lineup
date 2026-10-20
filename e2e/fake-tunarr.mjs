@@ -24,6 +24,7 @@ const ids = {
   show: '7a7a7a7a-1a2b-4c3d-8e9f-0000000000f1',
   source: '3c3c3c3c-1a2b-4c3d-8e9f-000000000001',
   library: '3c3c3c3c-1a2b-4c3d-8e9f-000000000002',
+  showsLibrary: '3c3c3c3c-1a2b-4c3d-8e9f-000000000003',
   movieA: '4d4d4d4d-1a2b-4c3d-8e9f-000000000001',
   movieB: '4d4d4d4d-1a2b-4c3d-8e9f-000000000002',
   ads: '5e5e5e5e-1a2b-4c3d-8e9f-000000000001',
@@ -53,7 +54,7 @@ function initialState() {
     ],
     transcodeConfigs: [{ id: ids.profile, name: 'Default', isDefault: true, vaapiDevice: '/dev/dri/renderD128', resolution: { widthPx: 1920, heightPx: 1080 }, videoFormat: 'h264', videoBitRate: 2000, videoBufferSize: 4000, hardwareAccelerationMode: 'none', audioFormat: 'aac', audioBitRate: 192, audioBufferSize: 384, audioChannels: 2, audioSampleRate: 48, audioVolumePercent: 100, audioLoudnormConfig: null, normalizeFrameRate: false, deinterlaceVideo: true, disableChannelOverlay: false, errorScreen: 'pic', errorScreenAudio: 'silent', threadCount: 0, videoBitDepth: 8 }],
     smartCollections: [],
-    mediaSources: [{ id: ids.source, name: 'Fake Plex', type: 'plex', uri: 'http://10.9.9.9:32400', accessToken: 'secret-token', username: 'secret-owner', libraries: [{ id: ids.library, name: 'Movies', mediaType: 'movies', enabled: true }] }],
+    mediaSources: [{ id: ids.source, name: 'Fake Plex', type: 'plex', uri: 'http://10.9.9.9:32400', accessToken: 'secret-token', username: 'secret-owner', libraries: [{ id: ids.library, name: 'Movies', mediaType: 'movies', enabled: true }, { id: ids.showsLibrary, name: 'Shows', mediaType: 'shows', enabled: true }] }],
     schedules: {
       [ids.rotation]: {
         type: 'random', flexPreference: 'end', maxDays: 2, padMs: 0, padStyle: 'slot', randomDistribution: 'weighted', lockWeights: false, timeZoneOffset: 0,
@@ -237,6 +238,8 @@ http.createServer(async (req, res) => {
     const results = libraryMovies.filter((movie) => movie.title.toLowerCase().includes(text));
     return send(res, 200, { results, page: body.page ?? 0, totalPages: 1, totalHits: results.length });
   }
+  // The show's episodes, in order; anything else has none.
+  if (path === `/api/programs/${ids.show}/descendants`) return send(res, 200, [state.programs[ids.ep1], state.programs[ids.ep2]].map((episode, index) => ({ ...episode, program: { ...episode.program, uuid: episode.id, seasonNumber: 1, episodeNumber: index + 1 } })));
   if (/^\/api\/programs\/[^/]+\/descendants$/.test(path)) return send(res, 200, []);
   if (path === '/api/custom-shows') return send(res, 200, []);
   if (path === '/api/filler-lists' && req.method === 'GET') return send(res, 200, state.fillerLists.map(({ id, name, programs }) => ({ id, name, contentCount: programs.length })));

@@ -12,7 +12,7 @@ import { createSnapshotStore, type SnapshotStore } from './snapshotStore.js';
 import { applySettings, createSettingsStore, type SettingsStore } from './settings.js';
 import { createStationIdStore, type StationIdStore } from './stationIdStore.js';
 import { handleWatchRoute, matchWatchRoute } from './watch.js';
-import { handleContentRoute, matchContentRoute, NOT_SAVEABLE, type ContentRoute } from './content.js';
+import { handleContentRoute, matchContentRoute, setChannelStartTime, type ContentRoute } from './content.js';
 import { channelLogo, type ExternalImageFetcher } from './logos.js';
 import { withChannelLock } from './channelLock.js';
 import { lineupItemsError } from './lineupItems.js';
@@ -473,18 +473,7 @@ export async function handleTunarrApi(request: ProxyRequest, config: ProxyConfig
             // earlier pass gained or lost. The lineup is saved first, so a failure
             // here leaves an ordinary save, and the reply says so.
             try {
-              const channelPath = `/api/channels/${route.channelId}`;
-              const channel = await callTunarr(config, target, 'GET', channelPath);
-              if (!channel || typeof channel !== 'object' || typeof (channel as { startTime?: unknown }).startTime !== 'number') {
-                throw new UpstreamError(502, 'tunarr_invalid_response', 'Tunarr returned an unexpected channel.');
-              }
-              const from = (channel as { startTime: number }).startTime;
-              const startTime = keptStartTime(from, lineupLength(current?.lineup), lineupLength(pending.lineup), Date.now());
-              if (startTime !== from) {
-                const next: Record<string, unknown> = { ...(channel as Record<string, unknown>), startTime };
-                for (const field of NOT_SAVEABLE) delete next[field];
-                await callTunarr(config, target, 'PUT', channelPath, JSON.stringify(next));
-              }
+              const startTime = await setChannelStartTime(config, target, route.channelId, (from) => keptStartTime(from, lineupLength(current?.lineup), lineupLength(pending.lineup), Date.now()));
               return json(200, { ...(saved as object), startTime });
             } catch (error) {
               const message = error instanceof UpstreamError ? error.message : 'Tunarr did not accept the new start time.';

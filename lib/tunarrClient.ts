@@ -34,7 +34,8 @@ export type PlannedChange = {
   action:
     | { kind: 'lineup'; lineup: unknown[]; expectVersion: string }
     | { kind: 'patch'; index: number; remove: string[]; insert: unknown[] }
-    | { kind: 'restore'; after: number | string };
+    | { kind: 'restore'; after: number | string }
+    | { kind: 'premiere'; startsAt: number; insert: unknown[] };
   programs?: Record<string, unknown>;
 };
 export type ViewerCounts = Record<string, { viewers: number; streams: number }>;
@@ -252,7 +253,7 @@ export const tunarrApi = {
   takeSnapshot: (id: string) => request<SnapshotSummary | { unchanged: true; message: string }>(`${channelPath(id)}/snapshots`, jsonBody('POST', {})),
   deleteSnapshot: (id: string, snapshotId: string) => request<unknown>(`${channelPath(id)}/snapshots/${encodeURIComponent(snapshotId)}`, { method: 'DELETE' }),
   scheduled: () => request<ScheduledList>('/api/tunarr/scheduled'),
-  schedulePlan: (group: 'save' | 'event' | 'overlay', changes: PlannedChange[]) => request<ChangeSummary[]>('/api/tunarr/scheduled', jsonBody('POST', { group, changes })),
+  schedulePlan: (group: 'save' | 'event' | 'overlay' | 'premiere', changes: PlannedChange[]) => request<ChangeSummary[]>('/api/tunarr/scheduled', jsonBody('POST', { group, changes })),
   cancelScheduled: (id: string) => request<unknown>(`/api/tunarr/scheduled/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   aiReview: (body: { channelName: string; summary: string; issues: string[] }) => request<Review>('/api/tunarr/ai/review', jsonBody('POST', body)),
   lineup: (id: string, from: Date, to: Date) =>

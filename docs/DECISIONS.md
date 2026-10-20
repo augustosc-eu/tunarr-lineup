@@ -504,3 +504,13 @@ on the `broadcast-programming` branch.
   - The scheduler is in the list on purpose: it only saves changes someone planned at the desk, under the same conditional save (D51).
 - **Consequence:** with sign-in off, anyone who can reach the desk can change these, as they can already edit programming. A changed `.env` value has no effect while a saved value exists; the dialog shows both.
 
+## D56. Premieres: programs that join a manual lineup just before they start
+
+- **Status:** Explicit: the owner asked for "a way to set the airing date to a specific date so that programs start from the first episode from the point we add them", then "yes" to a scheduled premiere and a time-slot integration (2026-10-20). Evidenced: `server/premiere.ts`, the `premiere` kind in `server/scheduler.ts`, `addShowSlots` in `lib/schedule.ts`, tests in `tests/scheduler.test.ts`, `tests/schedule.test.ts` and `e2e/desk.spec.ts`.
+- **Decision:**
+  - A manual lineup loops, so programs added now at a later date also air in earlier passes, and before the date on a short loop. A premiere instead goes in shortly before it starts (`premiere` change, group `premiere`), placed against the lineup Tunarr has then rather than a planned version: adding programs at the spot that airs at a time stays meaningful whatever else changed, so there is no version condition. It is skipped if the channel runs on a slot schedule by then, and missed (never added late) if it couldn't go in before it starts.
+  - It keeps what's on air in place, moving the channel start as the desk's keep-on-air save does (`setChannelStartTime`). It starts exactly on time with flex filling the gap, or when the program on at run time ends, since Tunarr can't cut a program short.
+  - A premiere goes in at most two days before it starts, so its placement is worked out close to when it airs.
+  - For shows that should keep their slot and carry on episode by episode, the bin writes to the time-slot schedule instead (`addShowSlots`). Nothing is saved from the bin: the slot editor opens with the result, and the usual preview-then-save rule applies (invariant 4).
+- **Consequence:** the scheduler can now add programs without someone at the desk (still only what was planned there, under the channel lock with a snapshot first, D51). Once the lineup comes back round to a premiere's spot, it repeats like the rest of the lineup.
+

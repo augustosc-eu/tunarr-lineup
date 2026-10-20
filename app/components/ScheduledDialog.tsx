@@ -11,7 +11,7 @@ type Props = {
 };
 
 const when = (ms: number) => new Intl.DateTimeFormat('en', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(ms));
-const GROUP_LABELS: Record<ChangeSummary['group'], string> = { save: 'Dated save', event: 'Airs once', overlay: 'Seasonal overlay' };
+const GROUP_LABELS: Record<ChangeSummary['group'], string> = { save: 'Dated save', event: 'Airs once', overlay: 'Seasonal overlay', premiere: 'Premiere' };
 const STATUS_LABELS: Record<ChangeSummary['status'], string> = { pending: 'Waiting', done: 'Done', skipped: 'Skipped', failed: 'Failed', cancelled: 'Cancelled' };
 
 /** Every change waiting to be saved on a date, on any channel, and what happened to recent ones. */

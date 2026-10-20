@@ -73,13 +73,13 @@ import {
   type Programming,
 } from '../lib/lineup';
 import { channelLogoUrl, programArtwork, programDetail, programTitle } from '../lib/programInfo';
-import { airOncePatches, boundaryAt, exactBoundary, insertedStart, passesBefore, type EventPlacement, type InsertWhere } from '../lib/events';
+import { airOncePatches, airTimeLabel, boundaryAt, exactBoundary, insertedStart, passesBefore, type EventPlacement, type InsertWhere } from '../lib/events';
 import { checkLineup, type Issue } from '../lib/lineupCheck';
 import type { GuideChannel } from '../lib/guideGrid';
 import { logRows, type DayRows } from '../lib/weekLog';
 import { keptStartTime, lineupLength } from '../server/lineupVersion';
 import { lineupEntry, seasonsFromEpisodes, type ContentProgram } from '../lib/library';
-import { changeSlotSource, draftFromSchedule, newSlot, showOption, type SchedulePreview, type ScheduleDraftState, type SeasonInfo, type Slot, type SlotCatalog, type SlotSchedule } from '../lib/schedule';
+import { addShowSlots, changeSlotSource, draftFromSchedule, newSlot, showOption, type SchedulePreview, type ScheduleDraftState, type SeasonInfo, type ShowPick, type ShowSlotPlan, type Slot, type SlotCatalog, type SlotSchedule } from '../lib/schedule';
 import { programmingVersion } from '../server/lineupVersion';
 import { checkHealth, tunarrApi, TunarrApiError, type ConnectionState, type PlannedChange, type ViewerCounts } from '../lib/tunarrClient';
 
@@ -130,6 +130,10 @@ const NOW_TICK_MS = 15_000;
 const VIEWERS_TICK_MS = 30_000;
 /** An event that airs once goes in this long before it starts. */
 const AIR_ONCE_LEAD_MS = 10 * 60_000;
+/** A premiere goes into the lineup this long before the program it follows starts. */
+const PREMIERE_LEAD_MS = 10 * 60_000;
+/** …and never more than this before the premiere itself (the companion's limit, MAX_PREMIERE_LEAD_MS). */
+const MAX_PREMIERE_LEAD_MS = 2 * 86_400_000 - 60_000;
 /** A placement that starts this far from the spot chosen gets a warning (the lineup has repeated). */
 const MOVED_MS = 60 * 60_000;
 
@@ -1378,6 +1382,74 @@ export default function Home() {
     notify(`“${label}” will air once, on ${new Intl.DateTimeFormat('en', { weekday: 'short', day: 'numeric', month: 'short' }).format(new Date(placement.start))}. See File → Scheduled Changes.`);
   };
 
+  /**
+   * When a premiere starting at `at` goes into the lineup: a little before the
+   * program it follows (on Tunarr's lineup) starts, so none of it airs earlier.
+   * `late`: that program is already on, so it can only start when it ends.
+   */
+  const premiereFor = (at: number) => {
+    if (!base?.lineup.length) return null;
+    const boundary = boundaryAt(base.lineup, tunarrStart, at, 'before');
+    if (!boundary) return null;
+    const runAt = Math.max(Date.now() + 30_000, at - MAX_PREMIERE_LEAD_MS, Math.min(boundary.start, at) - PREMIERE_LEAD_MS);
+    return { runAt, late: boundary.start < runAt };
+  };
+  const premiereUnavailable = !scheduler.enabled ? scheduler.message ?? 'Scheduled changes are off on the Lineup server.'
+    : generated ? 'this channel runs on a slot schedule: use Slot schedule… instead.'
+    : dirty ? 'save or revert your edits first: a premiere goes into the lineup Tunarr has.'
+    : !base?.lineup.length ? 'the lineup is empty.' : undefined;
+  const schedulePremiere = async (arranged: Arranged, at: number) => {
+    const timing = premiereFor(at);
+    if (!activeChannel || !timing) return false;
+    const label = `Premiere: ${placedLabel(arranged.programs)}`;
+    try {
+      await tunarrApi.schedulePlan('premiere', [{ channelId: activeChannel.id, channelName: activeChannel.name, label, at: timing.runAt, notAfter: at, action: { kind: 'premiere', startsAt: at, insert: arranged.items }, programs: { ...programming.programs, ...arranged.meta } }]);
+    } catch (error) {
+      notify(`Couldn’t schedule the premiere: ${errorMessage(error, 'the Lineup server didn’t answer.')}`);
+      return false;
+    }
+    notify(`${label} is scheduled for ${airTimeLabel(at)}. See File → Scheduled Changes.`);
+    return true;
+  };
+
+  /** Shows from the bin into the channel's time-slot schedule, opened in the slot editor to preview before saving. */
+  const scheduleShows = async (shows: ShowPick[], plan: ShowSlotPlan) => {
+    if (!live || !activeChannelId) return false;
+    const channelId = activeChannelId;
+    let draft: ScheduleDraftState;
+    let saved: ScheduleDraftState | null = null;
+    let isNew = false;
+    try {
+      if (slotEditor.channelId === channelId && slotEditor.loaded) ({ draft, saved, isNew } = slotEditor);
+      else if (hasGeneratedSchedule(programming)) {
+        const schedule = (await tunarrApi.schedule(channelId))?.schedule as SlotSchedule | undefined;
+        if (!schedule || !Array.isArray(schedule.slots)) throw new Error('Tunarr returned no slot schedule for this channel.');
+        draft = draftFromSchedule(schedule);
+        saved = structuredClone(draft);
+      } else {
+        draft = draftFromSchedule(null, 'time');
+        isNew = true;
+      }
+    } catch (error) {
+      notify(`Couldn’t open the slot schedule: ${errorMessage(error, 'Tunarr didn’t answer.')}`);
+      return false;
+    }
+    const result = addShowSlots(draft, shows, plan);
+    if ('error' in result) {
+      notify(result.error);
+      return false;
+    }
+    if (grab) cancelGrab();
+    loadCatalog();
+    setSlotEditor({ ...closedSlotEditor, channelId, open: true, isNew, loaded: true, draft: result.draft, saved });
+    const notes = [
+      result.replaced.length ? `It replaces ${result.replaced.join(', ')}.` : '',
+      result.toWeek ? 'The schedule is weekly now, so days can differ.' : '',
+    ].filter(Boolean).join(' ');
+    notify(`${shows.length === 1 ? `“${shows[0].title}” has` : `${shows.length} shows have`} ${result.added === 1 ? 'a time slot' : 'time slots'}. ${notes ? `${notes} ` : ''}Preview the schedule, then save.`);
+    return true;
+  };
+
   /** Save Later and Seasonal Overlay: the desk's lineup (or the slot preview's) goes in on a date. */
   const planChange = async (kind: PlanKind, plan: { label: string; at: number; until?: number }) => {
     if (!activeChannel || !base) return;
@@ -1977,6 +2049,10 @@ export default function Home() {
           onPlace={placeArranged}
           planSlots={planSlots}
           onPlaceSlots={placeInTimeSlots}
+          premiere={{ unavailable: premiereUnavailable, plan: premiereFor, onSchedule: schedulePremiere }}
+          now={now}
+          scheduleType={!generated ? 'manual' : (programming.schedule as { type?: string } | null)?.type === 'random' ? 'random' : 'time'}
+          onScheduleShows={scheduleShows}
           onChooseSpot={chooseSpot}
           onDragPrograms={(resolve, done) => { binDrag.current = { resolve, done }; resolve.catch(() => {}); }}
           onDragEnd={() => { binDrag.current = null; setBinDrop(null); }}
