@@ -8,6 +8,8 @@ were renamed 2026.10.1 and 2026.10.2.
 
 ## [Unreleased]
 
+## [2026.10.11] - 2026-10-20
+
 ### Added
 
 - **Program bin: premieres.** At a time… → Add to the lineup: **Just before they start** schedules the programs instead of adding them now: the Lineup server adds them shortly before they start, exactly on time and keeping what's on air in place, so none of them airs earlier, however short the channel's loop. Listed in File → Scheduled Changes. Needs `LINEUP_SCHEDULER=on`.
@@ -192,7 +194,8 @@ First public release.
   reaches Tunarr through a narrow allowlisted proxy. Optional HTTP Basic
   sign-in and host-name checks against DNS rebinding.
 
-[Unreleased]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.10...HEAD
+[Unreleased]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.11...HEAD
+[2026.10.11]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.10...v2026.10.11
 [2026.10.10]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.9...v2026.10.10
 [2026.10.9]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.8...v2026.10.9
 [2026.10.8]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.7...v2026.10.8
