@@ -8,6 +8,12 @@ were renamed 2026.10.1 and 2026.10.2.
 
 ## [Unreleased]
 
+## [2026.10.13] - 2026-10-20
+
+### Added
+
+- **Appearance: four skins.** **View → Appearance…** (also in the phone Menu sheet) restyles the whole desk, Watch Live, the cable guide and the remote included: **Platinum** (the Mac OS 9 look, still the default and unchanged), **Classic Windows** (a Windows 95/98-style teal desktop, gray 3D chrome and navy title bars), **Modern Studio** (light, neutral, restrained blue) and **Broadcast Console** (a dark control room: cyan selection, amber times, red for on air). Arrows move between them, OK/Enter or Space picks one, and it applies at once. The choice is kept in this browser only, never on the Lineup server or in Tunarr, and is applied before the page paints, so a reload doesn't flash Platinum.
+
 ## [2026.10.12] - 2026-10-20
 
 ### Fixed
@@ -200,7 +206,8 @@ First public release.
   reaches Tunarr through a narrow allowlisted proxy. Optional HTTP Basic
   sign-in and host-name checks against DNS rebinding.
 
-[Unreleased]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.12...HEAD
+[Unreleased]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.13...HEAD
+[2026.10.13]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.12...v2026.10.13
 [2026.10.12]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.11...v2026.10.12
 [2026.10.11]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.10...v2026.10.11
 [2026.10.10]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.9...v2026.10.10
