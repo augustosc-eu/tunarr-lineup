@@ -8,6 +8,8 @@ were renamed 2026.10.1 and 2026.10.2.
 
 ## [Unreleased]
 
+## [2026.10.12] - 2026-10-20
+
 ### Fixed
 
 - **Day toolbar fits a narrow lineup.** With the Program Bin open, the search field, program count and the Program Bin and Check buttons no longer break their labels over two lines: the search field shrinks to fit, and the two buttons stay together, wrapping to their own right-aligned row when space runs out.
@@ -198,7 +200,8 @@ First public release.
   reaches Tunarr through a narrow allowlisted proxy. Optional HTTP Basic
   sign-in and host-name checks against DNS rebinding.
 
-[Unreleased]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.11...HEAD
+[Unreleased]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.12...HEAD
+[2026.10.12]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.11...v2026.10.12
 [2026.10.11]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.10...v2026.10.11
 [2026.10.10]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.9...v2026.10.10
 [2026.10.9]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.8...v2026.10.9
