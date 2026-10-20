@@ -167,7 +167,28 @@ for (const skin of SKINS) {
     expect(await overflow(page)).toBeLessThanOrEqual(0);
     await page.keyboard.press('Escape');
     await expect(guide).toBeHidden();
+
+    // The close box holds one × (no second pseudo-element copy), centred in the box.
+    const close = watch.locator('.modal-close');
+    expect(await close.evaluate((element) => getComputedStyle(element, '::after').content)).toBe('none');
+    const offset = await close.evaluate((element) => {
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      const glyph = range.getBoundingClientRect(), box = element.getBoundingClientRect();
+      return Math.max(Math.abs(glyph.x + glyph.width / 2 - (box.x + box.width / 2)), Math.abs(glyph.y + glyph.height / 2 - (box.y + box.height / 2)));
+    });
+    expect(offset).toBeLessThan(3);
+    // A menu opened over a dialog paints on top of it.
+    await page.getByRole('menuitem', { name: 'File' }).click();
+    const item = page.getByRole('menu', { name: 'File' }).getByRole('menuitem').first();
+    await expect(item).toBeVisible();
+    expect(await item.evaluate((element) => {
+      const box = element.getBoundingClientRect();
+      return element.contains(document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2));
+    })).toBe(true);
     await page.keyboard.press('Escape');
+    await expect(page.getByRole('menu', { name: 'File' })).toBeHidden();
+    await close.click();
     await expect(watch).toBeHidden();
   });
 }
