@@ -9,8 +9,11 @@ import type { LineupItem } from './lineup';
 
 export type EventMode = 'replace' | 'push';
 export type EventSnap = 'after' | 'before';
-/** Where Insert puts new items: next to the selection, or at a date and time. */
-export type InsertWhere = 'before' | 'after' | { at: number; snap: EventSnap };
+/**
+ * Where Insert puts new items: next to the selection, or at a date and time
+ * ('exact' starts them right then, with open airtime filling up to it).
+ */
+export type InsertWhere = 'before' | 'after' | { at: number; snap: EventSnap | 'exact' };
 
 /** "Tue 6 Oct, 20:00:00": when something airs. */
 export const airTimeLabel = (ms: number) => new Intl.DateTimeFormat('en', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(new Date(ms));
@@ -67,6 +70,38 @@ export function boundaryAt(lineup: LineupItem[], channelStart: number, at: numbe
   return index < lineup.length
     ? { index: index + 1, start: passStart + cursor + lineup[index].duration }
     : { index: 0, start: passStart + cycle };
+}
+
+/** Gaps shorter than this aren't worth a flex item: the items start up to this much early. */
+const MIN_GAP = 1000;
+
+/**
+ * Where items of `added` ms go so they start exactly at `at`: the program
+ * boundary at or before it, with `gap` ms of flex in front filling up to `at`.
+ * The gap lengthens every earlier pass too (and, keeping what's on air in
+ * place, moves the channel start), so it's solved for, not just measured.
+ * `startWith(ms)`: the channel start once the lineup is `ms` longer. Null when
+ * the lineup is empty or no gap lands on `at` (a spot in an earlier pass than
+ * the one kept in place, which a gap only pulls further away).
+ */
+export function exactBoundary(lineup: LineupItem[], startWith: (added: number) => number, at: number, added: number): { index: number; start: number; gap: number } | null {
+  const boundaryWith = (gap: number) => boundaryAt(lineup, startWith(added + gap), at, 'before', added + gap);
+  let gap = 0;
+  for (let round = 0; round < 8; round += 1) {
+    const boundary = boundaryWith(gap);
+    if (!boundary) return null;
+    const miss = at - (boundary.start + gap);
+    if (Math.abs(miss) < 500) {
+      const kept = Math.round(gap) >= MIN_GAP ? Math.round(gap) : 0;
+      return { index: boundary.index, start: boundary.start + kept, gap: kept };
+    }
+    // Each ms of gap moves the boundary once per pass it repeats in before `at`.
+    const probe = boundaryWith(gap + MIN_GAP);
+    const slope = probe && probe.index === boundary.index ? (probe.start - boundary.start) / MIN_GAP : 0;
+    if (1 + slope <= 0) return null;
+    gap = Math.max(0, gap + miss / (1 + slope));
+  }
+  return null;
 }
 
 /**

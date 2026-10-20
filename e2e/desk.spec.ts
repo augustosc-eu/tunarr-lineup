@@ -638,6 +638,36 @@ test('picks posters in the program bin and places them with flex after each, at 
   expect(saved.slice(6).map((item) => item.id ?? item.type)).toEqual(['4d4d4d4d-1a2b-4c3d-8e9f-000000000001', 'flex', '4d4d4d4d-1a2b-4c3d-8e9f-000000000002', 'flex']);
 });
 
+test('places programs from the bin in daily time slots, each starting exactly on time', async ({ page }) => {
+  await page.keyboard.press('a');
+  const bin = page.getByRole('complementary', { name: 'Program bin' });
+  await bin.getByRole('button', { name: 'Pick Zulu Dawn (1979)' }).click();
+  await bin.getByRole('button', { name: 'Pick Yankee Doodle Dandy (1942)' }).click();
+  await bin.getByRole('radio', { name: 'In time slots…' }).click();
+  // Three hours on, at :07, which is never a program boundary in the fake lineup.
+  const slot = new Date(Date.now() + 3 * 3_600_000);
+  slot.setMinutes(7, 0, 0);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  await bin.getByLabel('First slot on date').fill(`${slot.getFullYear()}-${pad(slot.getMonth() + 1)}-${pad(slot.getDate())}`);
+  await bin.getByLabel('Slot time').fill(`${pad(slot.getHours())}:07`);
+  await expect(bin.getByRole('group', { name: 'Slot days' }).getByRole('button')).toHaveCount(7);
+  // The two-hour lineup repeats before the next day's slot, so only the first one fits.
+  const status = bin.getByRole('status', { name: 'Placement' });
+  await expect(status).toContainText('1 program in 1 slot');
+  await expect(status).toContainText(`${pad(slot.getHours())}:07:00`);
+  await expect(status).toContainText('of open airtime fills up to the slots');
+  await expect(status).toContainText('1 more doesn’t fit: the lineup repeats');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0);
+  await bin.getByRole('button', { name: 'Place in 1 slot' }).click();
+  await page.getByRole('button', { name: 'Save lineup', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Saved', exact: true })).toBeVisible();
+  const saved = (await fakeState(page)).lineups[NEWS];
+  const at = saved.findIndex((item) => item.id === '4d4d4d4d-1a2b-4c3d-8e9f-000000000002' || item.id === '4d4d4d4d-1a2b-4c3d-8e9f-000000000001');
+  expect(saved[at].id).toBe('4d4d4d4d-1a2b-4c3d-8e9f-000000000001');
+  expect(saved[at - 1].type).toBe('flex');
+  expect(saved.filter((item) => item.id?.startsWith('4d4d4d4d'))).toHaveLength(1);
+});
+
 test('drags a poster from the program bin onto a row of the schedule', async ({ page }) => {
   await page.getByRole('button', { name: 'Program Bin' }).click();
   const bin = page.getByRole('complementary', { name: 'Program bin' });

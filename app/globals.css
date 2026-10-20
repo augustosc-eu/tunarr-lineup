@@ -847,6 +847,11 @@ input[type=checkbox] { width:1.25rem; height:1.25rem; margin:0; accent-color:var
 .bin-note { margin:0.375rem 0 0; }
 .bin-where { margin:0.5rem 0 0; display:grid; grid-template-columns:1fr 1fr; }
 .bin-where button { min-width:0; margin:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; border-radius:0!important; }
+.bin-where button:last-child:nth-child(odd) { grid-column:1 / -1; }
+.bin-options .bin-wide { grid-column:1 / -1; }
+.bin-days { margin:0.5rem 0 0; display:grid; grid-template-columns:repeat(7, 1fr); }
+.bin-days button { min-width:0; margin:0; padding-left:0; padding-right:0; border-radius:0!important; }
+.bin-moved { margin:0.5rem 0 0; }
 .bin-tray .dialog-actions { position:sticky; bottom:-0.5rem; margin:0.5rem -0.5rem -0.5rem; padding:0.5rem; display:grid; grid-template-columns:1fr; background:#e9e9e9; border-top:1px solid #aaa; }
 .program-bin .dialog-actions { margin-top:0.5rem; flex-wrap:wrap; }
 /* Where a dragged card would land: a bar above or below the row. */

@@ -8,6 +8,16 @@ were renamed 2026.10.1 and 2026.10.2.
 
 ## [Unreleased]
 
+### Added
+
+- **Program bin: Shuffle shows, episodes in order.** A play order that mixes the picked shows at random (spread evenly) while each show's seasons and episodes stay in order.
+- **Program bin: time slots.** **In time slots…** places the picked programs in a recurring slot (a first day, a time, the days of the week), a set number per slot or as many as fit until a time, continuing the order slot after slot. Each slot starts on time; what was airing moves later.
+
+### Changed
+
+- **Program bin: At a time… starts exactly then** by default, with open airtime filling up to it (or, if you choose, when the program airing then ends).
+- **Program bin: warns when the spot moves.** On a lineup that has already repeated, adding a long block lengthens every pass that has aired, so the start could land days from the time chosen and that time could show part-way through the block (a show seeming to start on its last season). The tray now says so and suggests **Keep what's on air in place**.
+
 ## [2026.10.9] - 2026-10-19
 
 ### Added

@@ -31,7 +31,7 @@ import { WeekView } from './components/WeekView';
 import { spotTitle, useFillerSpots } from './useFillerSpots';
 import { airKind, estimateBreakFill, hourSummaries, KIND_BADGES, KIND_LABELS, stripSegments, type AirKind } from '../lib/airKinds';
 import { allStationIds, channelStationIds, idChannel, roleOf, type FillerRole } from '../lib/fillerRoles';
-import { placedLabel, type Arranged, type PlaceWhere } from '../lib/programBin';
+import { placedLabel, placeInSlots, type Arranged, type PlaceWhere, type SlotPlan } from '../lib/programBin';
 import {
   changedPositions,
   clockTimecode,
@@ -39,6 +39,7 @@ import {
   durationTimecode,
   hasAdjustableLength,
   insertItems,
+  makeFlex,
   moveBlock,
   moveBlockToPosition,
   moveBlockToTime,
@@ -72,7 +73,7 @@ import {
   type Programming,
 } from '../lib/lineup';
 import { channelLogoUrl, programArtwork, programDetail, programTitle } from '../lib/programInfo';
-import { airOncePatches, boundaryAt, insertedStart, passesBefore, type EventPlacement, type InsertWhere } from '../lib/events';
+import { airOncePatches, boundaryAt, exactBoundary, insertedStart, passesBefore, type EventPlacement, type InsertWhere } from '../lib/events';
 import { checkLineup, type Issue } from '../lib/lineupCheck';
 import type { GuideChannel } from '../lib/guideGrid';
 import { logRows, type DayRows } from '../lib/weekLog';
@@ -129,6 +130,8 @@ const NOW_TICK_MS = 15_000;
 const VIEWERS_TICK_MS = 30_000;
 /** An event that airs once goes in this long before it starts. */
 const AIR_ONCE_LEAD_MS = 10 * 60_000;
+/** A placement that starts this far from the spot chosen gets a warning (the lineup has repeated). */
+const MOVED_MS = 60 * 60_000;
 
 const dateLabel = (value: string) => new Intl.DateTimeFormat('en', { weekday: 'long', month: 'long', day: 'numeric' }).format(new Date(`${value}T12:00:00`));
 const inputDate = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
@@ -1099,22 +1102,36 @@ export default function Home() {
    * A time goes to the program boundary nearest it; before/after go next to
    * the selection. Both are worked out on the lengthened cycle (see boundaryAt).
    */
-  const insertPoint = (where: PlaceWhere, added: number): { index: number; start: number | null; passes: number } => {
-    if (!activeChannel || !lineup.length) return { index: 0, start: null, passes: 0 };
+  const insertPoint = (where: PlaceWhere, added: number): { index: number; start: number | null; passes: number; gap: number; expected: number | null } => {
+    const none = { index: 0, start: null, passes: 0, gap: 0, expected: null };
+    if (!activeChannel || !lineup.length) return none;
     // `passes`: how many lineup passes grow between the fixed point (the
     // channel start, or what's on air when keeping it in place) and the spot.
     const passesTo = (time: number) => Math.abs(passesBefore(lineup, channelStart, time) - (keeping ? passesBefore(lineup, channelStart, now) : 0));
+    // `expected`: when the spot airs now, before anything is added, so a start that moves far from it can be flagged.
     if (typeof where === 'object' && 'at' in where) {
-      const boundary = boundaryAt(lineup, startWith(added), where.at, where.snap, added);
-      return boundary ? { ...boundary, passes: passesTo(where.at) } : { index: 0, start: null, passes: 0 };
+      if (where.snap === 'exact') {
+        const exact = exactBoundary(lineup, startWith, where.at, added);
+        if (exact) return { ...exact, passes: passesTo(where.at), expected: where.at };
+      }
+      const snap = where.snap === 'exact' ? 'after' : where.snap;
+      const boundary = boundaryAt(lineup, startWith(added), where.at, snap, added);
+      return boundary ? { ...boundary, passes: passesTo(where.at), gap: 0, expected: where.snap === 'exact' ? where.at : boundaryAt(lineup, channelStart, where.at, snap)?.start ?? null } : none;
     }
     const index = typeof where === 'object' ? where.index : where === 'end' ? lineup.length : where === 'before' ? block.start : block.end + 1;
     const near = typeof where === 'object' ? where.near : selectedInstance?.start ?? occurrenceStart(lineup, channelStart, block.start, dayStartMs);
-    return { index, start: insertedStart(lineup, channelStart, index, near, added, startWith(added)), passes: passesTo(near) };
+    return { index, start: insertedStart(lineup, channelStart, index, near, added, startWith(added)), passes: passesTo(near), gap: 0, expected: insertedStart(lineup, channelStart, index, near, 0) };
+  };
+  /** What the Insert dialog and the bin show before placing: when it starts, and whether that moved off the spot chosen. */
+  const startFor = (where: PlaceWhere, added: number) => {
+    const point = insertPoint(where, added);
+    if (point.start === null) return null;
+    return { start: point.start, passes: point.passes, gap: point.gap, moved: point.expected !== null && Math.abs(point.start - point.expected) >= MOVED_MS };
   };
 
-  const insertAt = (where: PlaceWhere, items: LineupItem[], label: string, meta: Record<string, ContentProgram> = {}) => {
-    const point = insertPoint(where, cycleDuration(items));
+  const insertAt = (where: PlaceWhere, placed: LineupItem[], label: string, meta: Record<string, ContentProgram> = {}) => {
+    const point = insertPoint(where, cycleDuration(placed));
+    const items = point.gap ? [makeFlex(point.gap), ...placed] : placed;
     const result = insertItems(lineup, point.index, items);
     if (!result) return false;
     if (Object.keys(meta).length) setProgramming((current) => ({ ...current, programs: { ...current.programs, ...meta } as Programming['programs'] }));
@@ -1133,6 +1150,21 @@ export default function Home() {
   const placeArranged = (arranged: Arranged, where: PlaceWhere) => {
     if (grab || slotPreview || !activeChannel || !arranged.items.length) return false;
     return insertAt(where, arranged.items, placedLabel(arranged.programs), arranged.meta);
+  };
+  /** The bin's time slots, worked out on the lineup as it is now (the bin previews this, then places it). */
+  const planSlots = (arranged: Arranged, plan: SlotPlan) => (activeChannel ? placeInSlots(lineup, startWith, arranged.units, plan) : null);
+  const placeInTimeSlots = (arranged: Arranged, plan: SlotPlan) => {
+    if (grab || slotPreview || !activeChannel) return false;
+    const placement = planSlots(arranged, plan);
+    if (!placement) return false;
+    const first = placement.slots[0];
+    const placedPrograms = arranged.programs.slice(0, placement.placed);
+    setProgramming((current) => ({ ...current, programs: { ...current.programs, ...arranged.meta } as Programming['programs'] }));
+    applyEdit(`Placed ${placedLabel(placedPrograms)} in ${placement.slots.length} time ${placement.slots.length === 1 ? 'slot' : 'slots'} from ${clockTimecode(first.at)}`, placement.lineup, { start: first.index, end: first.index + first.count - 1 });
+    const day = inputDate(new Date(first.at));
+    if (day !== selectedDate) changeDate(day);
+    setCursorStart(first.at);
+    return true;
   };
   /** Places the programs the bin handed over next to the cursor row. */
   const placeAtCursor = () => {
@@ -1940,9 +1972,11 @@ export default function Home() {
           time={inputTime(selectedInstance?.start ?? (selectedDate === inputDate(new Date(now)) ? now : dayStartMs))}
           commercialLists={filler.lists.filter((list) => roleOf(list, filler.roles) === 'commercials')}
           stationIds={stationIds.ids}
-          startFor={(where, added) => { const point = insertPoint(where, added); return point.start === null ? null : { start: point.start, passes: point.passes }; }}
+          startFor={startFor}
           keepOnAir={canKeepOnAir ? { checked: keepOnAir, onChange: setKeepOnAir } : undefined}
           onPlace={placeArranged}
+          planSlots={planSlots}
+          onPlaceSlots={placeInTimeSlots}
           onChooseSpot={chooseSpot}
           onDragPrograms={(resolve, done) => { binDrag.current = { resolve, done }; resolve.catch(() => {}); }}
           onDragEnd={() => { binDrag.current = null; setBinDrop(null); }}
@@ -2080,7 +2114,7 @@ export default function Home() {
         date={selectedDate}
         time={inputTime(selectedInstance?.start ?? (selectedDate === inputDate(new Date(now)) ? now : dayStartMs))}
         keepOnAir={canKeepOnAir ? { checked: keepOnAir, onChange: setKeepOnAir } : undefined}
-        startFor={(where, added) => { const point = insertPoint(where, added); return point.start === null ? null : { start: point.start, passes: point.passes }; }}
+        startFor={startFor}
         onBrowse={(where) => { setInsertOpen(false); setLibraryPicker({ purpose: 'insert', where }); }}
         roles={filler.roles}
         nextStationId={nextStationId}
