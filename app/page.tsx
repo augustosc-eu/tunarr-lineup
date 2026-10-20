@@ -1868,8 +1868,10 @@ export default function Home() {
           <div className="schedule-tools">
             <label className="search"><span>⌕</span><input aria-label="Search this day" placeholder="Search this day" value={search} onChange={(event) => setSearch(event.target.value)} />{search && <button aria-label="Clear search" onClick={() => setSearch('')}>×</button>}</label>
             <span className="day-count">{visibleInstances.length} {visibleInstances.length === 1 ? 'program' : 'programs'}</span>
-            {live && activeChannel && <button className="bin-toggle" aria-pressed={binOpen} disabled={!!grab || !!slotPreview} onClick={() => setBinOpen((open) => !open)}>▦ Program Bin</button>}
-            {activeChannel && <button className={`check-badge ${issueCount ? 'has-issues' : ''}`} onClick={() => setView('check')} aria-label={issueCount ? `Check lineup: ${issueCount} ${issueCount === 1 ? 'issue' : 'issues'} this day` : 'Check lineup'}>{issueCount ? `⚠ ${issueCount}` : '✓ Check'}</button>}
+            <span className="day-actions">
+              {live && activeChannel && <button className="bin-toggle" aria-pressed={binOpen} disabled={!!grab || !!slotPreview} onClick={() => setBinOpen((open) => !open)}>▦ Program Bin</button>}
+              {activeChannel && <button className={`check-badge ${issueCount ? 'has-issues' : ''}`} onClick={() => setView('check')} aria-label={issueCount ? `Check lineup: ${issueCount} ${issueCount === 1 ? 'issue' : 'issues'} this day` : 'Check lineup'}>{issueCount ? `⚠ ${issueCount}` : '✓ Check'}</button>}
+            </span>
           </div>
           {totals.total > 0 && <DayStrip
             segments={stripSegments(instances, kindOf, dayStartMs, dayEndMs)}

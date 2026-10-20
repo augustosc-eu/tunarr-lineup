@@ -8,6 +8,10 @@ were renamed 2026.10.1 and 2026.10.2.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Day toolbar fits a narrow lineup.** With the Program Bin open, the search field, program count and the Program Bin and Check buttons no longer break their labels over two lines: the search field shrinks to fit, and the two buttons stay together, wrapping to their own right-aligned row when space runs out.
+
 ## [2026.10.11] - 2026-10-20
 
 ### Added
