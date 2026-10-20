@@ -8,6 +8,8 @@ were renamed 2026.10.1 and 2026.10.2.
 
 ## [Unreleased]
 
+## [2026.10.10] - 2026-10-20
+
 ### Added
 
 - **Program bin: Shuffle shows, episodes in order.** A play order that mixes the picked shows at random (spread evenly) while each show's seasons and episodes stay in order.
@@ -185,7 +187,8 @@ First public release.
   reaches Tunarr through a narrow allowlisted proxy. Optional HTTP Basic
   sign-in and host-name checks against DNS rebinding.
 
-[Unreleased]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.9...HEAD
+[Unreleased]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.10...HEAD
+[2026.10.10]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.9...v2026.10.10
 [2026.10.9]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.8...v2026.10.9
 [2026.10.8]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.7...v2026.10.8
 [2026.10.7]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.6...v2026.10.7
