@@ -1712,3 +1712,141 @@ describe('guide, checks and planning', () => {
     await waitFor(() => expect(screen.queryByRole('grid', { name: 'Week' })).toBeNull());
   });
 });
+
+describe('appearance', () => {
+  const SKIN_KEY = 'tunarr-lineup-skin';
+  const html = document.documentElement;
+  const openAppearance = async () => {
+    fireEvent.click(screen.getByRole('menuitem', { name: 'View' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Appearance…' }));
+    return screen.findByRole('dialog', { name: 'Appearance' });
+  };
+  const checked = (dialog: HTMLElement) => within(dialog).getAllByRole('radio').find((radio) => radio.getAttribute('aria-checked') === 'true');
+  // This jsdom has no localStorage of its own; each test installs one (or one that fails).
+  const useStorage = (storage: Partial<Storage> | 'throws') => Object.defineProperty(window, 'localStorage', storage === 'throws'
+    ? { configurable: true, get: () => { throw new Error('SecurityError'); } }
+    : { configurable: true, value: storage });
+  const memoryStorage = () => {
+    const data = new Map<string, string>();
+    return { getItem: (key: string) => data.get(key) ?? null, setItem: (key: string, value: string) => { data.set(key, String(value)); }, removeItem: (key: string) => { data.delete(key); }, clear: () => data.clear() };
+  };
+  beforeEach(() => {
+    useStorage(memoryStorage());
+    delete html.dataset.skin;
+  });
+  afterEach(() => {
+    useStorage(memoryStorage());
+    delete html.dataset.skin;
+  });
+
+  it('opens from the View menu with all four skins, Platinum first and in use', async () => {
+    fakeCompanion();
+    render(<Home />);
+    await screen.findAllByText('Alpha Movie');
+    expect(html.dataset.skin).toBe('platinum');
+    const dialog = await openAppearance();
+    const radios = within(within(dialog).getByRole('radiogroup')).getAllByRole('radio');
+    expect(radios.map((radio) => radio.textContent)).toEqual([
+      expect.stringContaining('Platinum'), expect.stringContaining('Classic Windows'), expect.stringContaining('Modern Studio'), expect.stringContaining('Broadcast Console'),
+    ]);
+    expect(checked(dialog)!.textContent).toContain('Platinum');
+    // Only the chosen card is in the tab order, and it has focus.
+    expect(radios.map((radio) => radio.tabIndex)).toEqual([0, -1, -1, -1]);
+    expect(document.activeElement).toBe(radios[0]);
+  });
+
+  it('applies and saves each skin at once, and Done keeps it', async () => {
+    const { requests } = fakeCompanion();
+    render(<Home />);
+    await screen.findAllByText('Alpha Movie');
+    const before = requests.length;
+    const dialog = await openAppearance();
+    for (const [name, id] of [['Classic Windows', 'windows'], ['Modern Studio', 'modern'], ['Broadcast Console', 'broadcast'], ['Platinum', 'platinum']]) {
+      fireEvent.click(within(dialog).getByRole('radio', { name: new RegExp(name) }));
+      expect(html.dataset.skin).toBe(id);
+      expect(window.localStorage.getItem(SKIN_KEY)).toBe(id);
+      expect(checked(dialog)!.textContent).toContain(name);
+    }
+    fireEvent.click(within(dialog).getByRole('radio', { name: /Modern Studio/ }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Done' }));
+    expect(screen.queryByRole('dialog', { name: 'Appearance' })).toBeNull();
+    expect(html.dataset.skin).toBe('modern');
+    // Appearance never asks the companion (or Tunarr) for anything.
+    expect(requests.slice(before).filter((request) => !/guide|programming|sessions|health/.test(request.path))).toEqual([]);
+  });
+
+  it('moves between skins with the arrows, picks with Enter/OK, and Escape keeps the pick', async () => {
+    fakeCompanion();
+    render(<Home />);
+    await screen.findAllByText('Alpha Movie');
+    const dialog = await openAppearance();
+    const radios = within(dialog).getAllByRole('radio');
+    fireEvent.keyDown(radios[0], { key: 'ArrowRight' });
+    expect(document.activeElement).toBe(radios[1]);
+    fireEvent.keyDown(radios[1], { key: 'ArrowDown' });
+    expect(document.activeElement).toBe(radios[2]);
+    // Moving focus alone doesn't change the skin.
+    expect(html.dataset.skin).toBe('platinum');
+    fireEvent.keyDown(radios[2], { key: 'ArrowLeft' });
+    fireEvent.keyDown(radios[1], { key: 'ArrowUp' });
+    fireEvent.keyDown(radios[0], { key: 'ArrowUp' });
+    expect(document.activeElement).toBe(radios[3]);
+    // Enter/OK and Space activate the focused card (a button), like a click.
+    fireEvent.click(document.activeElement!);
+    expect(html.dataset.skin).toBe('broadcast');
+    expect(radios.map((radio) => radio.tabIndex)).toEqual([-1, -1, -1, 0]);
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: 'Appearance' })).toBeNull();
+    expect(html.dataset.skin).toBe('broadcast');
+    expect(window.localStorage.getItem(SKIN_KEY)).toBe('broadcast');
+    // Back to the desk: its keys work again.
+    fireEvent.keyDown(document.body, { key: '?' });
+    expect(await screen.findByText('Keyboard & remote shortcuts')).toBeTruthy();
+  });
+
+  it('is in the phone Menu sheet too', async () => {
+    fakeCompanion();
+    render(<Home />);
+    await screen.findAllByText('Alpha Movie');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Menu' }));
+    const view = within(screen.getByRole('menu', { name: 'All menus' })).getByRole('group', { name: 'View' });
+    fireEvent.click(within(view).getByRole('menuitem', { name: 'Appearance…' }));
+    expect(await screen.findByRole('dialog', { name: 'Appearance' })).toBeTruthy();
+  });
+
+  it('restores the saved skin after a reload, and ignores values it doesn’t know', async () => {
+    fakeCompanion();
+    window.localStorage.setItem(SKIN_KEY, 'windows');
+    const first = render(<Home />);
+    await screen.findAllByText('Alpha Movie');
+    expect(html.dataset.skin).toBe('windows');
+    expect(checked(await openAppearance())!.textContent).toContain('Classic Windows');
+    first.unmount();
+    delete html.dataset.skin;
+
+    fakeCompanion();
+    window.localStorage.setItem(SKIN_KEY, 'neon');
+    render(<Home />);
+    await screen.findAllByText('Alpha Movie');
+    expect(html.dataset.skin).toBe('platinum');
+  });
+
+  it('still works when storage throws or is missing, without remembering', async () => {
+    fakeCompanion();
+    useStorage({ getItem: () => { throw new Error('SecurityError'); }, setItem: () => { throw new Error('QuotaExceededError'); } });
+    const first = render(<Home />);
+    await screen.findAllByText('Alpha Movie');
+    expect(html.dataset.skin).toBe('platinum');
+    fireEvent.click(within(await openAppearance()).getByRole('radio', { name: /Broadcast Console/ }));
+    expect(html.dataset.skin).toBe('broadcast');
+    first.unmount();
+
+    // Some sandboxed frames throw on the localStorage property itself.
+    useStorage('throws');
+    fakeCompanion();
+    render(<Home />);
+    await screen.findAllByText('Alpha Movie');
+    fireEvent.click(within(await openAppearance()).getByRole('radio', { name: /Classic Windows/ }));
+    expect(html.dataset.skin).toBe('windows');
+  });
+});

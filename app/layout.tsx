@@ -16,7 +16,7 @@ export const metadata: Metadata = {
   // Set NEXT_PUBLIC_SITE_URL to the deployed address so social previews get absolute URLs.
   metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000'),
   title: 'Tunarr Lineup',
-  description: 'Your Tunarr schedule, the classic Mac way.',
+  description: 'A TV-friendly, skinnable programming desk for your Tunarr channels.',
   openGraph: {
     title: 'Tunarr Lineup',
     description: 'Your schedule, the classic way.',
@@ -36,7 +36,13 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
+    // skin-init.js sets data-skin on <html> before hydration, so React leaves it be.
+    <html lang="en" suppressHydrationWarning>
+      <head>
+        {/* Applies the saved skin before first paint (no flash). A same-origin file, not inline, to fit the companion's CSP. */}
+        {/* eslint-disable-next-line @next/next/no-sync-scripts */}
+        <script src="/skin-init.js" />
+      </head>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >

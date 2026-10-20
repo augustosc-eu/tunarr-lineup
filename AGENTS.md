@@ -10,7 +10,9 @@ Read this first; read the docs below before non-trivial changes.
 
 ## What this is
 
-A Mac OS 9–styled programming desk for [Tunarr](https://tunarr.com) channels:
+A TV-friendly, skinnable programming desk for [Tunarr](https://tunarr.com) channels
+(Mac OS 9 Platinum by default; View → Appearance… offers Classic Windows, Modern Studio
+and Broadcast Console, D57):
 arrange, insert and remove programs, build and edit slot schedules (season filters,
 linked slots), start channels from programming templates (general, network-inspired for
 Japan, Argentina, the US, Spain, the UK and Italy, the user's own, or AI-written), place
@@ -136,8 +138,11 @@ Chromium with `npx playwright install chromium`. CI runs all of them
 8. **Keep the desk TV/remote-operable.** Every action must be reachable without a
    mouse: arrow keys, Enter/OK, Escape/Back, PageUp/PageDown or CH±, the menus and
    the `?` shortcut list. Don't add hover-only or drag-only features.
-9. **Preserve the Mac OS 9 visual treatment**: platinum chrome, striped title bars, 1px
-   bevels. The interface is used on a TV, so keep text large and smooth. Size things in
+9. **Preserve the Mac OS 9 visual treatment** as the default Platinum skin: platinum
+   chrome, striped title bars, 1px bevels. Style through the semantic tokens in
+   `app/globals.css` (Platinum values in `:root`, other skins as `[data-skin]` token
+   overrides), never per-skin copies of rules. The skin is a browser preference only
+   (`lib/skins.ts`, `localStorage`), never a server setting. The interface is used on a TV, so keep text large and smooth. Size things in
    `rem` (the root scales with viewport width in `app/globals.css`); keep 1px hairlines
    in `px`; don't reintroduce `-webkit-font-smoothing:none` or sub-13px base type.
 
@@ -161,7 +166,7 @@ Chromium with `npx playwright install chromium`. CI runs all of them
   `events.ts` (placing events on dates), `programBin.ts` (arranging picked programs: order, passes, breaks after each), `fillerRoles.ts` (filler-list roles, spot lengths),
   `airKinds.ts` (station-log kinds: breaks, IDs, flex; hour summaries, break rundowns),
   `lineupCheck.ts` (the lineup check), `weekLog.ts` (several days: week view, logs, AI
-  summary), `guideGrid.ts` (guide grid layout and focus), `tvRemote.ts` (watching like a cable box: remote keys, tuning, retries), and `programInfo.ts` for titles,
+  summary), `guideGrid.ts` (guide grid layout and focus), `skins.ts` (the skin catalog and its validator), `tvRemote.ts` (watching like a cable box: remote keys, tuning, retries), and `programInfo.ts` for titles,
   artwork and logo URLs.
 - **Put HTTP and validation logic in `server/`:** `tunarrProxy.ts` (framework-free),
   `content.ts`, `admin.ts`, `logos.ts`, `smartCollection.ts`, `templateSchema.ts`,
@@ -179,7 +184,8 @@ Chromium with `npx playwright install chromium`. CI runs all of them
   `TemplatesDialog` (gallery, AI panel), `TemplateEditor`, `EventDialog`, `DayStrip`,
   `GuideGrid`, `WeekView`, `LineupCheckDialog`, `AlignDialog`, `MarathonDialog`,
   `NetworkDialog` (copy, simulcast, shared commercials), `WatchDialog` (with `TvRemote` and `CableGuide`), `SnapshotsDialog`,
-  `PlanDialog` (Save Later, seasonal overlays), `ScheduledDialog`.
+  `PlanDialog` (Save Later, seasonal overlays), `ScheduledDialog`, `AppearanceDialog` (skins).
+  `app/useSkin.ts` applies and remembers the skin (`public/skin-init.js` applies it before React);
   `app/useFillerSpots.ts` loads filler lists, their roles and spots for the day view;
   `app/useLiveStream.ts` plays and retries a channel's live stream;
   `app/useLibraryListing.ts` browses the libraries for `LibraryBrowser` and `ProgramBin`.

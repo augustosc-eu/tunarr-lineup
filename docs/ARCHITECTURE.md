@@ -64,8 +64,12 @@ server implements those paths.
 | `app/components/CableGuide.tsx` | The early-2000s on-screen guide inside the picture: details and the picture window on top, five channels × ninety minutes below, forward only. |
 | `app/components/SnapshotsDialog.tsx` | Snapshot list, restore, take now, delete; lineup export/import files (`readExport`). |
 | `app/components/PlanDialog.tsx` / `ScheduledDialog.tsx` | Save Later and seasonal overlays; the list of scheduled changes with cancel. |
-| `app/layout.tsx` | Hosted-only root layout: Geist fonts (`next/font/google`), metadata, OpenGraph. Not used by the companion build. |
-| `app/globals.css` | All styling (Mac OS 9 theme, rem-based scaling, responsive rules). Imports Tailwind. |
+| `app/layout.tsx` | Hosted-only root layout: Geist fonts (`next/font/google`), metadata, OpenGraph, and the `/skin-init.js` script in `<head>`. Not used by the companion build. |
+| `app/globals.css` | All styling (rem-based scaling, responsive rules) written against semantic custom properties. `:root` holds the Platinum (Mac OS 9) values, including exact shade tokens that keep Platinum identical to the original stylesheet; one `:root:is([data-skin=…])` block aliases those shades to role tokens, and `:root[data-skin="windows" \| "modern" \| "broadcast"]` blocks at the end override only tokens. Imports Tailwind. |
+| `lib/skins.ts` | The skin catalog: `SkinId`, `SKINS` (name, description), `DEFAULT_SKIN` (`platinum`), `SKIN_STORAGE_KEY` (`tunarr-lineup-skin`), `isSkinId`, `parseSkin` (unknown values become Platinum). |
+| `app/useSkin.ts` | `useSkin()`: reads the stored skin (`readStoredSkin`, safe when storage is missing or throws), sets `document.documentElement.dataset.skin`, and saves a new pick to `localStorage` at once. |
+| `app/components/AppearanceDialog.tsx` | View → Appearance…: a `radiogroup` of four skin cards with CSS-only previews. Arrows move focus (roving `tabIndex`), Enter/OK or Space picks, Done or Back closes without reverting. |
+| `public/skin-init.js` | Runs before the app bundle in both entries and sets `data-skin` from the validated stored value, so a reload doesn't flash Platinum. A same-origin file because the companion's CSP has `script-src 'self'` and no inline script. |
 | `lib/lineup.ts` | Domain types and schedule math: projection, guide mapping, `scheduleForDay`, `reorderLineup`, `buildManualSave`. |
 | `lib/broadcast.ts` | Programming-desk helpers: timecode, block moves, move-to-position and move-to-time, change tracking, day totals, on-air lookup, CSV. |
 | `lib/history.ts` | Undo/redo stack of whole-lineup snapshots (`record`, `undo`, `redo`, `MAX_HISTORY` = 200), plus `itemIdentity` and `rebaseHistory` for carrying history across a save. |
@@ -85,7 +89,7 @@ server implements those paths.
 | `lib/programInfo.ts` | `getProgram`, `programTitle`, `programDetail`, `programArtwork`, `channelLogoUrl`. |
 | `lib/tunarrClient.ts` | Browser client for `/api/tunarr/*`: `checkHealth`, `tunarrApi`, `TunarrApiError`, `ConnectionState`. |
 | `lib/demoData.ts` | Demo channels and lineup (`demoChannels`, `demoProgramming()`, `demoDate`). |
-| `local/index.html`, `local/main.tsx` | Companion SPA entry: renders `<Home />` into `#root` under `StrictMode` and imports `app/globals.css`. |
+| `local/index.html`, `local/main.tsx` | Companion SPA entry: loads `/skin-init.js` in `<head>`, renders `<Home />` into `#root` under `StrictMode` and imports `app/globals.css`. |
 | `server/tunarrProxy.ts` | Framework-free proxy and validation: `handleTunarrApi`, `createProxyConfig`, `parseTunarrUrl`, validators, artwork passthrough. |
 | `server/nodeAdapter.ts` | Adapts Node `IncomingMessage`/`ServerResponse` to `handleTunarrApi` (`handleNodeApiRequest`, `isTunarrApiPath`). |
 | `server/slotSchedule.ts` | Slot-schedule rules: `buildSchedule` (create, convert or edit; per-type settings allowlist; slot, filler and mid-roll validation; materialized fields stripped), `defaultSchedule`, `programPool` (port of Tunarr's `lineupItemAppearsInSchedule`, plus extra programs), `validateExtraPrograms`, `slotSourceKey`, `validateSeed`. Pure, so `lib/` imports it too. |
@@ -605,7 +609,7 @@ position) and downloads it via a `Blob` object URL. The filename gets an
 - **The browser** keeps per-channel drafts (unsaved order and edit list) in IndexedDB (database `tunarr-lineup`, store `drafts`, key `channelId`). Each draft is tied to the programming version it was made against and is dropped once that version is gone.
   - If IndexedDB is unavailable or fails, an in-memory store is used and `draftStore().persistent` is false.
   - Drafts are also written to the companion (`sharedDraftStore` over `companionDrafts`), and a load takes the newer copy, so they follow the user between devices. Without the companion's draft routes (hosted preview) they stay per browser.
-- **Per-viewer conveniences** in `localStorage`: the lineup check's settings per channel (`lineup-check:<id>`), wrapped in try/catch.
+- **Per-viewer conveniences** in `localStorage`: the lineup check's settings per channel (`lineup-check:<id>`) and the skin (`tunarr-lineup-skin`, one of the `lib/skins.ts` ids), wrapped in try/catch. The skin is never sent to the companion or Tunarr and isn't a server setting (`server/settings.ts`); without storage it applies for the visit only.
 - **Not persisted:** slot-schedule drafts and demo edits live only in React state.
 
 ## 10. Authentication
@@ -682,6 +686,7 @@ bundle (`envPrefix`); none are used.
     - slot helpers
     - draft encoding and decoding, the IndexedDB store via `fake-indexeddb`, the memory fallback, `rebaseHistory` and version fingerprints
   - `page.test.tsx` (jsdom): `Home` against a stateful `fakeCompanion()`. The fake enforces `If-Match` like the companion. Covers live loading, saves, 412 conflicts, remote slide and cancel, block moves, the Move dialog, menus, the on-air marker, export, drafts kept across channel switches and reloads, undo past a save, stale drafts dropped, the slot editor (catalog sources, adding slots with commercials and mid-roll, creating a time-slot schedule for a manual channel, preview then save with the seed, discard), library inserts, commercial breaks, remove/length/undo, drafts with inserted items, filler-list creation, and channel filler settings, demo guards, and no silent demo fallback.
+  - `skins.test.ts`: skin ids and the Platinum fallback, `public/skin-init.js` run in a `node:vm` sandbox (valid, unknown, throwing storage), and the stylesheet: each skin overrides only tokens `:root` defines, every `var()` used is defined, only Broadcast is dark. The `appearance` block in `page.test.tsx` covers the dialog (View menu and phone sheet, arrows and Enter, Done and Escape, saving at once, restore after remount, unknown values, storage that throws or is missing).
   - `watch.test.ts` (guide, sessions, stream rewriting and refusals, redirect graph), `scheduler.test.ts` (plans, patches, overlays, skips, cancel), `companionStores.test.ts` (snapshots, shared drafts, media playback ranges, AI review), `tvRemote.test.ts` (remote keys, CH±, number entry, retry waits, now/next), `deskTools.test.ts` (lineup check, alignment, marathons, air-once patches, week log, guide grid, browser draft sync, lineup files). Tests that build a full config use a temporary `LINEUP_DATA_DIR` (`tests/tempData.ts`).
 - **`e2e/` (Playwright):**
   - `responsive.spec.ts` checks a 390×844 touch phone (Menu sheet, Program Info sheet edit and save, channel strip) and that 768×1024, 1280×800 and 2560×1080 fit without horizontal overflow.
@@ -693,6 +698,7 @@ bundle (`envPrefix`); none are used.
     - draft restore after a real reload (IndexedDB)
     - random-slot edit → preview → save (checking the saved schedule, seed and server-built program pool in the fake)
     - keyboard menus, CSV download and phone width
+  - `skins.spec.ts`: picking each skin by keyboard, checked through computed styles (desktop, selection, `color-scheme`); persistence across a reload; `skin-init.js` applying the skin with the app bundle blocked; Escape keeping the pick; the desk, guide grid, week view and Watch Live (OSD, cable guide focus and ↓, remote) under every skin without horizontal overflow; and the phone Menu sheet.
   - `tools.spec.ts`: viewer counts without addresses, the guide grid by remote, watching through the companion only, the lineup check and snapshot restore, the week view export, and a planned/cancelled dated save. The fake also serves `/api/guide/channels`, `/api/sessions` and `/stream/channels/…`. Each test clears the companion's shared drafts first.
 
 ## 14. Cross-cutting patterns

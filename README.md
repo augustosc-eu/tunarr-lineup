@@ -1,7 +1,9 @@
 # Tunarr Lineup
 
-A Mac OS 9–style programming desk for the channels on your
-[Tunarr](https://tunarr.com) server. Pick a channel and a date, then arrange,
+A TV-friendly, skinnable programming desk for the channels on your
+[Tunarr](https://tunarr.com) server. It looks like classic Mac OS 9 (Platinum)
+by default; **View → Appearance…** switches the whole desk to Classic Windows,
+Modern Studio or Broadcast Console. Pick a channel and a date, then arrange,
 insert and remove programs, build slot schedules, and add commercials and
 filler, all saved through Tunarr's own API. It is designed to be driven from a
 TV with a remote as well as with a mouse and keyboard.
@@ -37,6 +39,7 @@ see [Run with Docker Compose](#run-with-docker-compose-recommended).
   - **Arrows** move between programs. **OK/Enter** picks the selection up; **↑/↓** slide it, OK drops it, and **Back** cancels.
   - **← / →** change the day, and **CH+ / CH−** (or PgUp/PgDn) change the channel.
   - Press `?` for the full list.
+- **Appearance.** **View → Appearance…** offers four skins for the whole desk, Watch Live, the cable guide and the remote included: **Platinum** (Mac OS 9, the default), **Classic Windows** (Windows 95/98 style), **Modern Studio** (light and contemporary) and **Broadcast Console** (a dark control room with amber times and red for on air). Arrows move between them and OK/Enter or Space picks one; it applies at once. The choice is kept in this browser's local storage (`tunarr-lineup-skin`), not on the Lineup server, and nothing is sent to Tunarr. A small same-origin script (`public/skin-init.js`) applies it before the page paints, so a reload doesn't flash Platinum first.
 - **Phones and tablets.** The desk adapts to the screen. On narrow screens Program Info is a sheet over the lineup with Earlier/Later, Move or swap, Insert and Remove; tap its title bar for the details. On phones, **Menu** opens every menu in one list and the channels are a strip you can swipe.
 - **Edit list.** Step-by-step undo and redo (⌘Z / ⇧⌘Z, or Ctrl+Z / Ctrl+Y). Changed rows are marked, and **Revert all** discards every edit.
   - Unsaved work and the edit list are kept per channel in the browser (IndexedDB) and on the Lineup server (`LINEUP_DATA_DIR/drafts`), so work started on the TV opens on a laptop. They survive switching channels, reloading the page and turning the TV off; the newer copy wins.
@@ -402,7 +405,8 @@ Tests live in `tests/`:
 - `server.test.ts`: static serving, path-traversal guards, CSP, and optional sign-in.
 - `hardening.test.ts`: host-name checks (DNS rebinding), own-key validation, saved-template size limits, and templates without `TUNARR_URL`.
 - `lineup.test.ts`, `broadcast.test.ts`: reorder, block moves, move-to-time, timecode, day totals, CSV, undo history, artwork URLs, and save payload preservation for every lineup item type.
-- `page.test.tsx`: live loading, date navigation, reorder → save → re-fetch, conflict detection, remote-key slide, block moves, menus, log export, and no silent demo fallback.
+- `page.test.tsx`: live loading, date navigation, reorder → save → re-fetch, conflict detection, remote-key slide, block moves, menus, log export, no silent demo fallback, and the Appearance dialog (skins applied, saved, restored, and working without storage).
+- `skins.test.ts`: skin ids and the Platinum fallback, `public/skin-init.js` in a sandbox, and that every skin only overrides tokens Platinum defines.
 - `e2e/desk.spec.ts`: the real browser flow at 1920×1080.
 - `e2e/responsive.spec.ts`: phone (Menu sheet, Program Info sheet, channel strip), tablet, laptop and ultrawide layouts.
 

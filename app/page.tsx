@@ -19,6 +19,7 @@ import { SmartCollectionsManager } from './components/SmartCollectionsManager';
 import { TemplatesDialog, type TemplateTarget } from './components/TemplatesDialog';
 import { TranscodeProfilesDialog } from './components/TranscodeProfilesDialog';
 import { AlignDialog } from './components/AlignDialog';
+import { AppearanceDialog } from './components/AppearanceDialog';
 import { GuideGrid } from './components/GuideGrid';
 import { LineupCheckDialog, loadCheckSettings } from './components/LineupCheckDialog';
 import { MarathonDialog } from './components/MarathonDialog';
@@ -29,6 +30,7 @@ import { SnapshotsDialog } from './components/SnapshotsDialog';
 import { WatchDialog } from './components/WatchDialog';
 import { WeekView } from './components/WeekView';
 import { spotTitle, useFillerSpots } from './useFillerSpots';
+import { useSkin } from './useSkin';
 import { airKind, estimateBreakFill, hourSummaries, KIND_BADGES, KIND_LABELS, stripSegments, type AirKind } from '../lib/airKinds';
 import { allStationIds, channelStationIds, idChannel, roleOf, type FillerRole } from '../lib/fillerRoles';
 import { placedLabel, placeInSlots, type Arranged, type PlaceWhere, type SlotPlan } from '../lib/programBin';
@@ -327,6 +329,9 @@ export default function Home() {
   // On narrow screens Program Info is a sheet over the lineup; this expands it.
   const [infoExpanded, setInfoExpanded] = useState(false);
   const [infoDialog, setInfoDialog] = useState<'shortcuts' | 'about' | null>(null);
+  // View → Appearance…; the skin itself lives in this browser (app/useSkin.ts).
+  const [appearanceOpen, setAppearanceOpen] = useState(false);
+  const { skin, setSkin } = useSkin();
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialog | null>(null);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -1525,10 +1530,11 @@ export default function Home() {
       const key = event.key;
       const back = key === 'Escape' || key === 'GoBack' || key === 'BrowserBack';
       const mod = event.metaKey || event.ctrlKey;
-      if (confirmDialog || arrangeOpen || connectionOpen || infoDialog || slotEditor.open || libraryPicker || insertOpen || settingsOpen || listsOpen || setupDialog || newChannel || templatesOpen || eventOpen || view || networkMode || planKind || watching) {
+      if (confirmDialog || appearanceOpen || arrangeOpen || connectionOpen || infoDialog || slotEditor.open || libraryPicker || insertOpen || settingsOpen || listsOpen || setupDialog || newChannel || templatesOpen || eventOpen || view || networkMode || planKind || watching) {
         if (!back) return;
         event.preventDefault();
         if (confirmDialog) setConfirmDialog(null);
+        else if (appearanceOpen) setAppearanceOpen(false);
         else if (watching) setWatching(null);
         else if (planKind) setPlanKind(null);
         else if (networkMode) setNetworkMode(null);
@@ -1734,6 +1740,8 @@ export default function Home() {
       { label: 'Guide Grid', shortcut: 'G', disabled: !channels.length, onSelect: () => setView('guide') },
       { label: 'Week View', shortcut: 'W', disabled: !activeChannel, onSelect: () => setView('week') },
       { label: issueCount ? `Check Lineup (${issueCount})…` : 'Check Lineup…', shortcut: 'C', disabled: !activeChannel, onSelect: () => setView('check') },
+      'separator',
+      { label: 'Appearance…', onSelect: () => setAppearanceOpen(true) },
     ] },
     { title: 'Channel', items: [
       { label: 'Previous Channel', shortcut: 'CH−', disabled: channels.length < 2, onSelect: () => stepChannel(-1) },
@@ -2153,6 +2161,8 @@ export default function Home() {
           <div className="dialog-actions"><button className="primary" onClick={() => setInfoDialog(null)}>OK</button></div>
         </section>
       </div>}
+
+      {appearanceOpen && <AppearanceDialog skin={skin} onChange={setSkin} onClose={() => setAppearanceOpen(false)} />}
 
       {slotEditor.open && slotEditor.channelId === activeChannelId && activeChannel && (slotEditor.loaded ? <ScheduleEditor
         fillerRoles={filler.roles}

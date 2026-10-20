@@ -1,7 +1,7 @@
 {
   "name": "tunarr-lineup",
   "version": "2026.10.12",
-  "description": "A Mac OS 9-styled, TV-remote-friendly programming desk for Tunarr channels",
+  "description": "A TV-friendly, skinnable programming desk for Tunarr channels (Mac OS 9 Platinum by default)",
   "license": "MIT",
   "repository": {
     "type": "git",

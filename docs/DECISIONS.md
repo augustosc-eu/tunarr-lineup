@@ -113,6 +113,7 @@ on the `broadcast-programming` branch.
 - **Status:** Explicit that it was done (commit `fa10bfd` "Restyle Tunarr Lineup for Mac OS 9"). Evidenced by `app/globals.css`.
 - **Decision:** Platinum chrome, striped title bars drawn with gradients, bevelled buttons, CSS-generated window titles, and a Geneva/Charcoal/Chicago font stack.
 - **Reason:** not recorded.
+- **Later:** Platinum is now the default of four skins (D57); this look is unchanged.
 
 ## D15. TV-readable, viewport-scaled typography
 
@@ -481,7 +482,7 @@ on the `broadcast-programming` branch.
   - **No new routes.** The player and the cable guide use the existing stream routes and `/guide` (D49); the guide loads three hours at a time, so two ninety-minute pages share a request.
   - **The stream keeps itself going** (five retries with a growing wait, tuning and stall timeouts, a retry on `online`) instead of showing an error at the first failure, because Tunarr starts a stream only when asked and the first tries often fail.
   - **CH+ goes up the dial** (to a higher number) in the player, as on a cable box, unlike the desk, where PgUp moves up the channel list.
-  - **The cable guide's blue is on the TV, not the desk.** Only what's inside the picture takes the cable-box look; the dialog and the remote keep the platinum chrome (invariant 9). Sizes stay in `rem`.
+  - **The cable guide's blue is on the TV, not the desk.** Only what's inside the picture takes the cable-box look; the dialog and the remote keep the desk's chrome (platinum in the default skin, invariant 9; the other skins restyle them and the guide through tokens, D57). Sizes stay in `rem`.
   - **The guide only looks ahead**, about half a day, as the boxes did; the full guide grid (View → Guide Grid) still covers any time.
 - **Consequence:** the native video controls are gone; the remote and keys replace them. A program that hasn't started tunes to its channel (there are no reminders).
 
@@ -514,3 +515,15 @@ on the `broadcast-programming` branch.
   - For shows that should keep their slot and carry on episode by episode, the bin writes to the time-slot schedule instead (`addShowSlots`). Nothing is saved from the bin: the slot editor opens with the result, and the usual preview-then-save rule applies (invariant 4).
 - **Consequence:** the scheduler can now add programs without someone at the desk (still only what was planned there, under the channel lock with a snapshot first, D51). Once the lineup comes back round to a premiere's spot, it repeats like the rest of the lineup.
 
+## D57. Four skins, chosen per browser; Platinum stays the default
+
+- **Status:** Explicit: the owner asked for "a complete multi-skin appearance system" with Platinum, Classic Windows, Modern Studio and Broadcast Console covering the whole app (2026-10-20). Evidenced: `lib/skins.ts`, `app/useSkin.ts`, `app/components/AppearanceDialog.tsx`, `public/skin-init.js`, the token blocks in `app/globals.css`, tests in `tests/skins.test.ts`, `tests/page.test.tsx` and `e2e/skins.spec.ts`.
+- **Decision:**
+  - **One stylesheet, semantic tokens.** Every rule paints with custom properties (surfaces, text, lines and bevels, buttons, title bars, selection and focus, states, guide, TV, cable guide, remote). `:root` holds Platinum's values, equal to the literals they replaced, so the default look stays D14's. Each other skin is a `:root[data-skin=…]` block of token overrides only; tests check it names no unknown token. Layout, sizes in `rem` and behaviour are shared.
+  - **Meanings survive the skin.** Station-log kind colours, warnings, errors and on-air red keep their roles; Broadcast Console gets dark-background versions of each rather than reusing the light ones. Only Broadcast sets `color-scheme:dark`. Watch Live's picture area stays dark in every skin, for the video.
+  - **The choice is the browser's.** It's stored in `localStorage` (`tunarr-lineup-skin`), applied as `<html data-skin>`, and never sent to the companion or Tunarr; it isn't in `server/settings.ts` (D55), so a TV and a laptop can differ. Invalid or unreadable values fall back to Platinum.
+  - **No flash, no CSP change.** `public/skin-init.js`, a same-origin file loaded in `<head>` by both `local/index.html` and `app/layout.tsx`, sets `data-skin` before the bundle runs; `script-src 'self'` is unchanged and nothing is inline.
+  - **Picking is remote-friendly.** Arrows move between the four cards, OK/Enter or Space picks (applied and saved at once), Done or Back closes without reverting (invariant 8).
+  - **Classic Windows is a style, not a copy:** colours and bevels in CSS, system fonts (Tahoma, MS Sans Serif fallbacks), no Microsoft logos or assets.
+  - **Platinum is exact.** Where the original desk used near-identical shades (several grays, `#101010` against `#111`, a few reds and blues), `:root` keeps each as a shade token (`--line-2`, `--edge`, `--now-line`…) holding the original value, and one block aliases them all to their role token for the other skins. Every element's computed style in Platinum matches the pre-skin stylesheet (checked on the desk, menus, guide grid, week view, lineup check, shortcuts, Watch Live and the cable guide at 390×844, 1280×800 and 1920×1080).
+- **Consequence:** new styles must use the tokens (a literal colour won't follow the skin), and a new token needs a Platinum value in `:root`; a new Platinum-only shade also needs its alias (tested in `tests/skins.test.ts`).

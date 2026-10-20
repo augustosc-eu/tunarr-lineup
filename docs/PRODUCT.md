@@ -18,9 +18,10 @@ play a channel live, check a lineup for problems, keep snapshots, and save chang
 on a date. Tunarr's global settings (FFmpeg, HDHomeRun, XMLTV) stay in Tunarr's
 own interface.
 
-The interface imitates classic Mac OS 9: platinum window chrome, striped title
-bars, bevelled buttons, Geneva/Charcoal-style type. The visual identity is
-deliberate (see `docs/DECISIONS.md`).
+By default the interface imitates classic Mac OS 9 (the **Platinum** skin):
+platinum window chrome, striped title bars, bevelled buttons, Geneva/Charcoal-style
+type. The visual identity is deliberate (see `docs/DECISIONS.md`). **View →
+Appearance…** offers three other skins for the whole desk (see journey 7a).
 
 ## Who it serves
 
@@ -294,6 +295,26 @@ or a month.
 
 The menus can also be operated with the arrows, OK and Back.
 
+### 7a. Change the appearance
+
+**View → Appearance…** (also in the phone **Menu** sheet) shows four skins as large
+cards, each with a small preview:
+
+- **Platinum** (default): the Mac OS 9 desk described above.
+- **Classic Windows:** a Windows 95/98-style teal desktop, gray 3D chrome, navy title bars and square controls. No Microsoft logos or assets.
+- **Modern Studio:** light neutral surfaces, restrained blue accents, soft shadows and modest rounding.
+- **Broadcast Console:** a dark control room: charcoal panels, cyan selection, amber times and red for on air. The only dark skin.
+
+A skin covers everything: menus, dialogs, the lineup, the program bin, the guide grid,
+week view, the lineup check, and Watch Live with its banner, on-screen display, cable
+guide and remote. Station-log colours (breaks, IDs, promos, flex), warnings, errors and
+on-air red keep their meaning in every skin. Layout and behaviour don't change.
+
+Arrows move between the cards, OK/Enter or Space picks one, and it applies and is saved
+at once; **Done** or Back closes without undoing it. The choice belongs to the browser
+(local storage), not the Lineup server or Tunarr, so a TV and a laptop can use different
+skins. If the browser blocks storage, the skin still applies but isn't remembered.
+
 ### 8. Demo mode
 
 - **Entering:** chosen explicitly. The labels change to "Demo mode", "DEMO CHANNELS" and "DEMO · …".
@@ -316,7 +337,7 @@ The menus can also be operated with the arrows, OK and Back.
 - **Host names:** without sign-in, Lineup answers only to IP addresses, `localhost` and the names in `LINEUP_ALLOWED_HOSTS`, so other websites can't reach it through DNS rebinding.
 - **Tunarr API compatibility:** Lineup depends on Tunarr's channel, programming, lineup, schedule, artwork, search, filler-list, custom-show, smart-collection, transcode-config and media-source endpoints and their payload shapes (see `docs/ARCHITECTURE.md`). The code doesn't detect Tunarr versions.
 - **Generated schedules:** saving manually can detach a channel from its generated schedule. Tunarr may also regenerate over manual edits.
-- **TV readability and remote operation:** text must stay large and anti-aliased, and every action must work without a mouse. The UI scales with the viewport (width, capped by height), and phones and tablets get a compact layout with a Menu sheet and a collapsible Program Info sheet.
+- **TV readability and remote operation:** text must stay large and anti-aliased in every skin, and every action must work without a mouse. The UI scales with the viewport (width, capped by height), and phones and tablets get a compact layout with a Menu sheet and a collapsible Program Info sheet.
 - **Conflict check window:** the companion checks and writes under a per-channel lock, so two Lineup sessions can't overwrite each other. Tunarr's API has no conditional save, so an edit made in Tunarr's own UI in the milliseconds between check and write would still be overwritten.
 - **Drafts are shared through the companion:** unsaved work on the TV opens on a laptop (the newer copy wins). The hosted preview keeps drafts per browser.
 
