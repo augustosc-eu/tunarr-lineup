@@ -8,6 +8,13 @@ were renamed 2026.10.1 and 2026.10.2.
 
 ## [Unreleased]
 
+## [2026.10.14] - 2026-10-21
+
+### Fixed
+
+- **Menus open over dialogs.** With Watch Live or any other dialog open, the **File**, **Edit**, **View** and other menus now open on top of it instead of behind it.
+- **Close boxes look right in every skin.** The close box drew its × twice, clipped and off-centre. It now shows one centred × that is a little larger and easier to hit. In **Platinum** it stays an empty Mac OS 9 close box, now with a raised bevel.
+
 ## [2026.10.13] - 2026-10-20
 
 ### Added
@@ -206,7 +213,8 @@ First public release.
   reaches Tunarr through a narrow allowlisted proxy. Optional HTTP Basic
   sign-in and host-name checks against DNS rebinding.
 
-[Unreleased]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.13...HEAD
+[Unreleased]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.14...HEAD
+[2026.10.14]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.13...v2026.10.14
 [2026.10.13]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.12...v2026.10.13
 [2026.10.12]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.11...v2026.10.12
 [2026.10.11]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.10...v2026.10.11
