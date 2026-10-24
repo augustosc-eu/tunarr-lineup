@@ -8,11 +8,17 @@ were renamed 2026.10.1 and 2026.10.2.
 
 ## [Unreleased]
 
+## [2026.10.15] - 2026-10-24
+
 ### Added
 
 - **Desktop app for macOS, Windows and Linux.** Tunarr Lineup in its own window, with the Lineup server built in: no Docker or Node needed. Set your Tunarr address in **File → Open Settings File…** and choose **File → Restart Lineup Server**. Releases include a `.dmg` for Apple silicon and Intel Macs, a Windows installer and portable `.exe`, and a Linux AppImage and `.deb`. Set `HOST=0.0.0.0` and a password there to use the same desk from a TV, iPad or phone.
 - **Android app for phones, tablets and Android TV.** Install `Tunarr-Lineup-<version>-android.apk` from the release, type your Lineup server's address (for example `http://192.168.1.50:3000`) and the desk opens full screen. Works with a TV remote: Back closes what's open, CH± change channel, Menu offers Reload, Change server address and Quit. Exports aren't available in the app yet.
 - **Install the desk on iPad, Android and TV browsers.** Add it to the home screen (Safari: Share → Add to Home Screen; Chrome: Install app) and it opens full screen with its own icon. Android installs from an `https` address; plain `http` makes a shortcut.
+
+### Fixed
+
+- **Watch Live fits a phone.** The dialog fills the screen without scrolling: the picture stays on top and a compact remote sits below it, with the number pad beside the arrows and the volume and channel buttons on one line. With the guide open, the guide gets the height and the arrows, Back and CH± stay on screen. Turned sideways, the remote sits beside the picture.
 
 ## [2026.10.14] - 2026-10-21
 
@@ -219,7 +225,8 @@ First public release.
   reaches Tunarr through a narrow allowlisted proxy. Optional HTTP Basic
   sign-in and host-name checks against DNS rebinding.
 
-[Unreleased]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.14...HEAD
+[Unreleased]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.15...HEAD
+[2026.10.15]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.14...v2026.10.15
 [2026.10.14]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.13...v2026.10.14
 [2026.10.13]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.12...v2026.10.13
 [2026.10.12]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.11...v2026.10.12
