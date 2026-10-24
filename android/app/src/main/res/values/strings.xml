@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Tunarr Lineup</string>
+    <string name="setup_title">Connect to your Lineup server</string>
+    <string name="setup_help">Type the address you open Tunarr Lineup at in a browser: the Lineup server (Docker, Node or the desktop app), not Tunarr itself. For example http://192.168.1.50:3000. Without http:// and a port, port 3000 is assumed.</string>
+    <string name="setup_hint">http://192.168.1.50:3000</string>
+    <string name="connect">Connect</string>
+    <string name="save_anyway">Use This Address Anyway</string>
+    <string name="setup_checking">Checking %1$s…</string>
+    <string name="setup_unreachable">Couldn\'t reach the Lineup server at %1$s (%2$s). Check the address, that the server is running, and that this device is on the same network.</string>
+    <string name="error_unreachable">Can\'t open the desk at %1$s: %2$s</string>
+    <string name="retry">Try Again</string>
+    <string name="change_server">Change server address</string>
+    <string name="change_server_short">Change server</string>
+    <string name="reload">Reload</string>
+    <string name="quit">Quit</string>
+    <string name="sign_in">Sign In</string>
+    <string name="username">User name</string>
+    <string name="password">Password</string>
+    <string name="remember_login">Remember on this device</string>
+    <string name="no_downloads">Exports can\'t be saved in the Android app. Open the desk in a browser to export.</string>
+</resources>

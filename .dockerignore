@@ -8,6 +8,7 @@ dist-local
 dist-server
 desktop/node_modules
 desktop/release
+android
 coverage
 .env*
 *.log

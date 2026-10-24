@@ -28,6 +28,8 @@ profiles. It ships as two targets built from one React page (`app/page.tsx`):
   folder. Its own npm package; `npm run build:desktop` packages it.
 - **Installable web app** (D59): `public/manifest.webmanifest` and icons let iPad,
   Android and TV browsers add the companion's page to the home screen.
+- **Android app** (`android/`, D60): a native WebView window onto a Lineup server
+  for phones, tablets and Android TV. Plain Java, no libraries; built by Gradle.
 - **Hosted preview**: Vinext (Next.js App Router on Vite) built for a Cloudflare
   Workers runtime (`vite.config.ts`, `app/layout.tsx`). It has no proxy, so only demo
   mode works there.
@@ -47,6 +49,7 @@ TUNARR_URL=http://localhost:8000 npm run start:local  # run the built companion
 npm --prefix desktop install && npm run start:desktop  # desktop app from the repo
 npm run build:desktop # desktop installers for this OS -> desktop/release/
 node scripts/make-icons.mjs   # re-render app icons from public/favicon.svg
+(cd android && ./gradlew testDebugUnitTest lintDebug assembleDebug)  # Android app; needs JDK 21 + Android SDK
 ```
 
 Before declaring work done, run `lint`, `typecheck`, `test`, `build`,
@@ -61,7 +64,10 @@ Chromium with `npx playwright install chromium`. CI runs all of them
    same-origin `/api/tunarr/*`. Never put `TUNARR_URL` or any Tunarr address in client
    code. Only the `LINEUP_PUBLIC_` env prefix is exposed to the client
    (`vite.local.config.ts`). Never add a user-entered URL workflow for reaching Tunarr,
-   wildcard CORS, or a generic proxy. Channel logos come through
+   wildcard CORS, or a generic proxy. The one address a user types is the Lineup
+   server's own, in the Android app (owner decision 2026-10-24, D60): it is opened
+   as the top-level page, nothing is fetched cross-origin, and the window never
+   leaves that origin or exposes a JavaScript bridge. Channel logos come through
    `/api/tunarr/channels/:id/logo` (`server/logos.ts`); public logo hosts are fetched
    by the companion with the guards there (public addresses only, ports 80/443, image
    types, size and redirect limits), never by the browser. The AI provider is likewise

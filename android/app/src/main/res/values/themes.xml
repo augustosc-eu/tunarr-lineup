@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Lineup" parent="@android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/desktop</item>
+        <item name="android:colorPrimary">@color/platinum</item>
+        <item name="android:colorPrimaryDark">@color/desktop</item>
+        <item name="android:colorAccent">@color/highlight</item>
+        <item name="android:textColorPrimary">@color/ink</item>
+    </style>
+</resources>

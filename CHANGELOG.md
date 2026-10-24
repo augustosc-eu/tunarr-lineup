@@ -11,6 +11,7 @@ were renamed 2026.10.1 and 2026.10.2.
 ### Added
 
 - **Desktop app for macOS, Windows and Linux.** Tunarr Lineup in its own window, with the Lineup server built in: no Docker or Node needed. Set your Tunarr address in **File → Open Settings File…** and choose **File → Restart Lineup Server**. Releases include a `.dmg` for Apple silicon and Intel Macs, a Windows installer and portable `.exe`, and a Linux AppImage and `.deb`. Set `HOST=0.0.0.0` and a password there to use the same desk from a TV, iPad or phone.
+- **Android app for phones, tablets and Android TV.** Install `Tunarr-Lineup-<version>-android.apk` from the release, type your Lineup server's address (for example `http://192.168.1.50:3000`) and the desk opens full screen. Works with a TV remote: Back closes what's open, CH± change channel, Menu offers Reload, Change server address and Quit. Exports aren't available in the app yet.
 - **Install the desk on iPad, Android and TV browsers.** Add it to the home screen (Safari: Share → Add to Home Screen; Chrome: Install app) and it opens full screen with its own icon. Android installs from an `https` address; plain `http` makes a shortcut.
 
 ## [2026.10.14] - 2026-10-21
