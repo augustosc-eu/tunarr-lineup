@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Home from '../app/page';
 import { draftStore } from '../lib/draftStore';
+import { LAST_CHANNEL_KEY } from '../lib/lastChannel';
 import { dayRange, lineupIndexAt, type LineupItem } from '../lib/lineup';
 import { keptStartTime, lineupLength, programmingVersion } from '../server/lineupVersion';
 import { guideFor, mixedLineup, mixedPrograms } from './fixtures';
@@ -249,6 +250,12 @@ const pickAlpha = async () => {
 
 beforeEach(async () => {
   vi.unstubAllGlobals();
+  // Where jsdom has localStorage (Node 22), the channel one test opened would open in the next.
+  try {
+    window.localStorage?.removeItem(LAST_CHANNEL_KEY);
+  } catch {
+    // No storage here: nothing is remembered.
+  }
   // Drafts outlive a render on purpose; tests must not see each other's.
   const store = draftStore();
   for (const draft of await store.list()) await store.delete(draft.channelId);

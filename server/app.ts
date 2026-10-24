@@ -1,10 +1,11 @@
 // Local companion HTTP app: serves the built Lineup interface and the narrow
 // /api/tunarr/* proxy from one origin, so the browser never contacts Tunarr.
 import { createReadStream } from 'node:fs';
-import { stat } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import http from 'node:http';
 import path from 'node:path';
 import { AUTH_CHALLENGE, isAuthorized, type AuthConfig } from './auth.js';
+import { compress, isCompressible, pickEncoding, type Encoding } from './compression.js';
 import { hostRefusal, isAllowedHost, type HostPolicy } from './hosts.js';
 import { handleNodeApiRequest, isTunarrApiPath } from './nodeAdapter.js';
 import type { ProxyConfig } from './tunarrProxy.js';
@@ -47,13 +48,37 @@ async function resolveStatic(staticRoot: string, pathname: string) {
   }
 }
 
-function sendFile(res: http.ServerResponse, filePath: string, method: string, immutable: boolean) {
-  res.writeHead(200, {
+// The interface's script and stylesheet compressed once per build (keyed by
+// path, size and modification time), since they are most of a first visit.
+const compressedFiles = new Map<string, { key: string; data: Buffer }>();
+
+async function compressedFile(filePath: string, encoding: Encoding) {
+  const info = await stat(filePath);
+  const key = `${info.size}:${info.mtimeMs}`;
+  const cached = compressedFiles.get(`${encoding}:${filePath}`);
+  if (cached?.key === key) return cached.data;
+  const data = await compress(await readFile(filePath), encoding);
+  compressedFiles.set(`${encoding}:${filePath}`, { key, data });
+  return data;
+}
+
+async function sendFile(req: http.IncomingMessage, res: http.ServerResponse, filePath: string, immutable: boolean, compression: boolean) {
+  const contentType = mimeTypes[path.extname(filePath)] ?? 'application/octet-stream';
+  const headers: Record<string, string> = {
     ...securityHeaders,
-    'content-type': mimeTypes[path.extname(filePath)] ?? 'application/octet-stream',
+    'content-type': contentType,
     'cache-control': immutable ? 'public, max-age=31536000, immutable' : 'no-cache',
-  });
-  if (method === 'HEAD') res.end();
+  };
+  const encoding = compression && isCompressible(contentType, (await stat(filePath)).size) ? pickEncoding(req.headers['accept-encoding']) : null;
+  if (compression && isCompressible(contentType, Number.MAX_SAFE_INTEGER)) headers.vary = 'Accept-Encoding';
+  if (encoding) {
+    const data = await compressedFile(filePath, encoding);
+    res.writeHead(200, { ...headers, 'content-encoding': encoding, 'content-length': String(data.byteLength) });
+    res.end(req.method === 'HEAD' ? undefined : data);
+    return;
+  }
+  res.writeHead(200, headers);
+  if (req.method === 'HEAD') res.end();
   else createReadStream(filePath).pipe(res);
 }
 
@@ -91,7 +116,7 @@ export function createLineupServer({ config, auth, staticRoot, hosts = { any: fa
       }
       const file = pathname === '/' ? null : await resolveStatic(staticRoot, pathname);
       if (file) {
-        sendFile(res, file, method, pathname.startsWith('/assets/'));
+        await sendFile(req, res, file, pathname.startsWith('/assets/'), config.compression !== false);
         return;
       }
       if (path.extname(pathname)) {
@@ -105,7 +130,7 @@ export function createLineupServer({ config, auth, staticRoot, hosts = { any: fa
         res.end('Lineup interface is not built. Run "npm run build:local".');
         return;
       }
-      sendFile(res, index, method, false);
+      await sendFile(req, res, index, false, config.compression !== false);
     } catch (error) {
       console.error('[server] request failed:', error instanceof Error ? error.message : error);
       if (!res.headersSent) res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' });

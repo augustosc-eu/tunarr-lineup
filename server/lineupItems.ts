@@ -33,10 +33,12 @@ const PROGRAM_FIELDS = ['type', 'title', 'year', 'episodeNumber', 'seasonNumber'
 export function slimPrograms(lineup: unknown, programs: unknown, max = 20_000): Record<string, Json> {
   const out: Record<string, Json> = {};
   if (!Array.isArray(lineup) || !isObject(programs)) return out;
+  // Counted rather than Object.keys(out) per item, which made a 20,000-item lineup take a third of a second.
+  let count = 0;
   for (const item of lineup) {
-    if (Object.keys(out).length >= max) break;
+    if (count >= max) break;
     const id = isObject(item) && typeof item.id === 'string' ? item.id : '';
-    if (!id || out[id]) continue;
+    if (!id || Object.hasOwn(out, id)) continue;
     const entry = programs[id];
     const program = isObject(entry) && isObject(entry.program) ? entry.program : entry;
     if (!isObject(program)) continue;
@@ -51,6 +53,7 @@ export function slimPrograms(lineup: unknown, programs: unknown, max = 20_000): 
     const season = isObject(program.season) ? program.season.index ?? program.season.number : undefined;
     if (slim.seasonNumber === undefined && typeof season === 'number') slim.seasonNumber = season;
     out[id] = slim;
+    count += 1;
   }
   return out;
 }

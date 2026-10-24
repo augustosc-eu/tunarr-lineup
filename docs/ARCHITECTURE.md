@@ -87,7 +87,10 @@ server implements those paths.
 | `lib/guideGrid.ts` | `windowStart`, `cellsFor`, `entryAt`, `stepFocus`, `byNetwork`. |
 | `lib/tvRemote.ts` | Watching like a cable box: `remoteAction` (keys to remote buttons), `stepChannel`, number entry (`addDigit`, `channelByNumber`, `mightContinue`), `retryDelay`, `nowAndNext`, `progress`, `visibleRows` and the cable guide's span and paging constants. |
 | `lib/programInfo.ts` | `getProgram`, `programTitle`, `programDetail`, `programArtwork`, `channelLogoUrl`. |
-| `lib/tunarrClient.ts` | Browser client for `/api/tunarr/*`: `checkHealth`, `tunarrApi`, `TunarrApiError`, `ConnectionState`. |
+| `lib/tunarrClient.ts` | Browser client for `/api/tunarr/*`: `checkHealth`, `tunarrApi`, `TunarrApiError`, `ConnectionState`. Reads take `RequestOptions` (`signal`, `timeoutMs`, `onPhase`); a cancelled read is `TunarrApiError('aborted')` (`isAborted`), a timed-out one `client_timeout`. |
+| `lib/loading.ts` | `LoadPhase` / `LoadState` (connecting, downloading, processing, cancelled), `loadingCopy`, the client time limits (`PROGRAMMING_TIMEOUT_MS`, `SHORT_TIMEOUT_MS`, `DRAFT_WAIT_MS`), `settleWithin`, `withTimeout`, `linkedSignal` (parent signal plus timeout without `AbortSignal.any`). |
+| `lib/rowWindow.ts` | `rowWindow` / `shiftWindow`: which of a day's rows the timeline mounts (`ROW_WINDOW` = 200, moved by `ROW_STEP` = 100). |
+| `lib/lastChannel.ts` | The channel the desk opens on: `channelFromQuery` (`?channel=`), `readLastChannel` / `writeLastChannel` (`localStorage` key `tunarr-lineup-last-channel`), `pickChannel`, `addressWithChannel`. |
 | `lib/demoData.ts` | Demo channels and lineup (`demoChannels`, `demoProgramming()`, `demoDate`). |
 | `local/index.html`, `local/main.tsx` | Companion SPA entry: loads `/skin-init.js` in `<head>`, renders `<Home />` into `#root` under `StrictMode` and imports `app/globals.css`. |
 | `server/tunarrProxy.ts` | Framework-free proxy and validation: `handleTunarrApi`, `createProxyConfig`, `parseTunarrUrl`, validators, artwork passthrough. |
@@ -114,7 +117,9 @@ server implements those paths.
 | `server/sharedDraftStore.ts` | Shared drafts (`LINEUP_DATA_DIR/drafts/`, with `index.json`): `validateDraft`, `createSharedDraftStore`. |
 | `server/premiere.ts` | `premierePlacement`: where a premiere goes in the lineup when the scheduler runs it, its flex gap, and the channel start that keeps what's on air in place (pure). |
 | `server/scheduler.ts` | Scheduled changes (`scheduled.json`): `validatePlan` (groups `save`, `event`, `overlay`, `premiere`; a premiere is a plan of one change, going in at most `MAX_PREMIERE_LEAD_MS` before `startsAt`), `findPatch`, `applyChange`, `createSchedulerStore`, `createScheduler` (`runDue`, `start`, `stop`), `summarize`. |
-| `server/channelLock.ts` | `withChannelLock`, shared by the proxy, the recreate route and the scheduler. |
+| `server/channelLock.ts` | `withChannelLock`, shared by the proxy, the recreate route and the scheduler; `channelGeneration` / `channelBusy`, bumped by every write, invalidate cached programming. |
+| `server/programmingCache.ts` | The desk's view of a channel's programming: `slimProgramming` (lineup and schedule untouched, programs via `slimPrograms`, no `startTimeOffsets`), `bodyEtag`, `etagMatches`, `createProgrammingCache` (in-flight sharing, optional TTL, dropped by writes). |
+| `server/compression.ts` | `pickEncoding` (Brotli, else gzip, from Accept-Encoding), `isCompressible`, `compress` (async zlib), `compressionEnabled` (`LINEUP_COMPRESSION`). |
 | `server/lineupItems.ts` | `lineupItemsError` (shared item validation), `slimPrograms`. |
 | `server/upstream.ts` | Shared upstream plumbing: `fetchUpstream`, `callTunarr` (GET/POST/PUT/DELETE), `UpstreamError`, `json`, `fail`. |
 | `server/lineupVersion.ts` | `programmingVersion(lineup, schedule)`: a non-cryptographic fingerprint (two cyrb53 hashes plus length), shared by the browser and the proxy for `If-Match`. |
@@ -181,7 +186,9 @@ a deployed Worker was not verified.
 6. **An existing file** under `staticRoot` → served. `resolveStatic` rejects path traversal. `/assets/*` is cached `immutable`; everything else is `no-cache`.
 7. **A missing path with a file extension** → `404`. **Anything else** → `index.html` (SPA fallback).
 
-Static responses carry `securityHeaders`, including CSP `default-src 'self'`,
+Static files of 1 KB or more that are text, JSON, JavaScript, CSS or SVG are
+compressed per request encoding and kept compressed in memory per file size
+and modification time. Static responses carry `securityHeaders`, including CSP `default-src 'self'`,
 `connect-src 'self'`, `img-src 'self' data:`, `media-src 'self' blob: data:` and
 `worker-src 'self' blob:` (MSE playback for the live player; `data:` for the empty
 subtitle track hls.js adds) and `frame-ancestors 'none'`.
@@ -211,7 +218,7 @@ which is set to the same rule for the page itself).
 | --- | --- | --- |
 | `/api/tunarr/health` | GET | `GET /api/channels`. Responds `{status:'connected', tunarrHost, channelCount}` |
 | `/api/tunarr/channels` | GET | `GET /api/channels` (must be an array) |
-| `/api/tunarr/channels/:id/programming` | GET, POST | `GET` / `POST /api/channels/:id/programming` |
+| `/api/tunarr/channels/:id/programming` | GET, POST | `GET` / `POST /api/channels/:id/programming`. GET answers `slimProgramming` of Tunarr's reply with a weak `ETag` and `Cache-Control: private, no-cache`; `If-None-Match` that matches gets `304`. See *Loading large channels* |
 | `/api/tunarr/channels/:id/lineup` | GET | `GET /api/channels/:id/lineup?from=&to=` |
 | `/api/tunarr/channels/:id/schedule` | GET | `GET /api/channels/:id/schedule` (materialized: slots carry show, custom-show, channel and list names) |
 | `/api/tunarr/channels/:id/schedule-preview` | POST | `GET …/programming`, then `POST /api/channels/:id/schedule-slots` (random) or `/schedule-time-slots` (time) with the merged schedule. Generates only; saves nothing |
@@ -288,8 +295,66 @@ program pool.
 - **Artwork:** raw bytes (`ProxyResponse.body` is `Uint8Array`) with the upstream image type, `cache-control: private, max-age=86400`, `nosniff`, and `content-security-policy: default-src 'none'; sandbox`.
 - **Errors:** `{ "error": { "code", "message", "tunarrHost"? } }`.
 
-`nodeAdapter.send` writes string or byte bodies with `content-length`. POST
-bodies are capped at `MAX_BODY_BYTES` (20 MiB, else `413`).
+`nodeAdapter.send` writes string or byte bodies with `content-length` (none for
+`204`/`304`). `sendCompressed` compresses JSON and text bodies of 1 KB or more
+when the request's `Accept-Encoding` allows (Brotli quality 4, else gzip 6),
+adding `Content-Encoding` and `Vary: Accept-Encoding`; `LINEUP_COMPRESSION=off`
+turns it off. `If-None-Match` is the one extra request header passed to the
+handler. POST bodies are capped at `MAX_BODY_BYTES` (20 MiB, else `413`).
+
+### Loading large channels
+
+Measured on a real 20,816-item channel: Tunarr answers with 7.8 MB, 63 % of it
+full metadata for each program (identifiers, artwork paths with media-server
+tokens, summaries) that the desk never shows; nothing compressed it.
+
+- **Slim, not partial.** The browser still gets the whole lineup: manual saves
+  send every item back untouched (invariant 3), drafts are positions into it
+  (invariant 5) and `programmingVersion` hashes it (invariant 4). Only
+  `programs` is reduced, by `slimPrograms` (title, type, year, show, season,
+  episode, artist, album, rating, for every program the lineup plays, uncapped
+  up to `MAX_LINEUP_ITEMS`), and `startTimeOffsets` is dropped. 7.8 MB → 2.8 MB
+  → 210 KB gzip / 106 KB Brotli. A server-side day window was considered and
+  rejected: the editor needs every item anyway, so it would add a second data
+  model for at most ~100 KB more.
+- **Cache and invalidation.** `createProgrammingCache` shares one Tunarr read
+  among requests for a channel that arrive while it's in flight. By default
+  nothing is kept after that (`LINEUP_PROGRAMMING_CACHE_MS=0`), so a change
+  made in Tunarr's own UI is never shown as current; with a TTL, results are
+  kept that long. Every write runs under `withChannelLock`, which bumps the
+  channel's generation when it starts and ends: entries and in-flight reads from
+  another generation are never reused, so a Lineup save is always followed by
+  the saved lineup. The browser revalidates with `If-None-Match` (the body's
+  SHA-1 as a weak ETag) and gets `304` when nothing changed: the companion still
+  reads Tunarr, but nothing is downloaded. `private` keeps shared proxies from
+  storing it.
+- **Time limits and cancellation (browser).** Health, channels and the day's
+  guide: 30 s; programming: 90 s (covering the body, which is streamed for
+  progress). Opening a channel aborts the previous channel's programming and
+  guide requests; changing day aborts the previous guide; unmounting aborts
+  everything and bumps the request counters so late answers are dropped.
+  The companion keeps its own upstream limits (`TUNARR_TIMEOUT_MS`), and a read
+  the browser abandoned still finishes there (it may be shared).
+- **Drafts in parallel.** `loadProgramming` starts `draftStore().get` with the
+  download and waits for it at most `DRAFT_WAIT_MS` (1.5 s) from the start, or
+  the download's length if longer. A draft that's later is applied when it
+  arrives if nothing was edited meanwhile (`applyLateDraft`), otherwise the new
+  edits win with a notice; until then `draftPending` stops the draft effect from
+  writing over it. The stores bound themselves too: an IndexedDB call that
+  doesn't answer in 4 s (`LOCAL_DRAFT_TIMEOUT_MS`) switches to memory for the
+  visit (`persistent` false, so `beforeunload` warns unless the companion keeps
+  a copy), the companion's draft routes get 6 s, and after they fail they're
+  tried again 30 s later instead of never.
+- **Rendering.** A day with more than 200 rows mounts a window
+  (`lib/rowWindow.ts`) that stays put until the cursor leaves it, then
+  re-centres; **Show earlier/later programs** buttons move it by 100 and keep
+  the row that stayed on screen in place (`scrollAnchor`, with
+  `overflow-anchor:none` so browsers don't adjust twice). Totals, the day strip,
+  hour logs and the lineup check still use the whole day. The guide no longer
+  dims the timeline while it loads.
+- **States.** `loadState` drives the empty timeline: *Connecting*,
+  *Downloading (x of y)*, *Preparing*, with **Cancel**; *Loading cancelled* and
+  errors offer **Try again**; *No programming yet* for an empty channel.
 
 ### Library, lists and channel settings (`server/content.ts`)
 
@@ -474,7 +539,7 @@ Derived values:
 Unchanged in shape from the original live flow:
 
 - The mount effect calls `checkHealth()`, which maps the response to `connected`, `not_configured`, `unreachable` or `unavailable`.
-- If connected, it loads channels (sorted by number), then `loadProgramming`, then `loadGuide` for the local day.
+- If connected, it loads channels (sorted by number), picks one with `pickChannel` (an open channel, then `?channel=<id>` if it exists, then the last one opened, then the first; an unknown id gets a notice), then `loadProgramming`, then `loadGuide` for the local day. Opening a channel remembers it and, when the address has a `channel` parameter, updates it with `history.replaceState` (path and other parameters kept).
 - `loadProgramming` clears `history` and `grab` (`resetEditing`).
 - Once the on-air row renders, the "now" effect scrolls it into view (`scrollIntoView?.()`, which is guarded because some environments lack it).
 
@@ -612,9 +677,9 @@ position) and downloads it via a `Blob` object URL. The filename gets an
 
 - **Tunarr** holds all channel data. The companion stores, in `LINEUP_DATA_DIR`: saved templates (`templates.json`), filler-list roles and folder links (`filler-roles.json`), picked station IDs (`station-ids.json`), server settings changed from the desk (`settings.json`), snapshots (`snapshots/<channel>.json`), shared drafts (`drafts/`) and scheduled changes (`scheduled.json`); plus the video files users upload to the media folder (`LINEUP_MEDIA_DIR`, when set). In memory it keeps channel locks and the logo cache.
 - **The browser** keeps per-channel drafts (unsaved order and edit list) in IndexedDB (database `tunarr-lineup`, store `drafts`, key `channelId`). Each draft is tied to the programming version it was made against and is dropped once that version is gone.
-  - If IndexedDB is unavailable or fails, an in-memory store is used and `draftStore().persistent` is false.
+  - If IndexedDB is unavailable, fails or doesn't answer within 4 s, an in-memory store is used for the rest of the visit and `draftStore().persistent` is false unless the companion keeps the drafts.
   - Drafts are also written to the companion (`sharedDraftStore` over `companionDrafts`), and a load takes the newer copy, so they follow the user between devices. Without the companion's draft routes (hosted preview) they stay per browser.
-- **Per-viewer conveniences** in `localStorage`: the lineup check's settings per channel (`lineup-check:<id>`) and the skin (`tunarr-lineup-skin`, one of the `lib/skins.ts` ids), wrapped in try/catch. The skin is never sent to the companion or Tunarr and isn't a server setting (`server/settings.ts`); without storage it applies for the visit only.
+- **Per-viewer conveniences** in `localStorage`: the last channel opened (`tunarr-lineup-last-channel`, checked against the channel list before use), the lineup check's settings per channel (`lineup-check:<id>`) and the skin (`tunarr-lineup-skin`, one of the `lib/skins.ts` ids), wrapped in try/catch. The skin is never sent to the companion or Tunarr and isn't a server setting (`server/settings.ts`); without storage it applies for the visit only.
 - **Not persisted:** slot-schedule drafts and demo edits live only in React state.
 
 ## 10. Authentication
@@ -646,6 +711,8 @@ userinfo.
 | `TUNARR_URL` | `createProxyConfig` (via `server/main.ts`, `vite.local.config.ts`) | Upstream Tunarr base URL (server-side only) |
 | `TUNARR_TIMEOUT_MS`, `TUNARR_SAVE_TIMEOUT_MS` | `createProxyConfig` | Upstream timeouts |
 | `LINEUP_EXTERNAL_LOGOS` | `createProxyConfig` | `false` stops fetching channel logos from public sites |
+| `LINEUP_COMPRESSION` | `createProxyConfig` → `nodeAdapter`, `server/app.ts` | `off` stops compressing JSON and static files (default on) |
+| `LINEUP_PROGRAMMING_CACHE_MS` | `createProgrammingCache` | How long a channel's programming read is reused (default 0: only shared while in flight) |
 | `LINEUP_DATA_DIR` | `createProxyConfig` → the stores and the scheduler | Lineup's data folder (default `./data`, `/data` in Docker) |
 | `LINEUP_SCHEDULER` | `createProxyConfig` → `createScheduler` | `on` saves scheduled changes when due (default off) |
 | `LINEUP_MEDIA_DIR`, `LINEUP_MEDIA_TUNARR_DIR`, `LINEUP_MEDIA_MAX_MB` | `createMediaFolder` | The media folder as Lineup sees it (uploads off when unset), as Tunarr sees it (default: the same), and the upload size limit (default 4096 MB) |
@@ -707,6 +774,7 @@ bundle (`envPrefix`); none are used.
     - slot helpers
     - draft encoding and decoding, the IndexedDB store via `fake-indexeddb`, the memory fallback, `rebaseHistory` and version fingerprints
   - `page.test.tsx` (jsdom): `Home` against a stateful `fakeCompanion()`. The fake enforces `If-Match` like the companion. Covers live loading, saves, 412 conflicts, remote slide and cancel, block moves, the Move dialog, menus, the on-air marker, export, drafts kept across channel switches and reloads, undo past a save, stale drafts dropped, the slot editor (catalog sources, adding slots with commercials and mid-roll, creating a time-slot schedule for a manual channel, preview then save with the seed, discard), library inserts, commercial breaks, remove/length/undo, drafts with inserted items, filler-list creation, and channel filler settings, demo guards, and no silent demo fallback.
+  - `programmingCache.test.ts` (slim programming, ETag/304, shared reads, the optional TTL and invalidation by writes, compression over real HTTP, size and time budgets on a synthetic 5,000-item channel), `loading.test.ts` (client phases, cancellation and timeouts, hanging IndexedDB and companion draft stores, row window, `?channel=` and the last channel), `pageLoading.test.tsx` (the desk with hanging or slow draft stores, empty/small/5,000-item channels, quick switching, Cancel and Try again, late drafts, day changes, unmounting, the channel in the address).
   - `skins.test.ts`: skin ids and the Platinum fallback, `public/skin-init.js` run in a `node:vm` sandbox (valid, unknown, throwing storage), and the stylesheet: each skin overrides only tokens `:root` defines, every `var()` used is defined, only Broadcast is dark. The `appearance` block in `page.test.tsx` covers the dialog (View menu and phone sheet, arrows and Enter, Done and Escape, saving at once, restore after remount, unknown values, storage that throws or is missing).
   - `watch.test.ts` (guide, sessions, stream rewriting and refusals, redirect graph), `scheduler.test.ts` (plans, patches, overlays, skips, cancel), `companionStores.test.ts` (snapshots, shared drafts, media playback ranges, AI review), `tvRemote.test.ts` (remote keys, CH±, number entry, retry waits, now/next), `deskTools.test.ts` (lineup check, alignment, marathons, air-once patches, week log, guide grid, browser draft sync, lineup files). Tests that build a full config use a temporary `LINEUP_DATA_DIR` (`tests/tempData.ts`).
 - **`e2e/` (Playwright):**
@@ -720,6 +788,7 @@ bundle (`envPrefix`); none are used.
     - random-slot edit → preview → save (checking the saved schedule, seed and server-built program pool in the fake)
     - keyboard menus, CSV download and phone width
   - `skins.spec.ts`: picking each skin by keyboard, checked through computed styles (desktop, selection, `color-scheme`); persistence across a reload; `skin-init.js` applying the skin with the app bundle blocked; Escape keeping the pick; the desk, guide grid, week view and Watch Live (OSD, cable guide focus and ↓, remote) under every skin without horizontal overflow; and the phone Menu sheet.
+  - `large-channel.spec.ts`: synthetic channels from `e2e/syntheticChannel.mjs` (added to the fake with `/__test/large`; `/__test/delay` slows its programming) at 5,000 and 20,000 items, a day of short spots and a throttled 1.6 Mbit/s link; prints `[perf]` JSON and checks budgets for bytes on the wire, time to open, mounted rows, heap, channel and day switches.
   - `tools.spec.ts`: viewer counts without addresses, the guide grid by remote, watching through the companion only, the lineup check and snapshot restore, the week view export, and a planned/cancelled dated save. The fake also serves `/api/guide/channels`, `/api/sessions` and `/stream/channels/…`. Each test clears the companion's shared drafts first.
 
 ## 14. Cross-cutting patterns

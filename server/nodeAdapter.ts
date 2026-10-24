@@ -1,6 +1,7 @@
 import { createReadStream } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import path from 'node:path';
+import { compress, isCompressible, pickEncoding } from './compression.js';
 import { StoreError } from './jsonFile.js';
 import { matchLineupRoute } from './lineupRoutes.js';
 import type { FillerRole } from './fillerRoles.js';
@@ -33,14 +34,23 @@ function readBody(req: IncomingMessage, limit: number): Promise<string | null> {
 
 function send(res: ServerResponse, status: number, headers: Record<string, string>, body: string | Uint8Array) {
   const payload = typeof body === 'string' ? Buffer.from(body, 'utf8') : Buffer.from(body.buffer, body.byteOffset, body.byteLength);
-  // A 204 carries no body and no Content-Length.
-  if (status === 204) {
+  // A 204 or 304 carries no body and no Content-Length.
+  if (status === 204 || status === 304) {
     res.writeHead(status, headers);
     res.end();
     return;
   }
   res.writeHead(status, { ...headers, 'content-length': String(payload.byteLength) });
   res.end(payload);
+}
+
+/** Like `send`, compressed when the browser accepts it and the body is JSON or text worth compressing. */
+async function sendCompressed(req: IncomingMessage, res: ServerResponse, config: ProxyConfig, result: ProxyResponse) {
+  const size = typeof result.body === 'string' ? Buffer.byteLength(result.body) : result.body.byteLength;
+  const encoding = config.compression === false || result.status === 204 || result.status === 304 || result.headers['content-encoding'] ? null : pickEncoding(req.headers['accept-encoding']);
+  if (!encoding || !isCompressible(result.headers['content-type'], size)) return send(res, result.status, result.headers, result.body);
+  const raw = typeof result.body === 'string' ? Buffer.from(result.body, 'utf8') : Buffer.from(result.body.buffer, result.body.byteOffset, result.body.byteLength);
+  send(res, result.status, { ...result.headers, 'content-encoding': encoding, vary: 'Accept-Encoding' }, await compress(raw, encoding));
 }
 
 const MEDIA_PREFIX = `${API_PREFIX}/media-folder/`;
@@ -78,7 +88,7 @@ async function handleUpload(req: IncomingMessage, res: ServerResponse, config: P
     reply(json(201, { role: plan.role, ...saved }), false);
   } catch (error) {
     // A stream error has already closed the socket; there is no one left to answer.
-    if (res.destroyed || req.destroyed) return;
+    if (res.destroyed) return;
     const failure = error instanceof StoreError ? fail(error.status, error.code, error.message) : fail(500, 'internal_error', 'The file could not be saved.');
     reply(failure, true);
   }
@@ -181,10 +191,13 @@ export async function handleNodeApiRequest(req: IncomingMessage, res: ServerResp
         'x-forwarded-host': req.headers['x-forwarded-host'],
         'content-type': req.headers['content-type'],
         'if-match': req.headers['if-match'],
+        'if-none-match': req.headers['if-none-match'],
       },
       body,
     },
     config,
   );
-  send(res, result.status, result.headers, result.body);
+  // The browser may have gone (a channel switch aborts the old request); there's no one to answer.
+  if (res.destroyed) return;
+  await sendCompressed(req, res, config, result);
 }

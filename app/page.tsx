@@ -57,7 +57,10 @@ import {
   type Block,
 } from '../lib/broadcast';
 import { demoChannels, demoDate, demoProgramming } from '../lib/demoData';
-import { decodeDraft, draftStore, encodeDraft } from '../lib/draftStore';
+import { decodeDraft, draftStore, encodeDraft, type StoredDraft } from '../lib/draftStore';
+import { DRAFT_WAIT_MS, loadingCopy, PROGRAMMING_TIMEOUT_MS, settleWithin, SHORT_TIMEOUT_MS, type LoadState } from '../lib/loading';
+import { addressWithChannel, CHANNEL_PARAM, channelFromQuery, pickChannel, readLastChannel, writeLastChannel } from '../lib/lastChannel';
+import { ROW_STEP, rowWindow, shiftWindow } from '../lib/rowWindow';
 import { emptyHistory, itemIdentity, rebaseHistory, record, redo as redoHistory, undo as undoHistory, type History } from '../lib/history';
 import {
   buildManualSave,
@@ -83,7 +86,7 @@ import { keptStartTime, lineupLength } from '../server/lineupVersion';
 import { lineupEntry, seasonsFromEpisodes, type ContentProgram } from '../lib/library';
 import { addShowSlots, changeSlotSource, draftFromSchedule, newSlot, showOption, type SchedulePreview, type ScheduleDraftState, type SeasonInfo, type ShowPick, type ShowSlotPlan, type Slot, type SlotCatalog, type SlotSchedule } from '../lib/schedule';
 import { programmingVersion } from '../server/lineupVersion';
-import { checkHealth, tunarrApi, TunarrApiError, type ConnectionState, type PlannedChange, type ViewerCounts } from '../lib/tunarrClient';
+import { checkHealth, isAborted, tunarrApi, TunarrApiError, type ConnectionState, type PlannedChange, type ViewerCounts } from '../lib/tunarrClient';
 
 type Mode = 'live' | 'demo';
 
@@ -215,6 +218,36 @@ function ChannelLogo({ channel, live, className = 'channel-logo' }: { channel: C
   );
 }
 
+/** What a stored draft restores onto the lineup just loaded, or why it no longer applies. */
+function draftRestore(stored: StoredDraft | undefined, loaded: LineupItem[], version: string) {
+  if (!stored) return null;
+  if (stored.version !== version) {
+    return { stale: true as const, note: stored.dirty ? 'This channel changed in Tunarr since you last edited it here, so those unsaved changes no longer apply and were dropped.' : '' };
+  }
+  const decoded = decodeDraft(stored, loaded);
+  if (!decoded) return null;
+  const edits = decoded.history.past.length;
+  return { stale: false as const, ...decoded, keepOnAir: !!stored.keepOnAir, note: stored.dirty ? `Restored your unsaved changes (${edits} ${edits === 1 ? 'edit' : 'edits'}).` : '' };
+}
+
+/** localStorage, or nothing where reading it throws (blocked site data in Safari, previews). */
+function browserStorage() {
+  try {
+    return typeof window === 'undefined' ? undefined : window.localStorage;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The element that scrolls the timeline (the page itself on most layouts). */
+function scrollParent(element: HTMLElement): { scrollBy(x: number, y: number): void } {
+  for (let node = element.parentElement; node; node = node.parentElement) {
+    const { overflowY } = getComputedStyle(node);
+    if ((overflowY === 'auto' || overflowY === 'scroll') && node.scrollHeight > node.clientHeight) return node;
+  }
+  return window;
+}
+
 const isTypingTarget = (target: EventTarget | null) => target instanceof HTMLElement && !!target.closest('input, textarea, select, [contenteditable="true"]');
 
 /** Art tile: Tunarr artwork when available, otherwise the coloured initial. */
@@ -344,6 +377,23 @@ export default function Home() {
   const binDrag = useRef<{ resolve: Promise<Arranged>; done: () => void } | null>(null);
   const programmingRequest = useRef(0);
   const guideRequest = useRef(0);
+  // In-flight reads, cancelled when another channel or day replaces them and on unmount.
+  const programmingAbort = useRef<AbortController | null>(null);
+  const guideAbort = useRef<AbortController | null>(null);
+  const channelsAbort = useRef<AbortController | null>(null);
+  const mounted = useRef(true);
+  // Connecting, downloading, processing or cancelled, for the channel being opened.
+  const [loadState, setLoadState] = useState<LoadState | null>(null);
+  // A channel whose stored draft is still being read: nothing is written over it until it is.
+  const [draftPending, setDraftPending] = useState('');
+  // Where the user moved the timeline's row window (lib/rowWindow.ts), for this channel, day and search.
+  // `focus` is the cursor row when it was set: the window only follows the cursor once that moves.
+  const [rowStart, setRowStart] = useState<{ key: string; start: number; focus: number } | null>(null);
+  const scrollAnchor = useRef<{ position: number; top: number } | null>(null);
+  // ?channel=<id> from the address, used once when the channel list first loads.
+  const linkedChannel = useRef(typeof window === 'undefined' ? null : channelFromQuery(window.location.search));
+  // The lineup and edit list on screen, for a stored draft that arrives late.
+  const latest = useRef<{ lineup: LineupItem[]; history: History }>({ lineup: [], history: emptyHistory });
   const rowRefs = useRef(new Map<number, HTMLButtonElement>());
   const focusCursor = useRef(false);
   const scrolledToNow = useRef('');
@@ -417,6 +467,16 @@ export default function Home() {
     return exact >= 0 ? exact : visibleInstances.findIndex((row) => row.lineupIndex === selectedIndex);
   }, [cursorStart, selectedIndex, visibleInstances]);
   const selectedInstance = cursorPosition >= 0 ? visibleInstances[cursorPosition] : undefined;
+  // The rows mounted: a short day whole, a long one as a window that follows the cursor.
+  const windowKey = `${activeChannelId}|${selectedDate}|${search}|${slotPreview ? 'preview' : ''}`;
+  const focusRow = cursorPosition >= 0 ? cursorPosition : Math.max(onAir, 0);
+  const placed = rowStart?.key === windowKey ? rowStart : null;
+  // Moved by hand (Show earlier/later): stays there, even away from the cursor, until the cursor moves.
+  const rows = rowWindow(visibleInstances.length, placed?.focus === focusRow ? -1 : focusRow, placed ? placed.start : null);
+  const windowed = rows.end - rows.start < visibleInstances.length;
+  // Keep the window where it is until the cursor leaves it, so rows don't shift under the user
+  // (state adjusted during render, as React suggests for values derived from the previous render).
+  if (windowed && (placed?.start !== rows.start || placed.focus !== focusRow)) setRowStart({ key: windowKey, start: rows.start, focus: focusRow });
   const { from: dayFrom, to: dayTo } = dayRange(selectedDate);
   const dayStartMs = dayFrom.getTime();
   const dayEndMs = dayTo.getTime();
@@ -465,15 +525,18 @@ export default function Home() {
 
   const loadGuide = async (channelId: string, date: string) => {
     const request = ++guideRequest.current;
+    guideAbort.current?.abort();
+    const controller = new AbortController();
+    guideAbort.current = controller;
     setGuideLoading(true);
     setGuideError('');
     const { from, to } = dayRange(date);
     try {
-      const data = await tunarrApi.lineup(channelId, from, to);
+      const data = await tunarrApi.lineup(channelId, from, to, { signal: controller.signal, timeoutMs: SHORT_TIMEOUT_MS });
       if (request !== guideRequest.current) return;
       setGuide({ channelId, date, programs: Array.isArray(data?.programs) ? data.programs : [] });
     } catch (error) {
-      if (request !== guideRequest.current) return;
+      if (request !== guideRequest.current || isAborted(error)) return;
       setGuide(null);
       setGuideError(errorMessage(error, 'Could not load the guide for this date.'));
       noteFailure(error);
@@ -488,18 +551,65 @@ export default function Home() {
   };
 
   const refreshDraftMarks = () => {
-    draftStore().list().then((drafts) => setDraftMarks(Object.fromEntries(drafts.filter((draft) => draft.dirty).map((draft) => [draft.channelId, true])))).catch(() => {});
+    draftStore().list().then((drafts) => { if (mounted.current) setDraftMarks(Object.fromEntries(drafts.filter((draft) => draft.dirty).map((draft) => [draft.channelId, true]))); }).catch(() => {});
+  };
+
+  /** The desk opens on this channel next time; an address that names a channel follows along. */
+  const rememberChannel = (channelId: string) => {
+    writeLastChannel(browserStorage(), channelId);
+    try {
+      const params = new URLSearchParams(window.location.search);
+      if (params.has(CHANNEL_PARAM) && params.get(CHANNEL_PARAM) !== channelId) window.history.replaceState(window.history.state, '', addressWithChannel(window.location.href, channelId));
+    } catch {
+      // Some embedded browsers refuse history changes; the address just stays as it was.
+    }
+  };
+
+  /**
+   * A draft that was still being read when the lineup was shown. It's applied
+   * if nothing was edited meanwhile; otherwise the newer edits win.
+   */
+  const applyLateDraft = (request: number, channelId: string, version: string, loaded: LineupItem[], stored: StoredDraft | undefined) => {
+    if (!mounted.current || request !== programmingRequest.current) return;
+    setDraftPending((pending) => (pending === channelId ? '' : pending));
+    const restored = draftRestore(stored, loaded, version);
+    if (!restored) return;
+    if (restored.stale) {
+      void draftStore().delete(channelId).catch(() => {});
+      if (restored.note) notify(restored.note);
+      return;
+    }
+    if (latest.current.lineup !== loaded || latest.current.history.past.length) {
+      if (stored?.dirty) notify('Unsaved changes stored earlier for this channel turned up after you started editing. Your new edits were kept.');
+      return;
+    }
+    setProgramming((current) => ({ ...current, lineup: restored.current, programs: { ...restored.programs, ...current.programs } as Programming['programs'] }));
+    setHistory(restored.history);
+    if (restored.keepOnAir) setKeepOnAir(true);
+    if (restored.note) notify(restored.note);
   };
 
   /**
    * Loads a channel. Restores a saved draft (unsaved order + undo history) if
    * one exists for this exact version, or re-attaches history after a save.
+   * The draft is read while the lineup downloads; a previous channel's request
+   * is cancelled, and a draft store that doesn't answer can't hold the lineup back.
    */
   const loadProgramming = async (channelId: string, date: string, options: { keepSelection?: boolean; rebase?: { saved: LineupItem[]; history: History } } = {}) => {
     const { keepSelection = false, rebase } = options;
     const request = ++programmingRequest.current;
+    const isCurrent = () => request === programmingRequest.current;
+    programmingAbort.current?.abort();
+    const controller = new AbortController();
+    programmingAbort.current = controller;
+    // The previous channel's guide is no use any more.
+    guideRequest.current += 1;
+    guideAbort.current?.abort();
+    setGuideLoading(false);
     setActiveChannelId(channelId);
     setLoading(true);
+    setLoadState({ channelId, phase: 'connecting' });
+    setDraftPending('');
     setProgrammingError('');
     resetEditing();
     setKeepOnAir(false);
@@ -508,12 +618,19 @@ export default function Home() {
       setOriginalLineup([]);
       setBase(null);
       setGuide(null);
+      setRowStart(null);
       // Nothing picked yet: the selection is what's on air (see fallbackRow).
       select(-1, null);
     }
+    // Read alongside the download, given DRAFT_WAIT_MS from now (or the download's length, if longer).
+    const draftRead = rebase ? null : settleWithin(draftStore().get(channelId).catch(() => undefined), DRAFT_WAIT_MS);
     try {
-      const data = await tunarrApi.programming(channelId);
-      if (request !== programmingRequest.current) return false;
+      const data = await tunarrApi.programming(channelId, {
+        signal: controller.signal,
+        timeoutMs: PROGRAMMING_TIMEOUT_MS,
+        onPhase: (phase) => { if (isCurrent()) setLoadState({ channelId, ...phase }); },
+      });
+      if (!isCurrent()) return false;
       const loaded = Array.isArray(data?.lineup) ? data.lineup : [];
       const version = programmingVersion(data?.lineup, data?.schedule);
       let current = loaded;
@@ -524,66 +641,87 @@ export default function Home() {
         const carried = rebaseHistory(rebase.history, rebase.saved, loaded);
         if (carried) restoredHistory = carried;
         else if (rebase.history.past.length || rebase.history.future.length) note = 'Saved. Tunarr adjusted the lineup, so the edit list starts fresh.';
-      } else {
-        const stored = await draftStore().get(channelId).catch(() => undefined);
-        if (request !== programmingRequest.current) return false;
-        if (stored && stored.version === version) {
-          const decoded = decodeDraft(stored, loaded);
-          if (decoded) {
-            current = decoded.current;
-            restoredHistory = decoded.history;
-            restoredPrograms = decoded.programs;
-            if (stored.keepOnAir) setKeepOnAir(true);
-            if (stored.dirty) note = `Restored your unsaved changes (${decoded.history.past.length} ${decoded.history.past.length === 1 ? 'edit' : 'edits'}).`;
+      } else if (draftRead) {
+        const early = await draftRead;
+        const draft = early.settled ? early : await settleWithin(early.late, 0);
+        if (!isCurrent()) return false;
+        if (!draft.settled) {
+          setDraftPending(channelId);
+          void draft.late.then((stored) => applyLateDraft(request, channelId, version, loaded, stored));
+        } else {
+          const restored = draftRestore(draft.value, loaded, version);
+          if (restored?.stale) void draftStore().delete(channelId).catch(() => {});
+          else if (restored) {
+            current = restored.current;
+            restoredHistory = restored.history;
+            restoredPrograms = restored.programs;
+            if (restored.keepOnAir) setKeepOnAir(true);
           }
-        } else if (stored) {
-          void draftStore().delete(channelId).catch(() => {});
-          if (stored.dirty) note = 'This channel changed in Tunarr since you last edited it here, so those unsaved changes no longer apply and were dropped.';
+          note = restored?.note ?? '';
         }
       }
       setProgramming({ ...data, lineup: current, programs: { ...restoredPrograms, ...(data?.programs ?? {}) } as Programming['programs'] });
       setOriginalLineup(structuredClone(loaded));
       setBase({ channelId, version, lineup: loaded });
       setHistory(restoredHistory);
+      setLoadState(null);
       if (note) notify(note);
       if (keepSelection) {
         const last = Math.max(loaded.length - 1, 0);
         setAnchorIndex((value) => Math.min(value, last));
         setSelectedIndex((value) => Math.min(value, last));
       }
+      rememberChannel(channelId);
       void loadGuide(channelId, date);
       return true;
     } catch (error) {
-      if (request !== programmingRequest.current) return false;
+      if (!isCurrent()) return false;
+      if (isAborted(error)) {
+        setLoadState({ channelId, phase: 'cancelled' });
+        return false;
+      }
+      setLoadState(null);
       setProgrammingError(errorMessage(error, 'Could not load this channel.'));
       noteFailure(error);
       return false;
     } finally {
-      if (request === programmingRequest.current) setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
   };
 
+  /** Stops the channel being opened (a slow link); Try again starts it over. */
+  const cancelLoading = () => programmingAbort.current?.abort();
+
   const loadChannels = async (date: string, preferredId?: string) => {
+    channelsAbort.current?.abort();
+    const controller = new AbortController();
+    channelsAbort.current = controller;
     setChannelsLoading(true);
     setChannelsError('');
     try {
-      const list = await tunarrApi.channels();
+      const list = await tunarrApi.channels({ signal: controller.signal, timeoutMs: SHORT_TIMEOUT_MS });
+      if (!mounted.current || controller.signal.aborted) return;
       const sorted = [...list].sort((a, b) => a.number - b.number);
       setChannels(sorted);
-      const next = sorted.find((channel) => channel.id === preferredId) ?? sorted[0];
+      const { channel: next, note } = pickChannel(sorted, { preferred: preferredId, fromQuery: linkedChannel.current, remembered: readLastChannel(browserStorage()) });
+      // The address picks the first channel only; later reloads keep what's open.
+      linkedChannel.current = null;
+      if (note) notify(note);
       if (next) await loadProgramming(next.id, date);
       else setActiveChannelId('');
     } catch (error) {
+      if (!mounted.current || isAborted(error)) return;
       setChannelsError(errorMessage(error, 'Could not load channels.'));
       noteFailure(error);
     } finally {
-      setChannelsLoading(false);
+      if (mounted.current && channelsAbort.current === controller) setChannelsLoading(false);
     }
   };
 
   const goLive = async () => {
     setConnection({ status: 'checking' });
-    const state = await checkHealth();
+    const state = await checkHealth({ timeoutMs: SHORT_TIMEOUT_MS });
+    if (!mounted.current) return;
     setConnection(state);
     if (state.status !== 'connected') {
       setConnectionOpen(true);
@@ -608,9 +746,10 @@ export default function Home() {
 
   useEffect(() => {
     // Initial check only; later checks are explicit user actions.
-    let cancelled = false;
-    checkHealth().then((state) => {
-      if (cancelled) return;
+    mounted.current = true;
+    const controller = new AbortController();
+    checkHealth({ signal: controller.signal, timeoutMs: SHORT_TIMEOUT_MS }).then((state) => {
+      if (controller.signal.aborted) return;
       setConnection(state);
       if (state.status !== 'connected') {
         setConnectionOpen(true);
@@ -621,9 +760,22 @@ export default function Home() {
       refreshDraftMarks();
       void loadChannels(today);
     });
-    return () => { cancelled = true; };
+    return () => {
+      controller.abort();
+      // Nothing answers into an unmounted desk: late replies are dropped and downloads stopped.
+      mounted.current = false;
+      programmingRequest.current += 1;
+      guideRequest.current += 1;
+      programmingAbort.current?.abort();
+      guideAbort.current?.abort();
+      channelsAbort.current?.abort();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    latest.current = { lineup, history };
+  }, [lineup, history]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), NOW_TICK_MS);
@@ -663,7 +815,7 @@ export default function Home() {
 
   // Keep this channel's draft (unsaved order + undo history) in the browser.
   useEffect(() => {
-    if (!live || !base || base.channelId !== activeChannelId || loading || grab) return;
+    if (!live || !base || base.channelId !== activeChannelId || loading || grab || draftPending === activeChannelId) return;
     const store = draftStore();
     const keep = dirty || history.past.length > 0 || history.future.length > 0;
     const record = keep ? { ...encodeDraft(base.channelId, base.version, base.lineup, lineup, history, dirty, programming.programs), ...(keepOnAir ? { keepOnAir: true } : {}) } : null;
@@ -672,7 +824,7 @@ export default function Home() {
     write
       .then(() => setDraftMarks((marks) => (!!marks[channelId] === dirty ? marks : { ...marks, [channelId]: dirty })))
       .catch(() => {});
-  }, [activeChannelId, base, dirty, grab, history, keepOnAir, lineup, live, loading, programming.programs]);
+  }, [activeChannelId, base, dirty, draftPending, grab, history, keepOnAir, lineup, live, loading, programming.programs]);
 
   // Follow the keyboard/remote cursor: focus the row and keep it on screen.
   useEffect(() => {
@@ -682,6 +834,16 @@ export default function Home() {
     row?.focus({ preventScroll: true });
     row?.scrollIntoView?.({ block: 'center' });
   }, [cursorPosition]);
+
+  // After "Show earlier/later", keep the row that stayed mounted where it was on screen.
+  useLayoutEffect(() => {
+    const anchor = scrollAnchor.current;
+    if (!anchor) return;
+    scrollAnchor.current = null;
+    const element = rowRefs.current.get(anchor.position);
+    const delta = element ? element.getBoundingClientRect().top - anchor.top : 0;
+    if (element && delta) scrollParent(element).scrollBy(0, delta);
+  }, [rows.start]);
 
   // Opened from the guide grid on another channel: select what airs at that time once it's loaded.
   useEffect(() => {
@@ -718,6 +880,10 @@ export default function Home() {
 
   const switchToDemo = () => guardUnsaved(() => {
     programmingRequest.current += 1;
+    programmingAbort.current?.abort();
+    guideAbort.current?.abort();
+    setLoadState(null);
+    setDraftPending('');
     setSlotEditor(closedSlotEditor);
     setBase(null);
     guideRequest.current += 1;
@@ -784,6 +950,16 @@ export default function Home() {
       focusCursor.current = true;
       select(row.lineupIndex, row.start);
     }
+  };
+
+  /** Moves the row window by `step` rows, keeping a row that stays mounted where it is on screen. */
+  const moveRows = (step: number) => {
+    const next = shiftWindow(rows, visibleInstances.length, step);
+    if (next.start === rows.start) return;
+    const keep = step > 0 ? next.start : rows.start;
+    const element = rowRefs.current.get(keep);
+    scrollAnchor.current = element ? { position: keep, top: element.getBoundingClientRect().top } : null;
+    setRowStart({ key: windowKey, start: next.start, focus: focusRow });
   };
 
   /** Applies an edit to the lineup, records it for undo, and moves the cursor with it. */
@@ -1789,6 +1965,8 @@ export default function Home() {
   const selectedArt = blockSize === 1 && selectedItem ? programArtwork(selectedItem, programming.programs, live) : undefined;
   const lastRowOfBlock = blockSize > 1 ? visibleInstances.find((row) => row.lineupIndex === block.end && selectedInstance && row.start >= selectedInstance.start) : selectedInstance;
   const busy = loading || channelsLoading || guideLoading;
+  // The day's guide is extra detail: rows stay usable while it loads.
+  const timelineBusy = loading || channelsLoading;
   const connectionClass = live && connection.status === 'connected' ? 'live' : live && connection.status !== 'checking' ? 'offline' : '';
 
   let sourceNote = '';
@@ -1809,10 +1987,15 @@ export default function Home() {
   let emptyTitle = 'No programs here';
   let emptyText = search ? 'Try a different search.' : 'This date falls outside the current lineup.';
   let emptyRetry = false;
+  let emptyCancel = false;
+  const channelLoad = loadState?.channelId === activeChannelId ? loadState : null;
   if (!search && live) {
     if (connection.status === 'checking' || ((channelsLoading || loading) && !programmingError)) {
-      emptyTitle = 'Loading from Tunarr…';
-      emptyText = 'Reading this channel’s existing programming.';
+      ({ title: emptyTitle, text: emptyText } = loading ? loadingCopy(channelLoad) : { title: 'Connecting to Tunarr…', text: 'Reading the channel list.' });
+      emptyCancel = loading && !!channelLoad;
+    } else if (channelLoad?.phase === 'cancelled') {
+      ({ title: emptyTitle, text: emptyText } = loadingCopy(channelLoad));
+      emptyRetry = true;
     } else if (channelsError || programmingError) {
       emptyTitle = channelsError ? 'Couldn’t load channels' : 'Couldn’t load this channel';
       emptyText = channelsError || programmingError;
@@ -1911,11 +2094,13 @@ export default function Home() {
               <button className="primary" disabled={!selectedItem} onClick={placeAtCursor}>Place {placing.side} {selectedItem ? `“${programTitle(selectedItem, programming.programs)}”` : 'the row'}</button>
             </span>
           </div>}
-          <div className={`timeline ${busy ? 'loading' : ''}`}
+          <div className={`timeline ${timelineBusy ? 'loading' : ''}`}
             onDragOver={(event) => { if (binDrag.current && !lineup.length && !slotPreview) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; } }}
             onDrop={(event) => { if (binDrag.current && !lineup.length && !slotPreview) { event.preventDefault(); void dropFromBin(-1, 0, 'after'); } }}>
-            {!visibleInstances.length && <div className="empty"><span>○</span><h2>{emptyTitle}</h2><p>{emptyText}</p>{emptyRetry && <button onClick={retry}>Try again</button>}</div>}
-            {visibleInstances.map((instance, position) => {
+            {!visibleInstances.length && <div className="empty" aria-live={emptyCancel ? 'polite' : undefined}><span>○</span><h2>{emptyTitle}</h2><p>{emptyText}</p>{emptyRetry && <button onClick={retry}>Try again</button>}{emptyCancel && <button onClick={cancelLoading}>Cancel</button>}</div>}
+            {windowed && rows.start > 0 && <button className="row-window-edge" onClick={() => moveRows(-ROW_STEP)}>▲ Show earlier programs <small>{rows.start.toLocaleString('en')} more before {clockTimecode(visibleInstances[rows.start].start).slice(0, 5)}</small></button>}
+            {visibleInstances.slice(rows.start, rows.end).map((instance, offset) => {
+              const position = rows.start + offset;
               const period = dayPeriod(instance.start);
               const showPeriod = position === 0 || dayPeriod(visibleInstances[position - 1].start) !== period;
               const guideOnly = instance.lineupIndex < 0;
@@ -1989,6 +2174,7 @@ export default function Home() {
                 </Fragment>
               );
             })}
+            {windowed && rows.end < visibleInstances.length && <button className="row-window-edge" onClick={() => moveRows(ROW_STEP)}>▼ Show later programs <small>{(visibleInstances.length - rows.end).toLocaleString('en')} more after {clockTimecode(visibleInstances[rows.end - 1].stop).slice(0, 5)}</small></button>}
           </div>
         </section>
 
