@@ -38,6 +38,8 @@ next-env.d.ts
 /work/
 /dist-local/
 /dist-server/
+/desktop/node_modules/
+/desktop/release/
 *.tsbuildinfo
 
 # local editor settings

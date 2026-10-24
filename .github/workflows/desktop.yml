@@ -1,0 +1,78 @@
+name: Desktop
+
+# Builds the desktop app (desktop/, D58) on each OS. On a published release
+# the files are attached to it; a hand run (Actions → Desktop → Run workflow)
+# with no tag just builds the chosen branch and keeps the files as workflow
+# artifacts for 14 days. Either way: macOS .dmg/.zip (arm64, x64), Windows
+# installer (x64, arm64) and portable .exe, Linux AppImage and .deb (x64, arm64). Builds are unsigned
+# unless signing secrets are configured for electron-builder (CSC_LINK,
+# CSC_KEY_PASSWORD, APPLE_ID…); see https://www.electron.build/code-signing.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to (re)build and attach to, e.g. v2026.10.15. Leave empty to only build the chosen branch.
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            target: --mac
+          - os: windows-2025
+            target: --win
+          - os: ubuntu-26.04
+            target: --linux
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG || github.ref }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            desktop/package-lock.json
+      - run: npm ci
+      - run: npm run build:local
+      - run: npm ci
+        working-directory: desktop
+      - run: npm run dist -- ${{ matrix.target }}
+        working-directory: desktop
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: tunarr-lineup-${{ runner.os }}
+          path: |
+            desktop/release/*.dmg
+            desktop/release/*.zip
+            desktop/release/*.exe
+            desktop/release/*.AppImage
+            desktop/release/*.deb
+          if-no-files-found: error
+          retention-days: 14
+      - name: Attach to the release
+        if: env.TAG != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          shopt -s nullglob
+          files=(desktop/release/*.{dmg,zip,exe,AppImage,deb})
+          gh release upload "$TAG" "${files[@]}" --clobber

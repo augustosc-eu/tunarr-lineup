@@ -5,6 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="description" content="A TV-friendly, skinnable programming desk for your Tunarr channels." />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <!-- Installable on iPad, Android and TV browsers (D59). With credentials, so it loads behind LINEUP_PASSWORD. -->
+    <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+    <meta name="theme-color" content="#dddddd" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Lineup" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <!-- Applies the saved skin before first paint. A same-origin file, since the CSP allows no inline script. -->
     <script src="/skin-init.js"></script>
     <title>Tunarr Lineup</title>

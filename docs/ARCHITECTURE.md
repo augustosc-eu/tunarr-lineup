@@ -130,8 +130,11 @@ server implements those paths.
 | `.github/workflows/ci.yml` | CI: lint, typecheck, unit tests, both builds, e2e, Docker build plus healthcheck. |
 | `.github/workflows/release.yml` | On a published GitHub release: builds the image for amd64 and arm64, pushes it to `ghcr.io/<owner>/<repo>` (version, major.minor, `latest`), and checks its healthcheck. |
 | `Dockerfile`, `.dockerignore`, `docker-compose.example.yml` | Companion container and an example stack alongside Tunarr. |
-| `public/` | `favicon.svg`, `og.png`. Served by both targets. |
-| Generated (do not edit) | `dist/`, `dist-local/`, `dist-server/`, `.next/types/`, `.vinext/`, `.wrangler/`, `next-env.d.ts`, `test-results/`, `playwright-report/`. |
+| `public/` | `favicon.svg`, `og.png`, `skin-init.js`, `manifest.webmanifest` and `icons/` (home-screen icons, D59). Served by both targets. |
+| `desktop/` | The desktop app (D58), its own npm package (Electron, electron-builder). `main.mjs` forks `dist-server/main.js` with `utilityProcess` on `127.0.0.1` and shows it in a sandboxed `BrowserWindow`; `lineupEnv.mjs` parses `lineup.env` and builds the companion's environment (tested in `tests/desktopEnv.test.ts`); `dist.mjs` packages it with the root version; `start.mjs` runs it from the repo; `build/icon.png` is the app icon. |
+| `scripts/make-icons.mjs` | Renders `public/icons/*` and `desktop/build/icon.png` from `public/favicon.svg` with Playwright. |
+| `.github/workflows/desktop.yml` | On a published release: builds the desktop app on macOS, Windows and Linux and attaches the installers to it. |
+| Generated (do not edit) | `dist/`, `dist-local/`, `dist-server/`, `desktop/release/`, `.next/types/`, `.vinext/`, `.wrangler/`, `next-env.d.ts`, `test-results/`, `playwright-report/`. |
 
 ## 3. Frameworks and major dependencies
 
@@ -669,9 +672,17 @@ bundle (`envPrefix`); none are used.
   No `TUNARR_URL` or password is baked in.
 - **`docker-compose.example.yml`:** Tunarr plus Lineup (the published `ghcr.io/augustosc-eu/tunarr-lineup` image, or `build: .`) on a shared network, with `TUNARR_URL=http://tunarr:8000`. Commented options cover `LINEUP_PASSWORD` and timeouts, the amd64-only Tunarr image, and binding to `127.0.0.1`.
 - **Hosted:** `vinext build` with the `cloudflare()` plugin → `dist/`.
+- **Desktop** (`desktop/`, D58): `npm run build:desktop` runs `build:local`, then electron-builder in `desktop/`. The app holds `main.mjs` and `lineupEnv.mjs`; `dist-server/`, `dist-local/` and a `{"type":"module"}` `package.json` go to `resources/companion/` (`extraResources`), outside the asar. At launch `main.mjs`:
+  1. reads `<userData>/lineup.env` (written commented-out on first run) and picks the port: `PORT` from the file, else the last one used (default 47300) if free, else any free port, kept in `desktop.json` because drafts and the skin are stored per origin;
+  2. forks the companion with `utilityProcess` (Electron's Node, no separate runtime) with `HOST=127.0.0.1` unless the file sets `HOST`, `LINEUP_DATA_DIR=<userData>/data` unless set, and `STATIC_DIR`; output goes to `<userData>/logs/lineup.log`;
+  3. waits for `/healthz`, then loads `http://127.0.0.1:<port>` in a `BrowserWindow` with `contextIsolation`, `sandbox`, no Node integration and no preload. Navigation off that origin is refused and `http(s)` links open in the system browser; permission requests other than fullscreen and clipboard writes are denied. With `LINEUP_PASSWORD` in the file, the `login` event answers the companion's own Basic challenge only.
+
+  Its menu (File → Open Settings File…, Restart Lineup Server, Show Data Folder, Show Server Log; Edit; View) is hidden on Windows and Linux until Alt. A single-instance lock focuses the open window. On macOS closing the window leaves the server (and scheduler) running; quitting stops it with SIGTERM.
+- **Installable web app** (D59): `public/manifest.webmanifest` (standalone, `start_url` `/`, icons including a maskable one), linked from `local/index.html` with `crossorigin="use-credentials"` so it loads behind sign-in, and from `app/layout.tsx` metadata, plus Apple touch icon and web-app meta tags. `server/app.ts` serves `.webmanifest` as `application/manifest+json`; the CSP is unchanged (`manifest-src` falls back to `default-src 'self'`). No service worker, so nothing is cached offline.
 - **CI** (`.github/workflows/ci.yml`):
   - **`checks` job:** `npm ci`, lint, typecheck, `npm test`, both builds, `playwright install chromium`, `test:e2e`, and the report as an artifact on failure.
   - **`docker` job:** image build, then curls `/healthz` until the container answers.
+- **Desktop release** (`.github/workflows/desktop.yml`): on the same published release (or by hand: with a tag it attaches to that release, without one it only builds the chosen branch), a matrix of macOS, Windows and Linux runners runs `build:local` and `npm run dist` in `desktop/`, keeps them as run artifacts (14 days) and, with a tag, `gh release upload`s the `.dmg`, `.zip`, `.exe`, `.AppImage` and `.deb` files. Unsigned unless electron-builder's signing secrets are set.
 - **Release** (`.github/workflows/release.yml`): publishing a GitHub release `vYEAR.MONTH.N` (for example `v2026.10.3`, no leading zero on the month) builds the multi-arch image with QEMU and Buildx, pushes it to GHCR as `:YEAR.MONTH.N`, `:YEAR.MONTH` and `:latest`, then runs the pushed image and curls `/healthz`. It can also be run by hand for an existing tag; a hand run doesn't move `:latest`. Notes come from `CHANGELOG.md`.
 
 ## 13. Testing

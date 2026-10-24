@@ -22,6 +22,8 @@
     "dev:local": "vite --config vite.local.config.ts",
     "build:local": "vite build --config vite.local.config.ts && tsc -p server/tsconfig.json",
     "start:local": "node dist-server/main.js",
+    "start:desktop": "npm run build:local && npm --prefix desktop start",
+    "build:desktop": "npm run build:local && npm --prefix desktop run dist",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern dist-local --ignore-pattern dist-server",
     "typecheck": "tsc --noEmit && tsc -p server/tsconfig.json --noEmit",
     "test": "vitest run",

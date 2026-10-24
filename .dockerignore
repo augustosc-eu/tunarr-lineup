@@ -6,6 +6,8 @@ node_modules
 dist
 dist-local
 dist-server
+desktop/node_modules
+desktop/release
 coverage
 .env*
 *.log

@@ -44,6 +44,8 @@
     "node_modules",
     "dist",
     "dist-local",
-    "dist-server"
+    "dist-server",
+    "desktop/node_modules",
+    "desktop/release"
   ]
 }

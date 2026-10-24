@@ -23,6 +23,11 @@ profiles. It ships as two targets built from one React page (`app/page.tsx`):
 - **Local companion** (supported for real use): `server/` (dependency-free Node HTTP
   server plus a narrow `/api/tunarr/*` proxy) serving a Vite build of the page.
   Configured by `TUNARR_URL`. Docker: `Dockerfile`, `docker-compose.example.yml`.
+- **Desktop app** (`desktop/`, D58): Electron running the same companion on
+  `127.0.0.1` in a sandboxed window, configured by `lineup.env` in the app's data
+  folder. Its own npm package; `npm run build:desktop` packages it.
+- **Installable web app** (D59): `public/manifest.webmanifest` and icons let iPad,
+  Android and TV browsers add the companion's page to the home screen.
 - **Hosted preview**: Vinext (Next.js App Router on Vite) built for a Cloudflare
   Workers runtime (`vite.config.ts`, `app/layout.tsx`). It has no proxy, so only demo
   mode works there.
@@ -39,6 +44,9 @@ npm run build         # hosted preview build (vinext) -> dist/
 npm run build:local   # companion build -> dist-local/ (UI) + dist-server/ (server)
 TUNARR_URL=http://localhost:8000 npm run dev:local    # companion dev server on :3000
 TUNARR_URL=http://localhost:8000 npm run start:local  # run the built companion
+npm --prefix desktop install && npm run start:desktop  # desktop app from the repo
+npm run build:desktop # desktop installers for this OS -> desktop/release/
+node scripts/make-icons.mjs   # re-render app icons from public/favicon.svg
 ```
 
 Before declaring work done, run `lint`, `typecheck`, `test`, `build`,

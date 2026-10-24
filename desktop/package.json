@@ -1,0 +1,114 @@
+{
+  "name": "tunarr-lineup-desktop",
+  "productName": "Tunarr Lineup",
+  "version": "2026.10.14",
+  "description": "Tunarr Lineup as a desktop app: the companion and the desk in one window",
+  "license": "MIT",
+  "author": "Tunarr Lineup contributors",
+  "homepage": "https://github.com/augustosc-eu/tunarr-lineup#readme",
+  "private": true,
+  "type": "module",
+  "main": "main.mjs",
+  "scripts": {
+    "start": "node start.mjs",
+    "dist": "node dist.mjs"
+  },
+  "devDependencies": {
+    "electron": "44.7.0",
+    "electron-builder": "26.17.0"
+  },
+  "build": {
+    "appId": "io.github.augustosc-eu.tunarr-lineup",
+    "productName": "Tunarr Lineup",
+    "artifactName": "Tunarr-Lineup-${version}-${os}-${arch}.${ext}",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.mjs",
+      "lineupEnv.mjs",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../dist-server",
+        "to": "companion/dist-server"
+      },
+      {
+        "from": "../dist-local",
+        "to": "companion/dist-local"
+      },
+      {
+        "from": "companion-package.json",
+        "to": "companion/package.json"
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.video",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ]
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "portable": {
+      "artifactName": "Tunarr-Lineup-${version}-win-portable.${ext}"
+    },
+    "linux": {
+      "category": "AudioVideo",
+      "maintainer": "Tunarr Lineup contributors",
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "deb",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ]
+    }
+  },
+  "allowScripts": {
+    "electron-winstaller": false
+  }
+}

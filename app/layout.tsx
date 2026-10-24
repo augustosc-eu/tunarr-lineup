@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import { Geist, Geist_Mono } from 'next/font/google';
 import './globals.css';
 
@@ -17,6 +17,10 @@ export const metadata: Metadata = {
   metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000'),
   title: 'Tunarr Lineup',
   description: 'A TV-friendly, skinnable programming desk for your Tunarr channels.',
+  // Installable on iPad, Android and TV browsers, as in local/index.html (D59).
+  manifest: '/manifest.webmanifest',
+  icons: { icon: '/favicon.svg', apple: '/icons/apple-touch-icon.png' },
+  appleWebApp: { capable: true, title: 'Lineup', statusBarStyle: 'default' },
   openGraph: {
     title: 'Tunarr Lineup',
     description: 'Your schedule, the classic way.',
@@ -29,6 +33,8 @@ export const metadata: Metadata = {
     images: ['/og.png'],
   },
 };
+
+export const viewport: Viewport = { themeColor: '#dddddd' };
 
 export default function RootLayout({
   children,

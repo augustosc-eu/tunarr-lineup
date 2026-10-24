@@ -527,3 +527,26 @@ on the `broadcast-programming` branch.
   - **Classic Windows is a style, not a copy:** colours and bevels in CSS, system fonts (Tahoma, MS Sans Serif fallbacks), no Microsoft logos or assets.
   - **Platinum is exact.** Where the original desk used near-identical shades (several grays, `#101010` against `#111`, a few reds and blues), `:root` keeps each as a shade token (`--line-2`, `--edge`, `--now-line`…) holding the original value, and one block aliases them all to their role token for the other skins. Every element's computed style in Platinum matches the pre-skin stylesheet (checked on the desk, menus, guide grid, week view, lineup check, shortcuts, Watch Live and the cable guide at 390×844, 1280×800 and 1920×1080).
 - **Consequence:** new styles must use the tokens (a literal colour won't follow the skin), and a new token needs a Platinum value in `:root`; a new Platinum-only shade also needs its alias (tested in `tests/skins.test.ts`).
+
+## D58. A desktop app wraps the companion in Electron
+
+- **Status:** Explicit: the owner asked for "executables for macos, windows, android, ipad, and linux" and chose an Electron window app for desktop over a Tauri window or a single Node executable (2026-10-24). Evidenced: `desktop/`, `.github/workflows/desktop.yml`, `tests/desktopEnv.test.ts`.
+- **Decision:**
+  - **The companion runs unchanged inside the app.** `desktop/main.mjs` forks the built `dist-server/main.js` with Electron's `utilityProcess` and shows `http://127.0.0.1:<port>` in a window. No server code is forked or duplicated, and the runtime stays dependency-free (invariant 7): Electron is a dev dependency of `desktop/` only, not of the server or the Docker image.
+  - **The window is just a browser of that origin** (invariant 1): sandboxed, context-isolated, no Node integration, no preload, no navigation elsewhere. The page calls only same-origin `/api/tunarr/*`.
+  - **The Tunarr address is server configuration, not a page workflow.** It lives in `lineup.env` in the app's data folder, the same variables as `.env`, opened from the native File menu and read by the main process for the companion. The desk never asks for or sees it (D55 unchanged).
+  - **Localhost by default.** The companion listens on `127.0.0.1` unless `HOST` is set in the file, which is how a desktop install serves a TV or iPad (with a password, as the companion's own warning says).
+  - **Stable port**, because IndexedDB drafts and the skin are kept per origin (invariant 5, D57).
+  - Each OS builds its own installers in CI: `.dmg`/`.zip` (arm64, x64), NSIS installer (x64, arm64) and a portable `.exe`, AppImage and `.deb` (x64, arm64). Signing is left to electron-builder's secrets; unsigned builds are documented.
+- **Alternatives considered:** Tauri (smaller, but a Rust toolchain and still needs Node for the companion as a sidecar); a Node single executable that opens the default browser (smallest, but no app window). Both were offered; the owner picked Electron.
+- **Consequence:** about 100 MB per download for the bundled Chromium. The desktop app is as trusted as the companion: anyone who can reach its port can edit programming, as with Docker.
+
+## D59. iPad and Android install the desk as a web app
+
+- **Status:** Explicit: same request (2026-10-24); the owner chose an installable web app over a Capacitor shell or a companion embedded on the device. Evidenced: `public/manifest.webmanifest`, `public/icons/`, the head of `local/index.html` and `app/layout.tsx`, `tests/installable.test.ts`.
+- **Decision:**
+  - **The companion's own page is the app.** A web app manifest (standalone, scope `/`), icons and Apple meta tags let Safari and Chrome add it to the home screen. Everything stays same-origin, so invariants 1 and 2 are untouched.
+  - **No native mobile shell.** A shell would have to ask for the companion's address and call it cross-origin with CORS, which invariant 1 rules out; running the companion on the device (nodejs-mobile) would be suspended in the background, stopping the scheduler.
+  - **No service worker.** The desk must not show stale data or work without its companion (invariant 6), and installing doesn't need one.
+- **Consequence:** Android Chrome installs only from a secure origin (`https` or `localhost`); over plain LAN `http` it makes a browser shortcut. There are no `.apk`/`.ipa` files or app-store listings.
+

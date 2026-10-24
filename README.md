@@ -25,7 +25,10 @@ docker run -d --name tunarr-lineup -p 3000:3000 \
 Open **http://localhost:3000** (or the machine's IP address). The image runs on
 amd64 and arm64. Lineup can rewrite your channels, so read [Sign-in](#sign-in)
 before making it reachable by anyone else. To run Tunarr and Lineup together,
-see [Run with Docker Compose](#run-with-docker-compose-recommended).
+see [Run with Docker Compose](#run-with-docker-compose-recommended). Prefer an
+app? There is a [desktop app](#desktop-app-macos-windows-linux) for macOS,
+Windows and Linux, and the desk [installs to the home screen](#ipad-android-and-tv-browsers-install-to-the-home-screen)
+on iPad and Android.
 
 ## Programming desk features
 
@@ -269,6 +272,67 @@ docker run -d --name tunarr-lineup -p 3000:3000 \
   -e TUNARR_URL=http://192.168.1.50:8000 -v lineup-data:/data tunarr-lineup
 ```
 
+## Desktop app (macOS, Windows, Linux)
+
+The desktop app is the companion and the desk in one window: it runs the Lineup
+server on this computer (localhost only) and shows it, so there's no Docker or
+Node to install. Download it from the GitHub release:
+
+| System | File |
+| --- | --- |
+| macOS (Apple silicon / Intel) | `Tunarr-Lineup-<version>-mac-arm64.dmg` / `-mac-x64.dmg` |
+| Windows (x64 / ARM) | `Tunarr-Lineup-<version>-win-x64.exe` / `-win-arm64.exe` installer, or `-win-portable.exe` |
+| Linux (x64 / ARM) | `.AppImage` or `.deb` for `x86_64`/`amd64` and `arm64` |
+
+On first launch choose **File → Open Settings File…**, set `TUNARR_URL` (the
+same variables as the server's `.env`, below), save, and choose **File → Restart
+Lineup Server**. The settings file, saved templates and other Lineup data live
+in the app's data folder (**File → Show Data Folder**); the server's output is
+under **File → Show Server Log**.
+
+- **Share it with a TV, iPad or phone:** set `HOST=0.0.0.0`, `PORT=3000` and a
+  `LINEUP_PASSWORD` in the settings file, then open
+  `http://<this computer's address>:3000` on the other device.
+- **Scheduled changes** (`LINEUP_SCHEDULER=on`) are saved while the app runs. On
+  macOS closing the window keeps the app running; quit it to stop the server.
+- **Unsigned builds:** unless the release was signed, macOS says the app can't
+  be checked: Control-click it in Finder, choose **Open**, then **Open** again
+  (or **System Settings → Privacy & Security → Open Anyway**). Windows
+  SmartScreen: **More info → Run anyway**. AppImage: `chmod +x` it first.
+
+To build it yourself (on each OS for its own installers; Linux packages also
+build on macOS):
+
+```sh
+npm install && npm --prefix desktop install
+npm run start:desktop      # build the companion and open it in the desktop shell
+npm run build:desktop      # installers for this OS in desktop/release/
+npm --prefix desktop run dist -- --linux AppImage   # extra arguments go to electron-builder
+```
+
+Publishing a GitHub release builds all three on their own runners
+(`.github/workflows/desktop.yml`) and attaches the files to the release. To
+build without a release, run **Actions → Desktop → Run workflow** with the tag
+left empty; the files are kept as the run's artifacts for 14 days. Signing
+uses electron-builder's usual secrets (`CSC_LINK`, `CSC_KEY_PASSWORD`, and
+`APPLE_ID`/`APPLE_APP_SPECIFIC_PASSWORD`/`APPLE_TEAM_ID` for macOS notarization).
+
+## iPad, Android and TV browsers (install to the home screen)
+
+The desk is an installable web app: open your companion's address (Docker, Node
+or a shared desktop app) and add it to the home screen. It then opens full
+screen, with its own icon, like an app; it is still the same desk, talking only
+to that companion.
+
+- **iPad / iPhone (Safari):** Share → **Add to Home Screen**.
+- **Android (Chrome):** ⋮ → **Install app** (or **Add to Home screen**).
+  Chrome only installs from a secure origin: `https://…` (for example behind a
+  reverse proxy or Tailscale Serve) or `localhost`. Over plain
+  `http://192.168.…` it adds a shortcut that opens in Chrome instead.
+- **With `LINEUP_PASSWORD` set** you sign in once when the installed app opens.
+
+There is no offline mode: the desk needs its companion to reach Tunarr.
+
 ## Run locally with Node
 
 Requires Node 22.13 or newer.
@@ -413,7 +477,8 @@ Tests live in `tests/`:
 ## Releases
 
 See [CHANGELOG.md](CHANGELOG.md). Publishing a GitHub release builds and pushes
-the image for amd64 and arm64 (`.github/workflows/release.yml`). Security
+the image for amd64 and arm64 (`.github/workflows/release.yml`) and attaches the
+desktop apps (`.github/workflows/desktop.yml`). Security
 reports: [SECURITY.md](SECURITY.md).
 
 ## License

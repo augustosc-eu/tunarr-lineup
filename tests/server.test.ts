@@ -43,12 +43,19 @@ describe('companion HTTP app', () => {
     await mkdir(path.join(root, 'assets'));
     await writeFile(path.join(root, 'index.html'), '<!doctype html><title>Lineup</title>');
     await writeFile(path.join(root, 'assets', 'app.js'), 'console.log(1)');
+    await writeFile(path.join(root, 'manifest.webmanifest'), '{}');
     await writeFile(path.join(os.tmpdir(), 'lineup-secret.txt'), 'secret');
   });
 
   afterAll(async () => {
     await Promise.all(servers.map((server) => new Promise((resolve) => server.close(resolve))));
     await rm(root, { recursive: true, force: true });
+  });
+
+  it('serves the web app manifest with its media type', async () => {
+    const base = await start();
+    const manifest = await fetch(`${base}/manifest.webmanifest`);
+    expect(manifest.headers.get('content-type')).toBe('application/manifest+json; charset=utf-8');
   });
 
   it('serves the interface with a same-origin CSP and SPA fallback', async () => {
