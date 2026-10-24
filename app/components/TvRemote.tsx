@@ -25,7 +25,7 @@ export function TvRemote({ onPress, onPower, muted, guideOpen, hasLast }: Props)
     <button key={name} type="button" className={`remote-key ${className}`} aria-label={name} title={name} aria-pressed={extra.pressed} disabled={extra.disabled} onClick={() => onPress(action)}>{label}</button>
   );
   return (
-    <aside className="tv-remote" aria-label="Remote control">
+    <aside className={`tv-remote ${guideOpen ? 'guide-open' : ''}`} aria-label="Remote control">
       <div className="remote-top">
         <button type="button" className="remote-key power" aria-label="Power off (stop watching)" title="Power off (stop watching)" onClick={onPower}>⏻</button>
         <span className="remote-led" aria-hidden="true" />

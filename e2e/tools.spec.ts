@@ -66,6 +66,26 @@ test('watches a channel live through the companion only', async ({ page }) => {
   await expect(page.locator('.watch-modal')).toHaveCount(0);
 });
 
+test('fits watching on a phone: the picture and the whole remote on one screen, with or without the guide', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 664 });
+  await page.locator('.program.on-air').focus();
+  await page.keyboard.press('l');
+  const modal = page.locator('.watch-modal');
+  await expect(modal).toBeVisible();
+  const fits = async () => {
+    await noOverflow(page);
+    expect(await modal.evaluate((element) => element.scrollHeight - element.clientHeight)).toBeLessThanOrEqual(0);
+    const remote = page.getByRole('complementary', { name: 'Remote control' });
+    expect(await remote.evaluate((element) => element.scrollHeight - element.clientHeight)).toBeLessThanOrEqual(0);
+    const box = await remote.boundingBox();
+    expect(box && box.y + box.height).toBeLessThanOrEqual(664);
+  };
+  await fits();
+  await page.getByRole('button', { name: 'Guide' }).click();
+  await expect(page.getByRole('grid', { name: 'Cable guide' })).toBeVisible();
+  await fits();
+});
+
 test('checks the lineup, and keeps a snapshot before each save that can be restored', async ({ page }) => {
   await page.keyboard.press('c');
   const check = page.getByRole('dialog', { name: 'Check lineup' });
