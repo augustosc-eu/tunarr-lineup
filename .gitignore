@@ -40,6 +40,11 @@ next-env.d.ts
 /dist-server/
 /desktop/node_modules/
 /desktop/release/
+/android/.gradle/
+/android/.kotlin/
+/android/build/
+/android/app/build/
+/android/local.properties
 *.tsbuildinfo
 
 # local editor settings

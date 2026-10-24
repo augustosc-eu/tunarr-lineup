@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Long-press the app icon → Change server address. -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="change_server"
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/change_server_short"
+        android:shortcutLongLabel="@string/change_server">
+        <intent
+            android:action="io.github.augustosc_eu.tunarrlineup.CHANGE_SERVER"
+            android:targetPackage="io.github.augustosc_eu.tunarrlineup"
+            android:targetClass="io.github.augustosc_eu.tunarrlineup.MainActivity" />
+    </shortcut>
+</shortcuts>

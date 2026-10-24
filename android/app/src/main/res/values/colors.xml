@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Platinum's desktop and chrome (app/globals.css). -->
+    <color name="desktop">#637fac</color>
+    <color name="platinum">#dddddd</color>
+    <color name="ink">#111111</color>
+    <color name="highlight">#303099</color>
+    <color name="icon_background">#e3e3e3</color>
+</resources>

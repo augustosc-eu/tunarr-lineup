@@ -548,5 +548,20 @@ on the `broadcast-programming` branch.
   - **The companion's own page is the app.** A web app manifest (standalone, scope `/`), icons and Apple meta tags let Safari and Chrome add it to the home screen. Everything stays same-origin, so invariants 1 and 2 are untouched.
   - **No native mobile shell.** A shell would have to ask for the companion's address and call it cross-origin with CORS, which invariant 1 rules out; running the companion on the device (nodejs-mobile) would be suspended in the background, stopping the scheduler.
   - **No service worker.** The desk must not show stale data or work without its companion (invariant 6), and installing doesn't need one.
-- **Consequence:** Android Chrome installs only from a secure origin (`https` or `localhost`); over plain LAN `http` it makes a browser shortcut. There are no `.apk`/`.ipa` files or app-store listings.
+- **Consequence:** Android Chrome installs only from a secure origin (`https` or `localhost`); over plain LAN `http` it makes a browser shortcut. There are no `.ipa` files or app-store listings.
+- **Later:** Android also has a native app (D60); iPad stays on the home-screen web app.
+
+## D60. An Android app opens the Lineup server in a native window
+
+- **Status:** Explicit: after D59 the owner asked "how about for ipad and android tablets?", was told a native Android app would need an exception to invariant 1 (typing the Lineup server's address) and a signing key, and answered "do the android app" (2026-10-24). Evidenced: `android/`, `.github/workflows/android.yml`, `tests/androidApp.test.ts`, `android/app/src/test/…/ServerAddressTest.java`.
+- **Decision:**
+  - **A window onto the companion, not a client of Tunarr.** The app asks for the **Lineup server's** address (never Tunarr's), checks `/healthz`, and loads it as the top-level page of a WebView. The page is the companion's own, so it keeps calling only same-origin `/api/tunarr/*`: no CORS, no cross-origin fetches, no change to the proxy. This is the one user-entered address in Lineup, added to invariant 1 as an explicit exception.
+  - **Locked to that origin.** Other URLs open in the browser; no JavaScript bridge, file or content access; Basic auth only for that host; only the `INTERNET` permission.
+  - **The server runs elsewhere.** Running the companion on the device was rejected (background limits stop the scheduler); the app needs a Lineup server on the network, like a browser does.
+  - **Remote-operable (invariant 8)** and on Android TV: Back is Escape, CH± are PageUp/PageDown, D-pad and OK reach the page; Menu holds the app's own commands; leanback launcher and banner.
+  - **Plain Java and the Android SDK only**, so there are no third-party runtime libraries to track, and the wrapper is pinned with its checksum.
+  - **Signed in CI** with a PKCS#12 keystore kept in repository secrets, so releases update in place. The keystore was generated for the owner outside the repository; losing it means users must uninstall to update.
+  - Sign-in saved with **Remember on this device** is kept in the app's private storage, excluded from backups.
+- **Alternatives considered:** a Trusted Web Activity (needs one fixed `https` origin with Digital Asset Links; every user's server differs); Capacitor (adds a JS toolchain for the same WebView); an iPad app (needs an Apple Developer account and App Store or TestFlight distribution; not pursued).
+- **Consequence:** exports (blob downloads) don't work in the app yet. `http` LAN servers are allowed (cleartext), which is the usual setup; anyone on the network could read that traffic, as in a browser.
 

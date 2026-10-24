@@ -27,8 +27,9 @@ amd64 and arm64. Lineup can rewrite your channels, so read [Sign-in](#sign-in)
 before making it reachable by anyone else. To run Tunarr and Lineup together,
 see [Run with Docker Compose](#run-with-docker-compose-recommended). Prefer an
 app? There is a [desktop app](#desktop-app-macos-windows-linux) for macOS,
-Windows and Linux, and the desk [installs to the home screen](#ipad-android-and-tv-browsers-install-to-the-home-screen)
-on iPad and Android.
+Windows and Linux, an [Android app](#android-app-phones-tablets-android-tv) for phones, tablets
+and Android TV, and the desk [installs to the home screen](#ipad-android-and-tv-browsers-install-to-the-home-screen)
+on iPad.
 
 ## Programming desk features
 
@@ -317,6 +318,38 @@ left empty; the files are kept as the run's artifacts for 14 days. Signing
 uses electron-builder's usual secrets (`CSC_LINK`, `CSC_KEY_PASSWORD`, and
 `APPLE_ID`/`APPLE_APP_SPECIFIC_PASSWORD`/`APPLE_TEAM_ID` for macOS notarization).
 
+## Android app (phones, tablets, Android TV)
+
+One APK for Android phones, tablets and Android TV boxes, attached to each
+GitHub release as `Tunarr-Lineup-<version>-android.apk`. It's a full-screen
+window onto your Lineup server (Docker, Node or a shared desktop app); the
+server keeps running there, so scheduled changes don't depend on the tablet.
+
+1. Download the APK on the device (or copy it over) and open it. Android asks
+   once to allow installing apps from that source.
+2. Type your **Lineup server's** address, the one you'd open in a browser, for
+   example `http://192.168.1.50:3000` (not Tunarr's address). Without `http://`
+   and a port, port 3000 is assumed. The app checks the server answers first.
+3. With `LINEUP_PASSWORD` set, sign in once; **Remember on this device** keeps it.
+
+- **Remote and keyboard:** Back works like Escape (closes what's open), CH± step
+  channels, and the D-pad and OK drive the desk as in a browser. The remote's
+  **Menu** key offers Reload, Change server address and Quit.
+- **Change the server later:** long-press the app icon → **Change server**, the
+  Menu key, or **Change server address** when it can't connect.
+- **Not in the app yet:** exports (CSV, program logs) can't be saved; use a browser for those.
+- **Updates** install over the old version when they're signed with the same key
+  as the one you have (releases are; builds from forks or without the signing
+  secrets aren't).
+
+To build it yourself, install Android Studio (or a JDK 21 and the Android SDK)
+and run `./gradlew assembleDebug` in `android/`; the APK lands in
+`android/app/build/outputs/apk/debug/`. Releases build it with
+`.github/workflows/android.yml`, signed with the keystore in the repository
+secrets `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`,
+`ANDROID_KEY_ALIAS` and `ANDROID_KEY_PASSWORD`; **Actions → Android → Run
+workflow** with no tag builds one without a release.
+
 ## iPad, Android and TV browsers (install to the home screen)
 
 The desk is an installable web app: open your companion's address (Docker, Node
@@ -478,7 +511,8 @@ Tests live in `tests/`:
 
 See [CHANGELOG.md](CHANGELOG.md). Publishing a GitHub release builds and pushes
 the image for amd64 and arm64 (`.github/workflows/release.yml`) and attaches the
-desktop apps (`.github/workflows/desktop.yml`). Security
+desktop apps (`.github/workflows/desktop.yml`) and the Android app
+(`.github/workflows/android.yml`). Security
 reports: [SECURITY.md](SECURITY.md).
 
 ## License
