@@ -205,6 +205,7 @@ The proxy is deliberately narrow (`server/tunarrProxy.ts`):
 - Writes from another site are blocked: the `Origin` must match the companion's host.
 - Browser cookies, `Authorization` and hop-by-hop headers are never forwarded. Upstream redirects are not followed.
 - Timeouts are 10 s for reads and 30 s for saves. Override them with `TUNARR_TIMEOUT_MS` and `TUNARR_SAVE_TIMEOUT_MS`.
+- **Large channels.** A channel's programming reaches the browser with its whole lineup untouched but only the program details the desk shows (title, show, season, episode), compressed, and with an ETag so an unchanged channel isn't downloaded again. A 20,000-item channel that Tunarr sends as 7.8 MB arrives as about 110–210 KB. Long days mount 200 rows at a time; the window follows the cursor, and **Show earlier/later programs** moves it. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#loading-large-channels).
 - Errors come back as `{"error":{"code","message"}}`. Messages name the Tunarr host but never credentials, and never include stack traces.
 - Artwork responses must be an image type (JPEG, PNG, WebP, GIF or AVIF) of at most 8 MB.
 - **Logos from public sites** (YouTube, TMDB…) are fetched by the companion only over HTTP(S) on ports 80/443, only when every address the host resolves to is public (no loopback, private, link-local, CGNAT/Tailscale or multicast ranges; the check is pinned to the connection), with at most 3 redirects (each re-checked), an image content type, 4 MB and 8 s. Results are cached in memory for an hour. Set `LINEUP_EXTERNAL_LOGOS=false` to turn this off; channels then show logos only when Tunarr hosts them.
@@ -408,6 +409,17 @@ Server environment variables:
 | `LINEUP_USERNAME` | `lineup` | Sign-in user name |
 | `LINEUP_ALLOWED_HOSTS` | (none) | Extra host names Lineup answers to without sign-in, e.g. `nas.local,.home.example` (`*` for any); IP addresses and `localhost` always work |
 | `STATIC_DIR` | `dist-local` | Directory holding the built interface |
+| `LINEUP_COMPRESSION` | `on` | Compress JSON and the interface's files (gzip, or Brotli over HTTPS). Set `off` if a reverse proxy in front already compresses |
+| `LINEUP_PROGRAMMING_CACHE_MS` | `0` | Reuse a channel's programming read from Tunarr for this long. `0` reads Tunarr on every load, so changes made in Tunarr's own UI show at once; a few thousand helps a slow Tunarr, but such changes then take that long to appear. Lineup's own saves always show at once |
+
+**Behind a reverse proxy, VPN or tailnet.** Nothing extra is needed: the desk
+only calls its own origin. Leave compression on unless the proxy compresses
+(nginx `gzip on`, Caddy `encode`), and don't let the proxy buffer or cache
+`/api/tunarr/*` beyond what it's told: programming answers are
+`Cache-Control: private, no-cache` and carry `Vary: Accept-Encoding`. A proxy
+read timeout of at least 60 s covers a large channel over a slow link. The
+desk is served from the root path; sub-path installs (`/lineup/`) aren't
+supported yet.
 
 **Setup → Server Settings…** changes the settings that have nothing to do with
 security while the server runs: `TUNARR_TIMEOUT_MS`, `TUNARR_SAVE_TIMEOUT_MS`,

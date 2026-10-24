@@ -565,3 +565,14 @@ on the `broadcast-programming` branch.
 - **Alternatives considered:** a Trusted Web Activity (needs one fixed `https` origin with Digital Asset Links; every user's server differs); Capacitor (adds a JS toolchain for the same WebView); an iPad app (needs an Apple Developer account and App Store or TestFlight distribution; not pursued).
 - **Consequence:** exports (blob downloads) don't work in the app yet. `http` LAN servers are allowed (cleartext), which is the usual setup; anyone on the network could read that traffic, as in a browser.
 
+## D61. Large channels: slim programming, compression, bounded loads
+
+- **Status:** Explicit: the owner asked for a general fix for slow or stuck channel loading on phones, Safari, remote links and channels with thousands of programs, with no per-install workaround (2026-10-24). Evidenced: `server/programmingCache.ts`, `server/compression.ts`, `lib/loading.ts`, `lib/rowWindow.ts`, `lib/lastChannel.ts`, `tests/programmingCache.test.ts`, `tests/loading.test.ts`, `tests/pageLoading.test.tsx`, `e2e/large-channel.spec.ts`.
+- **Evidence (measured, read-only):** a 20,816-item channel was 7.8 MB uncompressed from Tunarr, sent unchanged; 63 % program metadata the desk doesn't show. `slimPrograms` was quadratic (303 ms). The stored draft was read after the download with no time limit, so an IndexedDB that never answers (a known Safari failure) left the desk loading forever. A day of short spots mounted 1,298 rows (31 ms per arrow key on a desktop).
+- **Decision:**
+  - The programming route sends the whole lineup and schedule untouched (invariants 3–5 need them) with slim programs, compressed, with an ETag. No server-side day window: the editor needs every item.
+  - Time-based reuse of Tunarr reads is off by default, because a cache would show changes made in Tunarr's own UI late, as if current; concurrent reads are shared and writes invalidate.
+  - Every browser read has a time limit and is cancelled when replaced; drafts are read in parallel and can arrive late; draft stores time out to memory.
+  - Long days mount a 200-row window that follows the cursor, with buttons rather than scroll-triggered paging (works by remote, no hover, invariant 8).
+- **Alternatives considered:** paging the lineup itself (breaks whole-lineup saves and draft positions); a TTL cache on by default (stale data, see above); full list virtualization (variable row heights, focus and remote handling); a service worker cache (rejected by D59).
+- **Consequence:** the programming answer no longer carries Tunarr's full program metadata or `startTimeOffsets`; nothing in the desk used them. Sub-path installs remain unsupported (the desk calls `/api/tunarr` at the root).

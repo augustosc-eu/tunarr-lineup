@@ -8,6 +8,17 @@ were renamed 2026.10.1 and 2026.10.2.
 
 ## [Unreleased]
 
+### Changed
+
+- **Large channels open much faster, especially on phones and remote connections.** The Lineup server now sends only the program details the desk shows, compresses its answers, and lets the browser skip downloading a channel that hasn't changed. A 20,000-item channel goes from 7.8 MB to about 110–210 KB. Long days show 200 rows at a time; arrow keys move through all of them, and **Show earlier/later programs** pages through. The programming answer no longer includes Tunarr's full program metadata or `startTimeOffsets`.
+- **The desk opens on the last channel you used**, or the one named in the address (`?channel=<id>`).
+
+### Fixed
+
+- **Loading never gets stuck.** A browser whose saved-draft storage doesn't answer (seen in Safari), a slow companion draft copy, or a stalled connection no longer leaves the desk on "Loading" forever: the lineup shows, drafts restore when they arrive, and every load has a time limit, a **Cancel** button while it runs, and **Try again** after.
+- Switching channels quickly cancels the previous channel's download instead of finishing it in the background.
+- Rows stay usable while the day's guide is still loading.
+
 ## [2026.10.15] - 2026-10-24
 
 ### Added

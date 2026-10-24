@@ -9,6 +9,7 @@
 import type { Block } from './broadcast';
 import type { History, HistoryEntry } from './history';
 import type { LineupItem } from './lineup';
+import { linkedSignal, withTimeout } from './loading';
 
 type StoredEntry = { label: string; before: number[]; after: number[]; blockBefore: Block; blockAfter: Block };
 
@@ -38,6 +39,15 @@ export type DraftStore = {
 };
 
 export const MAX_DRAFTS = 60;
+/**
+ * An IndexedDB call that takes longer is treated as broken (some Safari
+ * versions leave open() pending forever); drafts then stay in memory and on
+ * the companion. The companion's copy gets a little longer, for slow links.
+ */
+export const LOCAL_DRAFT_TIMEOUT_MS = 4_000;
+export const REMOTE_DRAFT_TIMEOUT_MS = 6_000;
+/** After the companion's draft routes fail, how long until they are tried again. */
+export const REMOTE_RETRY_MS = 30_000;
 const DB_NAME = 'tunarr-lineup';
 const STORE = 'drafts';
 
@@ -138,16 +148,25 @@ function indexedDbStore(factory: IDBFactory): DraftStore {
   };
 }
 
-/** IndexedDB when it works; otherwise an in-memory store (private mode, old TVs, tests). */
-export function createDraftStore(factory: IDBFactory | undefined = typeof indexedDB === 'undefined' ? undefined : indexedDB): DraftStore {
+/**
+ * IndexedDB when it works; otherwise an in-memory store (private mode, old
+ * TVs, tests). A call that errors, or doesn't answer within `timeoutMs`,
+ * switches to memory for the rest of the visit.
+ */
+export function createDraftStore(factory: IDBFactory | undefined = typeof indexedDB === 'undefined' ? undefined : indexedDB, timeoutMs = LOCAL_DRAFT_TIMEOUT_MS): DraftStore {
   if (!factory) return memoryStore();
-  const durable = indexedDbStore(factory);
+  let durable: DraftStore;
+  try {
+    durable = indexedDbStore(factory);
+  } catch {
+    return memoryStore();
+  }
   const fallback = memoryStore();
   let broken = false;
   const guarded = <A extends unknown[], R>(method: (...args: A) => Promise<R>, backup: (...args: A) => Promise<R>) => async (...args: A) => {
     if (broken) return backup(...args);
     try {
-      return await method(...args);
+      return await withTimeout(method(...args), timeoutMs, () => new Error('IndexedDB did not answer'));
     } catch {
       broken = true;
       return backup(...args);
@@ -172,12 +191,20 @@ export type CompanionDrafts = {
 
 const draftPath = (channelId: string) => `/api/tunarr/drafts/${encodeURIComponent(channelId)}`;
 
-/** Talks to the companion's draft routes; a missing route (hosted preview, older companion) rejects. */
-export function companionDrafts(doFetch: typeof fetch = (...args) => fetch(...args)): CompanionDrafts {
+/** Talks to the companion's draft routes; a missing route (hosted preview, older companion) or a slow answer rejects. */
+export function companionDrafts(doFetch: typeof fetch = (...args) => fetch(...args), timeoutMs = REMOTE_DRAFT_TIMEOUT_MS): CompanionDrafts {
   const call = async (path: string, init?: RequestInit) => {
-    const response = await doFetch(path, { credentials: 'same-origin', ...init, headers: { accept: 'application/json', ...init?.headers } });
-    if (!response.ok) throw new Error(`Drafts: HTTP ${response.status}`);
-    return response.json() as Promise<unknown>;
+    const { signal, done } = linkedSignal(undefined, timeoutMs);
+    try {
+      // Bounded even if fetch ignores the signal (some test doubles do).
+      return await withTimeout((async () => {
+        const response = await doFetch(path, { credentials: 'same-origin', ...init, signal, headers: { accept: 'application/json', ...init?.headers } });
+        if (!response.ok) throw new Error(`Drafts: HTTP ${response.status}`);
+        return response.json() as Promise<unknown>;
+      })(), timeoutMs, () => new Error('Drafts: the companion did not answer'));
+    } finally {
+      done();
+    }
   };
   return {
     async list() {
@@ -196,9 +223,17 @@ export function companionDrafts(doFetch: typeof fetch = (...args) => fetch(...ar
  * companion: whichever copy is newer wins, so work started on the TV opens on
  * a laptop. The companion is checked once; without it, this is the local store.
  */
-export function sharedDraftStore(local: DraftStore, remote: CompanionDrafts): DraftStore & { readonly shared: boolean } {
+export function sharedDraftStore(local: DraftStore, remote: CompanionDrafts, now: () => number = Date.now): DraftStore & { readonly shared: boolean } {
   let available: Promise<boolean> | null = null;
-  const online = () => (available ??= remote.list().then(() => true, () => false));
+  let failedAt: number | null = null;
+  // A companion that was briefly unreachable is tried again later, not written off for the visit.
+  const online = () => {
+    if (failedAt !== null && now() - failedAt >= REMOTE_RETRY_MS) {
+      available = null;
+      failedAt = null;
+    }
+    return (available ??= remote.list().then(() => true, () => { failedAt = now(); return false; }));
+  };
   const newer = (a: StoredDraft | undefined, b: StoredDraft | undefined) => (!a ? b : !b ? a : b.updatedAt > a.updatedAt ? b : a);
   let shared = false;
   return {

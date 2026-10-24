@@ -180,12 +180,12 @@ Chromium with `npx playwright install chromium`. CI runs all of them
   `events.ts` (placing events on dates), `programBin.ts` (arranging picked programs: order, passes, breaks after each), `fillerRoles.ts` (filler-list roles, spot lengths),
   `airKinds.ts` (station-log kinds: breaks, IDs, flex; hour summaries, break rundowns),
   `lineupCheck.ts` (the lineup check), `weekLog.ts` (several days: week view, logs, AI
-  summary), `guideGrid.ts` (guide grid layout and focus), `skins.ts` (the skin catalog and its validator), `tvRemote.ts` (watching like a cable box: remote keys, tuning, retries), and `programInfo.ts` for titles,
+  summary), `guideGrid.ts` (guide grid layout and focus), `skins.ts` (the skin catalog and its validator), `tvRemote.ts` (watching like a cable box: remote keys, tuning, retries), `loading.ts` (load phases, time limits, bounded waits), `rowWindow.ts` (which of a long day's rows are mounted), `lastChannel.ts` (`?channel=` and the last channel opened), and `programInfo.ts` for titles,
   artwork and logo URLs.
 - **Put HTTP and validation logic in `server/`:** `tunarrProxy.ts` (framework-free),
   `content.ts`, `admin.ts`, `logos.ts`, `smartCollection.ts`, `templateSchema.ts`,
   `templateStore.ts`, `fillerRoles.ts`, `fillerRoleStore.ts`, `mediaFolder.ts`, `jsonFile.ts`, `lineupRoutes.ts`, `ai.ts`, `upstream.ts`,
-  `watch.ts`, `settings.ts`, `stationIdStore.ts`, `snapshotStore.ts`, `sharedDraftStore.ts`, `scheduler.ts`, `channelLock.ts`, `lineupItems.ts`,
+  `watch.ts`, `programmingCache.ts`, `compression.ts`, `settings.ts`, `stationIdStore.ts`, `snapshotStore.ts`, `sharedDraftStore.ts`, `scheduler.ts`, `channelLock.ts`, `lineupItems.ts`,
   `slotSchedule.ts`, `recreateChannel.ts`, `lineupVersion.ts`, `auth.ts`, `hosts.ts` and `app.ts`. `lib/` and
   `app/` may import pure modules from `server/` (`lineupVersion`, `slotSchedule`,
   `smartCollection`, `templateSchema`, `fillerRoles`; types from any module) but never Node

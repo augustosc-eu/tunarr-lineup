@@ -15,8 +15,10 @@ import { handleWatchRoute, matchWatchRoute } from './watch.js';
 import { handleContentRoute, matchContentRoute, setChannelStartTime, type ContentRoute } from './content.js';
 import { channelLogo, type ExternalImageFetcher } from './logos.js';
 import { withChannelLock } from './channelLock.js';
+import { compressionEnabled } from './compression.js';
+import { createProgrammingCache, DEFAULT_PROGRAMMING_CACHE_MS, etagMatches, toView, type ProgrammingCache } from './programmingCache.js';
 import { lineupItemsError } from './lineupItems.js';
-import { callTunarr, fail, fetchUpstream, json, UpstreamError } from './upstream.js';
+import { callTunarr, fail, fetchUpstream, json, jsonHeaders, UpstreamError } from './upstream.js';
 import { buildSchedule, programPool, validateExtraPrograms, validateSeed } from './slotSchedule.js';
 import { findRedirectsTo, recreateChannel, validateRecreate, type RecreateMode } from './recreateChannel.js';
 
@@ -67,6 +69,10 @@ export type ProxyConfig = {
   stationIds?: StationIdStore;
   /** Settings changed from the desk (LINEUP_DATA_DIR/settings.json), over the environment. */
   settings?: SettingsStore;
+  /** Channel programming as the desk reads it: shared while in flight, kept for LINEUP_PROGRAMMING_CACHE_MS (default 0). */
+  programmingCache?: ProgrammingCache;
+  /** Compress JSON and the interface's files (LINEUP_COMPRESSION, default on). */
+  compression?: boolean;
 };
 
 export type ProxyRequest = {
@@ -133,6 +139,11 @@ function positiveInt(raw: string | undefined, fallback: number) {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function nonNegativeInt(raw: string | undefined, fallback: number) {
+  const parsed = raw?.trim() ? Number(raw) : NaN;
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
 export function createProxyConfig(env: Record<string, string | undefined>): ProxyConfig {
   const parsed = parseTunarrUrl(env.TUNARR_URL);
   const dataDir = path.resolve(env.LINEUP_DATA_DIR?.trim() || 'data');
@@ -150,6 +161,8 @@ export function createProxyConfig(env: Record<string, string | undefined>): Prox
     drafts: createSharedDraftStore(dataDir),
     stationIds: createStationIdStore(dataDir),
     settings: createSettingsStore(dataDir, env),
+    programmingCache: createProgrammingCache(nonNegativeInt(env.LINEUP_PROGRAMMING_CACHE_MS, DEFAULT_PROGRAMMING_CACHE_MS)),
+    compression: compressionEnabled(env.LINEUP_COMPRESSION),
   };
   const scheduler = env.LINEUP_SCHEDULER?.trim().toLowerCase();
   config.scheduler = createScheduler(config, { enabled: scheduler === 'on' || scheduler === 'true' || scheduler === '1', dataDir, snapshots: config.snapshots });
@@ -440,7 +453,14 @@ export async function handleTunarrApi(request: ProxyRequest, config: ProxyConfig
         }
         case 'programming': {
           const path = `/api/channels/${route.channelId}/programming`;
-          if (!write) return json(200, await callTunarr(config, target, 'GET', path));
+          if (!write) {
+            const load = () => callTunarr(config, target, 'GET', path);
+            const { view, source } = config.programmingCache ? await config.programmingCache.get(route.channelId, load) : { view: toView(await load()), source: 'tunarr' };
+            // Revalidated on every load (no-cache), never stored by shared caches (private).
+            const headers = { 'cache-control': 'private, no-cache', etag: view.etag, 'x-lineup-source': source };
+            if (etagMatches(header(request.headers, 'if-none-match'), view.etag)) return { status: 304, headers: { ...headers, 'x-content-type-options': 'nosniff' }, body: '' };
+            return { status: 200, headers: { ...jsonHeaders, ...headers }, body: view.body };
+          }
           const pending = write;
           return await withChannelLock(route.channelId, async () => {
             // Conditional save: Tunarr has no If-Match of its own, so check the

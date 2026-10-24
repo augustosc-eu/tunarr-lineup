@@ -7,6 +7,7 @@ import type { Template } from '../server/templateSchema';
 import type { ChannelSettings, ContentProgram, ListSummary, ManagedSource, MediaSource, NamedItem, NewMediaSource, SearchResult, SmartCollectionView, TranscodeProfile } from './library';
 import type { SchedulePreview, Slot, SlotSchedule } from './schedule';
 import type { ChannelRef, RecreateResult as RecreatedChannel } from '../server/recreateChannel';
+import { linkedSignal, nextPaint, type LoadPhase } from './loading';
 import type { ChangeSummary } from '../server/scheduler';
 import type { Snapshot, SnapshotSummary } from '../server/snapshotStore';
 import type { GuideChannel } from '../server/watch';
@@ -70,6 +71,87 @@ export type ConnectionState =
 
 type ErrorBody = { error?: { code?: string; message?: string; tunarrHost?: string } };
 
+/** How a read can be cancelled (a channel switch), bounded, and followed while it downloads. */
+export type RequestOptions = { signal?: AbortSignal; timeoutMs?: number; onPhase?: (phase: LoadPhase) => void };
+
+/** True for a request the desk cancelled itself; those are never shown as errors. */
+export const isAborted = (error: unknown) => error instanceof TunarrApiError && error.code === 'aborted';
+
+const PROGRESS_EVERY_MS = 120;
+
+/** The body as text, reporting bytes as they arrive when someone is listening. */
+async function readText(response: Response, onPhase?: RequestOptions['onPhase']) {
+  const reader = onPhase && response.body?.getReader ? response.body.getReader() : null;
+  if (!onPhase || !reader) return response.text();
+  // Content-Length counts compressed bytes; the stream gives decompressed ones.
+  const length = Number(response.headers.get('content-length'));
+  const total = !response.headers.get('content-encoding') && length > 0 ? length : undefined;
+  const decoder = new TextDecoder();
+  const parts: string[] = [];
+  let received = 0;
+  let reported = 0;
+  onPhase({ phase: 'downloading', received, total });
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    received += value.byteLength;
+    parts.push(decoder.decode(value, { stream: true }));
+    if (Date.now() - reported >= PROGRESS_EVERY_MS) {
+      reported = Date.now();
+      onPhase({ phase: 'downloading', received, total });
+    }
+  }
+  parts.push(decoder.decode());
+  return parts.join('');
+}
+
+async function request<T>(path: string, init?: RequestInit, options: RequestOptions = {}): Promise<T> {
+  const { signal, timedOut, done } = linkedSignal(options.signal ?? init?.signal ?? undefined, options.timeoutMs);
+  const stopped = () => (timedOut()
+    ? new TunarrApiError(0, 'client_timeout', 'The Lineup server took too long to answer. Check the connection, then try again.')
+    : new TunarrApiError(0, 'aborted', 'Cancelled.'));
+  try {
+    let response: Response;
+    try {
+      options.onPhase?.({ phase: 'connecting' });
+      response = await fetch(path, { credentials: 'same-origin', ...init, signal, headers: { accept: 'application/json', ...init?.headers } });
+    } catch {
+      if (signal.aborted) throw stopped();
+      throw new TunarrApiError(0, 'companion_unreachable', 'Could not reach the Lineup server.');
+    }
+    let text: string;
+    try {
+      text = await readText(response, options.onPhase);
+    } catch {
+      if (signal.aborted) throw stopped();
+      throw new TunarrApiError(0, 'companion_unreachable', 'The connection to the Lineup server dropped while loading.');
+    }
+    if (options.onPhase) {
+      options.onPhase({ phase: 'processing' });
+      await nextPaint();
+      if (signal.aborted) throw stopped();
+    }
+    let data: unknown = null;
+    if (text) {
+      try {
+        data = JSON.parse(text);
+      } catch {
+        data = undefined;
+      }
+    }
+    if (data === undefined) {
+      throw new TunarrApiError(response.status, 'companion_unavailable', 'This deployment does not include the Tunarr companion server.');
+    }
+    if (!response.ok) {
+      const error = (data as ErrorBody | null)?.error;
+      throw new TunarrApiError(response.status, error?.code ?? 'http_error', error?.message ?? `Request failed (HTTP ${response.status}).`, error?.tunarrHost);
+    }
+    return data as T;
+  } finally {
+    done();
+  }
+}
+
 async function readJson(response: Response): Promise<unknown> {
   const text = await response.text();
   if (!text) return null;
@@ -78,24 +160,6 @@ async function readJson(response: Response): Promise<unknown> {
   } catch {
     return undefined;
   }
-}
-
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  let response: Response;
-  try {
-    response = await fetch(path, { credentials: 'same-origin', ...init, headers: { accept: 'application/json', ...init?.headers } });
-  } catch {
-    throw new TunarrApiError(0, 'companion_unreachable', 'Could not reach the Lineup server.');
-  }
-  const data = await readJson(response);
-  if (data === undefined) {
-    throw new TunarrApiError(response.status, 'companion_unavailable', 'This deployment does not include the Tunarr companion server.');
-  }
-  if (!response.ok) {
-    const error = (data as ErrorBody | null)?.error;
-    throw new TunarrApiError(response.status, error?.code ?? 'http_error', error?.message ?? `Request failed (HTTP ${response.status}).`, error?.tunarrHost);
-  }
-  return data as T;
 }
 
 const mediaPath = (role: FillerRole, name: string) => `/api/tunarr/media-folder/${encodeURIComponent(role)}/${encodeURIComponent(name)}`;
@@ -126,14 +190,19 @@ export function uploadMediaFile(role: FillerRole, file: File, onProgress?: (frac
 
 const channelPath = (id: string) => `/api/tunarr/channels/${encodeURIComponent(id)}`;
 
-export async function checkHealth(): Promise<ConnectionState> {
+export async function checkHealth(options: Pick<RequestOptions, 'signal' | 'timeoutMs'> = {}): Promise<ConnectionState> {
+  const { signal, timedOut, done } = linkedSignal(options.signal, options.timeoutMs);
   let response: Response;
+  let data: (ErrorBody & { status?: string; tunarrHost?: string; channelCount?: number }) | null | undefined;
   try {
-    response = await fetch('/api/tunarr/health', { credentials: 'same-origin', headers: { accept: 'application/json' }, cache: 'no-store' });
+    response = await fetch('/api/tunarr/health', { credentials: 'same-origin', headers: { accept: 'application/json' }, cache: 'no-store', signal });
+    data = (await readJson(response)) as typeof data;
   } catch {
+    if (timedOut()) return { status: 'unreachable', message: 'The Lineup server took too long to answer.' };
     return { status: 'unreachable', message: 'Could not reach the Lineup server.' };
+  } finally {
+    done();
   }
-  const data = (await readJson(response)) as (ErrorBody & { status?: string; tunarrHost?: string; channelCount?: number }) | null | undefined;
   if (!data || typeof data.status !== 'string') {
     return { status: 'unavailable', message: 'This copy of Lineup is a hosted preview without the Tunarr companion server.' };
   }
@@ -147,8 +216,13 @@ export async function checkHealth(): Promise<ConnectionState> {
 }
 
 export const tunarrApi = {
-  channels: () => request<Channel[]>('/api/tunarr/channels'),
-  programming: (id: string) => request<Programming>(`${channelPath(id)}/programming`),
+  channels: (options?: RequestOptions) => request<Channel[]>('/api/tunarr/channels', undefined, options),
+  /**
+   * The whole lineup (saves and drafts work on all of it) with slim program
+   * details. The companion sends an ETag, so the browser revalidates rather
+   * than downloading an unchanged channel again.
+   */
+  programming: (id: string, options?: RequestOptions) => request<Programming>(`${channelPath(id)}/programming`, undefined, options),
   /** `version` is the programming version the edit was based on (If-Match). */
   saveProgramming: (id: string, body: ManualProgrammingRequest, version: string) =>
     request<Programming>(`${channelPath(id)}/programming`, {
@@ -256,6 +330,6 @@ export const tunarrApi = {
   schedulePlan: (group: 'save' | 'event' | 'overlay' | 'premiere', changes: PlannedChange[]) => request<ChangeSummary[]>('/api/tunarr/scheduled', jsonBody('POST', { group, changes })),
   cancelScheduled: (id: string) => request<unknown>(`/api/tunarr/scheduled/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   aiReview: (body: { channelName: string; summary: string; issues: string[] }) => request<Review>('/api/tunarr/ai/review', jsonBody('POST', body)),
-  lineup: (id: string, from: Date, to: Date) =>
-    request<ChannelLineup>(`${channelPath(id)}/lineup?${new URLSearchParams({ from: from.toISOString(), to: to.toISOString() })}`),
+  lineup: (id: string, from: Date, to: Date, options?: RequestOptions) =>
+    request<ChannelLineup>(`${channelPath(id)}/lineup?${new URLSearchParams({ from: from.toISOString(), to: to.toISOString() })}`, undefined, options),
 };

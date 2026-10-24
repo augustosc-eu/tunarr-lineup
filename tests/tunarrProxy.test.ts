@@ -135,12 +135,14 @@ describe('Tunarr proxy routes', () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  it('returns existing programming for a channel', async () => {
-    const programming = { lineup: [{ type: 'content', id: 'p1', duration: 60000, persisted: true }], programs: { p1: { title: 'X' } }, totalPrograms: 1, startTimeOffsets: [0] };
+  it('returns existing programming for a channel: the lineup untouched, programs reduced to their titles', async () => {
+    const programming = { lineup: [{ type: 'content', id: 'p1', duration: 60000, persisted: true }], programs: { p1: { type: 'content', id: 'p1', program: { title: 'X', type: 'movie', year: 2001, summary: 'Long text', artwork: [{ type: 'poster', path: 'http://10.0.0.2:32400/x' }] } } }, totalPrograms: 1, startTimeOffsets: [0] };
     const { calls, config } = setup(() => jsonResponse(programming));
     const response = await handleTunarrApi(get('/api/tunarr/channels/f6a4c3d2-1111-4222-8333-944455556666/programming'), config);
     expect(response.status).toBe(200);
-    expect(body(response)).toEqual(programming);
+    expect(body(response)).toEqual({ lineup: programming.lineup, programs: { p1: { title: 'X', type: 'movie', year: 2001 } }, totalPrograms: 1 });
+    expect(response.headers.etag).toMatch(/^W\/"[\w-]+"$/);
+    expect(response.headers['cache-control']).toBe('private, no-cache');
     expect(calls[0].url).toBe('http://tunarr:8000/api/channels/f6a4c3d2-1111-4222-8333-944455556666/programming');
   });
 

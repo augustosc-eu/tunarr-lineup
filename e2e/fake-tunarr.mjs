@@ -4,6 +4,7 @@
 import { createHash } from 'node:crypto';
 import { readdirSync } from 'node:fs';
 import http from 'node:http';
+import { syntheticProgramming } from './syntheticChannel.mjs';
 
 const PORT = Number(process.env.FAKE_TUNARR_PORT) || 18000;
 const MINUTE = 60_000;
@@ -97,6 +98,10 @@ function initialState() {
     saves: 0,
     // Stream paths the companion asked for (watching from the desk).
     streamRequests: [],
+    // Large channels added by /__test/large: their programs stay out of the shared map.
+    synthetic: {},
+    // Extra wait before answering a channel's programming (/__test/delay), to stand in for a slow Tunarr.
+    programmingDelayMs: 0,
   };
 }
 
@@ -157,6 +162,18 @@ http.createServer(async (req, res) => {
 
   if (path === '/__test/reset' && req.method === 'POST') {
     state = initialState();
+    return send(res, 200, { ok: true });
+  }
+  if (path === '/__test/large' && req.method === 'POST') {
+    const { items, spotMs, channelIndex = Object.keys(state.synthetic).length + 1 } = JSON.parse(await readBody(req));
+    const { channel, programming } = syntheticProgramming({ items, spotMs, channelIndex });
+    state.channels.push({ ...channel, transcodeConfigId: ids.profile });
+    state.lineups[channel.id] = programming.lineup;
+    state.synthetic[channel.id] = programming;
+    return send(res, 200, { id: channel.id, name: channel.name });
+  }
+  if (path === '/__test/delay' && req.method === 'POST') {
+    state.programmingDelayMs = JSON.parse(await readBody(req)).ms;
     return send(res, 200, { ok: true });
   }
   if (path === '/__test/state') return send(res, 200, { streamRequests: state.streamRequests, lineups: state.lineups, saves: state.saves, schedules: state.schedules, lastScheduleSave: state.lastScheduleSave, fillerLists: state.fillerLists, smartCollections: state.smartCollections, mediaSources: state.mediaSources, transcodeConfigs: state.transcodeConfigs, channels: state.channels.map((channel) => ({ ...channel, ...state.channelExtras[channel.id] })) });
@@ -377,6 +394,9 @@ http.createServer(async (req, res) => {
   }
   if (match[2] === 'programming') {
     const lineup = state.lineups[channel.id];
+    if (state.programmingDelayMs) await new Promise((resolve) => setTimeout(resolve, state.programmingDelayMs));
+    const synthetic = state.synthetic[channel.id];
+    if (synthetic) return send(res, 200, { ...synthetic, lineup, totalPrograms: lineup.length });
     return send(res, 200, { name: channel.name, number: channel.number, totalPrograms: lineup.length, lineup, programs: state.programs, startTimeOffsets: [], schedule: state.schedules[channel.id] });
   }
   const from = Date.parse(url.searchParams.get('from'));
