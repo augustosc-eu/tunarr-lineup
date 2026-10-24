@@ -134,12 +134,6 @@ public final class MainActivity extends Activity {
         }
     }
 
-    @Override
-    @SuppressWarnings("deprecation")
-    public void onBackPressed() {
-        back(); // Android 12 and earlier; newer versions use the callback above
-    }
-
     private void sendKey(int code) {
         web.requestFocus();
         web.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, code));
@@ -153,6 +147,11 @@ public final class MainActivity extends Activity {
             int page = code == KeyEvent.KEYCODE_CHANNEL_UP ? KeyEvent.KEYCODE_PAGE_UP : KeyEvent.KEYCODE_PAGE_DOWN;
             web.requestFocus();
             web.dispatchKeyEvent(new KeyEvent(event.getDownTime(), event.getEventTime(), event.getAction(), page, event.getRepeatCount()));
+            return true;
+        }
+        // Android 12 and earlier deliver Back as a key; newer versions use the callback in onCreate.
+        if (code == KeyEvent.KEYCODE_BACK && Build.VERSION.SDK_INT < 33) {
+            if (event.getAction() == KeyEvent.ACTION_UP && !event.isCanceled()) back();
             return true;
         }
         if (code == KeyEvent.KEYCODE_MENU) {
