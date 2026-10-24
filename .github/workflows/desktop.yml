@@ -63,6 +63,7 @@ jobs:
             desktop/release/*.exe
             desktop/release/*.AppImage
             desktop/release/*.deb
+            !desktop/release/*__uninstaller*
           if-no-files-found: error
           retention-days: 14
       - name: Attach to the release
@@ -72,5 +73,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           shopt -s nullglob
-          files=(desktop/release/*.{dmg,zip,exe,AppImage,deb})
+          files=()
+          for f in desktop/release/*.{dmg,zip,exe,AppImage,deb}; do
+            [[ $f == *__uninstaller* ]] || files+=("$f")
+          done
           gh release upload "$TAG" "${files[@]}" --clobber
