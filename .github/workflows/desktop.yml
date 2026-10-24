@@ -54,8 +54,6 @@ jobs:
         working-directory: desktop
       - run: npm run dist -- ${{ matrix.target }}
         working-directory: desktop
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - uses: actions/upload-artifact@v7
         with:
           name: tunarr-lineup-${{ runner.os }}

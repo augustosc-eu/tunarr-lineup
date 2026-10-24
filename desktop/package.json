@@ -20,6 +20,7 @@
   "build": {
     "appId": "io.github.augustosc-eu.tunarr-lineup",
     "productName": "Tunarr Lineup",
+    "publish": null,
     "artifactName": "Tunarr-Lineup-${version}-${os}-${arch}.${ext}",
     "directories": {
       "output": "release",
