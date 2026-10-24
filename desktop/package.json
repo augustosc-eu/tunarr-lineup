@@ -83,7 +83,8 @@
     },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "buildUniversalInstaller": false
     },
     "portable": {
       "artifactName": "Tunarr-Lineup-${version}-win-portable.${ext}"
