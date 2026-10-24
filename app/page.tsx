@@ -2097,7 +2097,7 @@ export default function Home() {
           <div className={`timeline ${timelineBusy ? 'loading' : ''}`}
             onDragOver={(event) => { if (binDrag.current && !lineup.length && !slotPreview) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; } }}
             onDrop={(event) => { if (binDrag.current && !lineup.length && !slotPreview) { event.preventDefault(); void dropFromBin(-1, 0, 'after'); } }}>
-            {!visibleInstances.length && <div className="empty" role={emptyCancel ? 'status' : undefined}><span>○</span><h2>{emptyTitle}</h2><p>{emptyText}</p>{emptyRetry && <button onClick={retry}>Try again</button>}{emptyCancel && <button onClick={cancelLoading}>Cancel</button>}</div>}
+            {!visibleInstances.length && <div className="empty" aria-live={emptyCancel ? 'polite' : undefined}><span>○</span><h2>{emptyTitle}</h2><p>{emptyText}</p>{emptyRetry && <button onClick={retry}>Try again</button>}{emptyCancel && <button onClick={cancelLoading}>Cancel</button>}</div>}
             {windowed && rows.start > 0 && <button className="row-window-edge" onClick={() => moveRows(-ROW_STEP)}>▲ Show earlier programs <small>{rows.start.toLocaleString('en')} more before {clockTimecode(visibleInstances[rows.start].start).slice(0, 5)}</small></button>}
             {visibleInstances.slice(rows.start, rows.end).map((instance, offset) => {
               const position = rows.start + offset;
