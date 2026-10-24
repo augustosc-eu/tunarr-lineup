@@ -1118,13 +1118,39 @@ input[type=checkbox] { width:1.25rem; height:1.25rem; margin:0; accent-color:var
 @media (max-width:760px) {
   .watch-body { grid-template-columns:1fr; }
   .tv-screen { width:100%; }
-  .tv-screen.guide-on { aspect-ratio:3 / 4; }
   .tv-screen.guide-on video { width:45%; }
   .cable-top { grid-template-columns:minmax(0,1fr) 46%; }
   .tv-banner { grid-template-columns:auto minmax(0,1fr); }.tv-banner-logo,.tv-banner-clock { display:none; }
-  .tv-remote { width:100%; max-height:none; display:flex; flex-wrap:wrap; justify-content:center; align-items:center; gap:0.75rem 1rem; border-radius:1rem; }
-  .remote-top { width:auto; }
-  .remote-brand { display:none; }
+  /* Phones: the dialog fills the screen, the picture stays on top and a compact
+     remote (keypad beside the arrows) takes the rest, scrolling only if it must. */
+  .overlay .watch-modal { height:calc(var(--vh) - var(--bar) - 0.75rem - env(safe-area-inset-bottom)); display:flex; flex-direction:column; overflow:hidden; }
+  .watch-modal .guide-head { flex-wrap:nowrap; gap:0.5rem; }
+  .watch-modal .guide-head h2 { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:1rem; }
+  .watch-signal { flex:none; white-space:nowrap; }
+  .watch-modal>.hint { display:none; }
+  .watch-body { flex:1; min-height:0; display:flex; flex-direction:column; gap:0.5rem; }
+  .tv-screen { flex:none; }
+  .tv-message { left:0.5rem; right:0.5rem; bottom:0.5rem; padding:0.375rem 0.5rem; font-size:0.8125rem; }
+  .tv-banner { left:2%; right:2%; bottom:3%; padding:0.25rem 0.5rem; gap:0.5rem; }
+  .tv-banner-channel,.tv-banner-now b { font-size:0.875rem; }.tv-banner-channel b { font-size:1.125rem; }.tv-banner small { font-size:0.75rem; }
+  .tv-remote { flex:1; min-height:0; width:100%; max-height:none; padding:0.625rem 0.5rem; display:grid; grid-template-columns:auto auto; grid-template-areas:"top row" "pad dpad" "rockers rockers"; justify-content:space-evenly; align-content:space-evenly; align-items:center; gap:0.625rem 0.75rem; border-radius:1rem; }
+  .remote-top { grid-area:top; width:auto; justify-content:center; }
+  .remote-led,.remote-brand { display:none; }
+  .remote-pad { grid-area:pad; }.remote-dpad { grid-area:dpad; }
+  .remote-row { grid-area:row; justify-content:center; }
+  .remote-key.pill { min-width:3.5rem; }
+  .remote-rockers { grid-area:rockers; justify-self:center; grid-template-columns:auto auto auto; gap:0.75rem; }
+  /* Sideways rockers, minus on the left, so the bottom row is a single line. */
+  .rocker { grid-auto-flow:column; align-items:center; gap:0.375rem; }
+  .rocker .remote-key:first-child { order:1; }.rocker .remote-key:last-child { order:-1; }
+  /* With the guide open it gets the height: no keypad or legend (cells are tapped),
+     and the rockers stand upright beside the arrows. */
+  .tv-screen.guide-on { flex:1 1 0; min-height:0; aspect-ratio:auto; }
+  .tv-screen.guide-on .cable-legend { display:none; }
+  .tv-remote.guide-open { flex:none; grid-template-areas:"top row" "dpad rockers"; }
+  .tv-remote.guide-open .remote-pad { display:none; }
+  .tv-remote.guide-open .rocker { grid-auto-flow:row; gap:0.125rem; }
+  .tv-remote.guide-open .rocker .remote-key { order:0; }
   .guide-row { grid-template-columns:7.5rem minmax(0,1fr); }
   .guide-channel .channel-logo { display:none; }
   .guide-track { min-width:28rem; }
@@ -1162,6 +1188,16 @@ input[type=checkbox] { width:1.25rem; height:1.25rem; margin:0; accent-color:var
 @media (max-width:360px) { .brand-name { display:none; } }
 /* Landscape phones: the channel list needs the rail's full height. */
 @media (max-height:500px) { .rail-note { display:none; } }
+/* Landscape phones watching: the picture as tall as the dialog allows, the remote beside it. */
+@media (max-width:760px) and (max-height:500px) and (orientation:landscape) {
+  .watch-body { flex-direction:row; }
+  .tv-screen,.tv-screen.guide-on { flex:none; height:100%; width:auto; max-width:65%; aspect-ratio:16 / 9; }
+  .tv-screen.guide-on video { width:28%; }
+  .cable-top { grid-template-columns:minmax(0,1fr) 28%; }
+  .cable-info { padding:0.125rem 0.375rem; font-size:0.75rem; line-height:1.2; }.cable-info h3 { font-size:0.9375rem; }
+  .tv-remote,.tv-remote.guide-open { flex:1; min-width:0; overflow:auto; }
+  .tv-remote { grid-template-areas:"top row" "dpad pad" "rockers rockers"; }
+}
 
 /* Touch screens: larger hit targets and a taller menu bar. Inputs stay at 16px or
    more so phones don't zoom the page when one is focused. */
