@@ -8,6 +8,8 @@ were renamed 2026.10.1 and 2026.10.2.
 
 ## [Unreleased]
 
+## [2026.10.16] - 2026-10-24
+
 ### Changed
 
 - **Large channels open much faster, especially on phones and remote connections.** The Lineup server now sends only the program details the desk shows, compresses its answers, and lets the browser skip downloading a channel that hasn't changed. A 20,000-item channel goes from 7.8 MB to about 110–210 KB. Long days show 200 rows at a time; arrow keys move through all of them, and **Show earlier/later programs** pages through. The programming answer no longer includes Tunarr's full program metadata or `startTimeOffsets`.
@@ -236,7 +238,8 @@ First public release.
   reaches Tunarr through a narrow allowlisted proxy. Optional HTTP Basic
   sign-in and host-name checks against DNS rebinding.
 
-[Unreleased]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.15...HEAD
+[Unreleased]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.16...HEAD
+[2026.10.16]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.15...v2026.10.16
 [2026.10.15]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.14...v2026.10.15
 [2026.10.14]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.13...v2026.10.14
 [2026.10.13]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.12...v2026.10.13
