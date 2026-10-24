@@ -51,7 +51,7 @@ jobs:
             echo "::warning::ANDROID_KEYSTORE_BASE64 is not set: the APK is signed with a debug key and can't update an installed copy."
           fi
       - name: Build the APK
-        run: ./gradlew testReleaseUnitTest assembleRelease
+        run: ./gradlew testDebugUnitTest assembleRelease  # AGP 9 makes unit-test tasks for debug only
         working-directory: android
         env:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
