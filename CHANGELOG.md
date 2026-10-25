@@ -8,6 +8,8 @@ were renamed 2026.10.1 and 2026.10.2.
 
 ## [Unreleased]
 
+## [2026.10.17] - 2026-10-25
+
 ### Added
 
 - **Setup wizard.** A fresh Lineup needs no environment variables: open it, type the setup code from the server's log (`docker logs tunarr-lineup`), and the wizard finds Tunarr (or you type its address and test it), asks for a user name and password, and optionally sets up AI, the upload folder and scheduled changes. Everything is kept by the server in `config.json` in its data folder. The desktop app opens the wizard with its code already filled in.
@@ -18,6 +20,7 @@ were renamed 2026.10.1 and 2026.10.2.
 - **Sign-in is always on.** Lineup asks for the user name and password from setup on every device. The password is stored only as a salted hash. The desktop app's own window signs in by itself.
 - **Environment variables are read once.** On the first start with this version, `TUNARR_URL`, `LINEUP_PASSWORD`, the `LINEUP_AI_*` and `LINEUP_MEDIA_*` variables and the other settings are copied into `config.json` and ignored after that; the log lists any still set. An install with `TUNARR_URL` and `LINEUP_PASSWORD` keeps working without the wizard; one without a password opens the wizard with Tunarr's address filled in. `HOST`, `PORT` and `LINEUP_DATA_DIR` still come from the environment.
 - The AI model moved from the tuning settings to the AI section of Server Settings (a model saved there is moved).
+- Updated Next.js (16.4.3), Vite (8.3.5) and the desktop app's Electron (44.9.1).
 
 ## [2026.10.16] - 2026-10-24
 
@@ -249,7 +252,8 @@ First public release.
   reaches Tunarr through a narrow allowlisted proxy. Optional HTTP Basic
   sign-in and host-name checks against DNS rebinding.
 
-[Unreleased]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.16...HEAD
+[Unreleased]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.17...HEAD
+[2026.10.17]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.16...v2026.10.17
 [2026.10.16]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.15...v2026.10.16
 [2026.10.15]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.14...v2026.10.15
 [2026.10.14]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.13...v2026.10.14

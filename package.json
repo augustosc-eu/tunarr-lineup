@@ -1,6 +1,6 @@
 {
   "name": "tunarr-lineup",
-  "version": "2026.10.16",
+  "version": "2026.10.17",
   "description": "A TV-friendly, skinnable programming desk for Tunarr channels (Mac OS 9 Platinum by default)",
   "license": "MIT",
   "repository": {
@@ -48,7 +48,7 @@
     "@vitejs/plugin-react": "6.1.2",
     "@vitejs/plugin-rsc": "0.5.35",
     "eslint": "9.39.4",
-    "eslint-config-next": "16.3.8",
+    "eslint-config-next": "16.4.3",
     "fake-indexeddb": "^6.2.5",
     "jsdom": "^26.1.0",
     "react-server-dom-webpack": "19.3.0",
@@ -56,12 +56,13 @@
     "typescript": "5.9.3",
     "vinext": "1.0.1",
     "vite": "8.3.5",
-    "vitest": "^4.1.11",
+    "vitest": "^4.1.12",
     "wrangler": "4.147.0"
   },
   "type": "module",
   "overrides": {
     "fflate": "^0.7.5",
-    "sharp": "^0.35.5"
+    "sharp": "^0.35.5",
+    "undici": "^7.30.1"
   }
 }
