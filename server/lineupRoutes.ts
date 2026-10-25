@@ -110,7 +110,7 @@ export function roleLibraries(sources: unknown, folder: MediaFolder) {
   return found;
 }
 
-/** `target` is null when TUNARR_URL isn't set; only the AI route needs it (the proxy checks). */
+/** `target` is null when Tunarr's address isn't set; only the AI route needs it (the proxy checks). */
 export type SyncResult = {
   /** The upload folder was just added to Tunarr. */
   connected: boolean;
@@ -216,11 +216,11 @@ export async function handleLineupRoute(route: LineupRoute, { config, target, me
   const store = config.templates as TemplateStore | undefined;
   const roles = config.fillerRoles as FillerRoleStore | undefined;
   const media = config.mediaFolder && !('off' in config.mediaFolder) ? config.mediaFolder : undefined;
-  const mediaOff = () => fail(503, 'media_folder_off', config.mediaFolder && 'off' in config.mediaFolder ? config.mediaFolder.off : 'The media folder is off. Set LINEUP_MEDIA_DIR on the Lineup server to upload files.');
+  const mediaOff = () => fail(503, 'media_folder_off', config.mediaFolder && 'off' in config.mediaFolder ? config.mediaFolder.off : 'The media folder is off. Choose one under Setup → Server Settings to upload files.');
   try {
     switch (route.name) {
       case 'media-folder': {
-        if (!media) return json(200, { enabled: false, message: config.mediaFolder && 'off' in config.mediaFolder ? config.mediaFolder.off : 'Uploads are off: LINEUP_MEDIA_DIR is not set on the Lineup server.' });
+        if (!media) return json(200, { enabled: false, message: config.mediaFolder && 'off' in config.mediaFolder ? config.mediaFolder.off : 'Uploads are off: no media folder is set up. Choose one under Setup → Server Settings.' });
         const files = await media.list();
         // Which folders Tunarr already reads. Optional: the files still show without Tunarr.
         let libraries: ReturnType<typeof roleLibraries> = {};
@@ -231,7 +231,7 @@ export async function handleLineupRoute(route: LineupRoute, { config, target, me
           } catch (error) {
             tunarrError = error instanceof UpstreamError ? error.message : 'Tunarr could not be reached.';
           }
-        } else tunarrError = 'TUNARR_URL is not set on the Lineup server.';
+        } else tunarrError = 'Tunarr’s address is not set up on the Lineup server.';
         return json(200, {
           enabled: true,
           maxBytes: media.maxBytes,
@@ -398,7 +398,7 @@ export async function handleLineupRoute(route: LineupRoute, { config, target, me
       }
       case 'ai-template': {
         const ai = config.ai;
-        if (!target) return fail(503, 'not_configured', 'TUNARR_URL is not set on the Lineup server.');
+        if (!target) return fail(503, 'not_configured', 'Tunarr’s address is not set up on the Lineup server.');
         if (!ai || 'off' in ai) return fail(503, 'ai_off', ai && 'off' in ai ? ai.off : 'AI is not set up on this server.');
         if (!isObject(body)) return fail(400, 'invalid_request', 'Send { "prompt", "channelId"?, "includeLibrary"?, "baseTemplate"? }.');
         const prompt = typeof body.prompt === 'string' ? body.prompt.trim() : '';

@@ -712,6 +712,24 @@ input[type=checkbox] { width:1.25rem; height:1.25rem; margin:0; accent-color:var
 .channel-settings-modal:before { content:'Channel Settings'; }
 .server-settings-modal { width:min(52rem,100%); }
 .server-settings-modal:before { content:'Server Settings'; }
+/* The setup wizard (SetupWizard.tsx): first start, before the desk. */
+.setup-overlay { z-index:70; }
+.setup-modal { width:min(40rem,100%); }
+.setup-modal:before { content:'Set Up Lineup'; }
+.setup-steps { margin:0.5rem 0 0.625rem; padding:0; list-style:none; display:flex; flex-wrap:wrap; gap:0.25rem; counter-reset:setup-step; }
+.setup-steps li { counter-increment:setup-step; padding:0.125rem 0.5rem; color:var(--text-muted); background:var(--surface); border:1px solid var(--line-soft); font-size:0.8125rem; }
+.setup-steps li:before { content:counter(setup-step) '. '; }
+.setup-steps li.done { color:var(--text-2); }
+.setup-steps li.current { color:var(--selection-text); background:var(--selection); border-color:var(--selection-border); font-weight:700; }
+.setup-code { font-family:var(--font-mono); font-size:1.125rem !important; letter-spacing:0.125rem; text-transform:uppercase; }
+.setup-found { margin-top:0.625rem; display:flex; flex-wrap:wrap; align-items:center; gap:0.375rem; }
+.setup-found .subtle { margin:0; flex-basis:100%; }
+.setup-row { margin-top:0.5rem; display:flex; flex-wrap:wrap; align-items:center; gap:0.5rem; }
+.setup-ok { color:var(--success); font-size:0.875rem; font-weight:700; }
+.setup-bad { color:var(--danger-text); font-size:0.875rem; }
+.setup-check { margin-top:0.625rem; display:flex; align-items:center; gap:0.375rem; font-size:0.875rem; }
+.setup-group { display:grid; gap:0 0.75rem; grid-template-columns:repeat(auto-fit,minmax(16rem,1fr)); }
+.setup-group > .subtle { grid-column:1 / -1; }
 .server-settings { display:grid; gap:0.5rem; }
 .server-setting { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:end; gap:0.125rem 0.75rem; padding:0.375rem 0.5rem; background:var(--surface); border:1px solid var(--line); box-shadow:var(--well); }
 .server-setting .field { margin-top:0; }

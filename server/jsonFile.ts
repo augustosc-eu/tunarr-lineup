@@ -22,8 +22,8 @@ export type JsonFile = {
   remove(): Promise<void>;
 };
 
-/** `what` names the contents in errors ("saved templates", "filler-list roles"). */
-export function createJsonFile(dir: string, name: string, what: string): JsonFile {
+/** `what` names the contents in errors ("saved templates", "filler-list roles"); `mode` 0o600 keeps a file owner-only. */
+export function createJsonFile(dir: string, name: string, what: string, { mode }: { mode?: number } = {}): JsonFile {
   const file = path.join(dir, name);
   let queue: Promise<unknown> = Promise.resolve();
   return {
@@ -52,7 +52,7 @@ export function createJsonFile(dir: string, name: string, what: string): JsonFil
       try {
         await mkdir(dir, { recursive: true });
         const tmp = `${file}.${randomUUID()}.tmp`;
-        await writeFile(tmp, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
+        await writeFile(tmp, `${JSON.stringify(data, null, 2)}\n`, { encoding: 'utf8', mode });
         await rename(tmp, file);
       } catch {
         throw new StoreError(500, 'store_unwritable', `The ${what} could not be saved. Check that LINEUP_DATA_DIR (${dir}) is writable.`);

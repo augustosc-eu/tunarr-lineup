@@ -2,13 +2,16 @@
 // Desktop shell for Tunarr Lineup (D58). Runs the companion (dist-server) in
 // Electron's own Node and shows the desk in a window that is an ordinary,
 // sandboxed browser of the companion's origin: the page still calls only
-// same-origin /api/tunarr/*, and TUNARR_URL lives in lineup.env, read here and
-// handed to the companion process, never to the window (invariant 1).
+// same-origin /api/tunarr/*. Tunarr's address and the other settings are set in
+// the setup wizard and kept by the companion (config.json, D62); lineup.env only
+// says where it listens (an older one is imported once). The window signs in
+// with a per-launch app key and opens the wizard with its setup code.
 import { app, BrowserWindow, dialog, Menu, shell, utilityProcess } from 'electron';
 import { createWriteStream, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import { createServer } from 'node:net';
 import path from 'node:path';
-import { companionEnv, configuredPort, ENV_TEMPLATE, parseLineupEnv } from './lineupEnv.mjs';
+import { APP_USER, companionEnv, configuredPort, ENV_TEMPLATE, newSetupCode, parseLineupEnv } from './lineupEnv.mjs';
 
 // Drafts and the skin live in the window's storage, which is per origin, so the
 // port is kept between launches and only changes when it's taken.
@@ -29,6 +32,9 @@ let origin = '';
 /** @type {Record<string, string>} */
 let fileEnv = {};
 let quitting = false;
+// Never written anywhere: the companion gets them in its environment, the window only the code.
+const appKey = randomBytes(24).toString('base64url');
+const setupCode = newSetupCode();
 
 function readState() {
   try {
@@ -92,7 +98,7 @@ async function startCompanion() {
   const child = utilityProcess.fork(path.join(companionRoot, 'dist-server', 'main.js'), [], {
     serviceName: 'Tunarr Lineup server',
     stdio: 'pipe',
-    env: companionEnv({ processEnv: process.env, fileEnv, dataDir: path.join(userData, 'data'), staticDir: path.join(companionRoot, 'dist-local'), port }),
+    env: companionEnv({ processEnv: process.env, fileEnv, dataDir: path.join(userData, 'data'), staticDir: path.join(companionRoot, 'dist-local'), port, appKey, setupCode }),
   });
   child.stdout?.pipe(log);
   child.stderr?.pipe(log);
@@ -164,8 +170,11 @@ function createWindow() {
   });
   win.once('ready-to-show', () => win?.show());
   win.on('closed', () => { win = null; });
-  win.loadURL(origin);
+  win.loadURL(startUrl());
 }
+
+/** The desk, with the setup code for the wizard (the page drops it from the address). */
+const startUrl = () => `${origin}/#setup=${setupCode}`;
 
 async function restart() {
   await stopCompanion();
@@ -174,7 +183,7 @@ async function restart() {
   } catch (error) {
     return showStartError(error);
   }
-  if (win) win.loadURL(origin);
+  if (win) win.loadURL(startUrl());
   else createWindow();
 }
 
@@ -217,11 +226,11 @@ if (!app.requestSingleInstanceLock()) {
     win.focus();
   });
 
-  // With LINEUP_PASSWORD set, sign the window in to its own companion only.
+  // Sign the window in to its own companion only, with this launch's app key.
   app.on('login', (event, _contents, details, _authInfo, callback) => {
-    if (!isOwn(details.url) || !fileEnv.LINEUP_PASSWORD) return;
+    if (!isOwn(details.url)) return;
     event.preventDefault();
-    callback(fileEnv.LINEUP_USERNAME || 'lineup', fileEnv.LINEUP_PASSWORD);
+    callback(APP_USER, appKey);
   });
 
   app.whenReady().then(async () => {

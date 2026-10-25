@@ -13,23 +13,58 @@ TV with a remote as well as with a mouse and keyboard.
 ## Quick start
 
 You need a running [Tunarr](https://tunarr.com) server. Run the companion next
-to it and point `TUNARR_URL` at Tunarr's address as the container sees it:
+to it; there is nothing to configure beforehand:
 
 ```sh
-docker run -d --name tunarr-lineup -p 3000:3000 \
-  -e TUNARR_URL=http://192.168.1.50:8000 \
-  -v lineup-data:/data \
+docker run -d --name tunarr-lineup -p 3000:3000 -v lineup-data:/data \
   ghcr.io/augustosc-eu/tunarr-lineup:latest
+docker logs tunarr-lineup    # shows the one-time setup code
 ```
 
-Open **http://localhost:3000** (or the machine's IP address). The image runs on
-amd64 and arm64. Lineup can rewrite your channels, so read [Sign-in](#sign-in)
-before making it reachable by anyone else. To run Tunarr and Lineup together,
+Open **http://localhost:3000** (or the machine's IP address) and follow the
+[setup wizard](#first-start-the-setup-wizard): type the setup code, let it find
+Tunarr (or type its address), and choose a user name and password. The image
+runs on amd64 and arm64. To run Tunarr and Lineup together,
 see [Run with Docker Compose](#run-with-docker-compose-recommended). Prefer an
 app? There is a [desktop app](#desktop-app-macos-windows-linux) for macOS,
 Windows and Linux, an [Android app](#android-app-phones-tablets-android-tv) for phones, tablets
 and Android TV, and the desk [installs to the home screen](#ipad-android-and-tv-browsers-install-to-the-home-screen)
 on iPad.
+
+## First start: the setup wizard
+
+Lineup keeps its own settings in `config.json` in its data folder
+(`LINEUP_DATA_DIR`, `/data` in Docker), not in environment variables. On the
+first start the desk opens a wizard:
+
+1. **Setup code.** The server prints a one-time code in its log (`docker logs
+   tunarr-lineup`, or the terminal it runs in). Until setup is done, only someone
+   with that code can configure the server, so nobody else on your network can
+   claim it. Five wrong codes lock the wizard for a minute.
+2. **Tunarr.** Lineup looks in the usual places (`localhost:8000`,
+   `tunarr:8000` in Docker Compose, `host.docker.internal:8000`, and the Docker
+   host) and lists what answers; or type the address as the Lineup server reaches
+   it, then **Test connection**. Only the Lineup server ever uses this address.
+3. **Sign-in.** A user name and password (at least 8 characters). Sign-in is
+   always on; the password is stored only as a salted scrypt hash.
+4. **Extras (optional).** The AI assistant (provider, key, model, address), the
+   upload folder, scheduled changes and public logos.
+
+Afterwards the browser asks you to sign in. Change any of it later under
+**Setup → Server Settings…**. API keys and passwords are never shown again; a
+key you don't retype is kept.
+
+`config.json` is written owner-only (`0600`); keep the data folder private, as
+it holds the AI key and Tunarr's address. Delete `config.json` to run the
+wizard again.
+
+**Upgrading from environment variables.** On the first start with this
+version, `TUNARR_URL`, `LINEUP_PASSWORD`, `LINEUP_USERNAME`, the `LINEUP_AI_*`
+and `LINEUP_MEDIA_*` variables, the timeouts, `LINEUP_SCHEDULER` and
+`LINEUP_EXTERNAL_LOGOS` are copied into `config.json` (the password as a hash)
+and ignored from then on; the log says which. An install that already had
+`TUNARR_URL` and `LINEUP_PASSWORD` skips the wizard. One without a password
+opens the wizard with Tunarr's address filled in.
 
 ## Programming desk features
 
@@ -63,7 +98,7 @@ on iPad.
   - flex time
   - redirects to another channel
 
-  **Program bin** (`A`, or **▦ Program Bin** above the lineup) shows your library as posters beside the lineup. Pick movies, episodes or whole shows, choose the order (as picked, episode order, shuffle, or shuffle shows with each show's episodes in order), how many passes and what airs after each program (flex or a commercial break, optionally opened by a station ID), then place them after or before the selection, at the end, exactly at a time, or in recurring time slots (say weekdays at 20:00, one episode or as many as fit until 21:00). A **premiere** (At a time… → Just before they start, with `LINEUP_SCHEDULER=on`) is added by the Lineup server shortly before it starts, so none of it airs earlier. **Slot schedule…** puts whole shows into the channel's time-slot schedule on chosen days, each airing continuing with the next episode, and opens the slot editor to preview it. Or choose the spot with ↑ ↓ and OK, or drag a poster onto a row of the schedule.
+  **Program bin** (`A`, or **▦ Program Bin** above the lineup) shows your library as posters beside the lineup. Pick movies, episodes or whole shows, choose the order (as picked, episode order, shuffle, or shuffle shows with each show's episodes in order), how many passes and what airs after each program (flex or a commercial break, optionally opened by a station ID), then place them after or before the selection, at the end, exactly at a time, or in recurring time slots (say weekdays at 20:00, one episode or as many as fit until 21:00). A **premiere** (At a time… → Just before they start, with scheduled changes on in Server Settings) is added by the Lineup server shortly before it starts, so none of it airs earlier. **Slot schedule…** puts whole shows into the channel's time-slot schedule on chosen days, each airing continuing with the next episode, and opens the slot editor to preview it. Or choose the spot with ↑ ↓ and OK, or drag a poster onto a row of the schedule.
 
   **Remove** (or `Delete`) takes items out. Flex, breaks and redirects have an adjustable length in the inspector. Every edit is in the edit list and the stored draft. The dialog says when inserted items will air. Because a manual lineup repeats from the channel's start time, a longer lineup moves later passes; tick **Keep what's on air in place** to have the companion move the start time on save so the current pass keeps its times.
 - **Guide grid.** **View → Guide Grid** (or `G`) shows every channel down the side and three hours across, like a cable box, from Tunarr's own guide. Arrows move between programs (paging at the edges), OK opens the program in the desk, `L` watches that channel. Tick **By network** to group channels by their group title.
@@ -75,7 +110,7 @@ on iPad.
 - **Marathons.** **Edit → Marathon…** puts a season (or any run of programs) on a date, back to back with a commercial break between episodes, opening each break with a station ID if you like.
 - **Across channels.** **Edit → Copy Selection to Channel…** copies the selected block to another channel (at a time, its start or its end); **Edit → Simulcast Selection on Network…** puts a redirect to this channel at the same time on every channel with the same group title (the network); **Channel → Share Commercials With Network…** gives them this channel's commercial settings. Each channel is saved with its own conditional save.
 - **Snapshots.** The Lineup server keeps each channel's lineup as it was before every save, reset and scheduled change (the last 15). **File → Snapshots, Export and Import…** restores one into the desk as an edit, takes one now, or exports and imports a lineup as a file.
-- **Scheduled changes** (with `LINEUP_SCHEDULER=on`): **File → Save Later…** saves the desk's lineup on a date; **File → Save as Seasonal Overlay…** puts a lineup (your edits, or a slot preview, such as the Halloween and Christmas templates) in on one date and brings the old one back on another; **Schedule Event → Air once** airs an event once and then puts back what it replaced. The Lineup server saves each one when it's due, only if the channel is as it was when planned; otherwise it's skipped and says why. **File → Scheduled Changes…** lists and cancels them.
+- **Scheduled changes** (turned on in setup or Server Settings): **File → Save Later…** saves the desk's lineup on a date; **File → Save as Seasonal Overlay…** puts a lineup (your edits, or a slot preview, such as the Halloween and Christmas templates) in on one date and brings the old one back on another; **Schedule Event → Air once** airs an event once and then puts back what it replaced. The Lineup server saves each one when it's due, only if the channel is as it was when planned; otherwise it's skipped and says why. **File → Scheduled Changes…** lists and cancels them.
 - **Library browser.** Browse or search any media source and library Tunarr has indexed (Plex, Jellyfin, Emby, local folders), and drill into shows and seasons. Libraries of up to 1,000 items are listed in episode order (by the number in each title, whatever its language) and searched by number as you type: "capitulo 2" finds "Chapter 2". Picks are listed before you insert them.
 - **Commercials and filler.**
   - **Setup → Filler Folders…** keeps station IDs, commercials, promos and bumpers as video files in folders, and Lineup picks them up by itself: the upload folder (one subfolder per role; upload, move or delete files from the desk), folders you add with a role, and any Tunarr library named for a role ("Commercials", "station-ids"). Each becomes a filler list with its role, and the list follows its folder after every Tunarr scan. See [Filler folders](#filler-folders) for the Docker setup.
@@ -138,35 +173,38 @@ reachable:
 ```
 browser ──▶ http://<host>:3000            (Lineup companion: UI + /api/tunarr/*)
                      │
-                     └──▶ TUNARR_URL       (e.g. http://tunarr:8000, server side only)
+                     └──▶ Tunarr           (e.g. http://tunarr:8000, server side only)
 ```
 
-The browser only ever requests the companion's own origin. `TUNARR_URL` is
-read by the server at runtime. It is not part of the client bundle or the
-Docker image. The served page also sends a `connect-src 'self'` Content
+The browser only ever requests the companion's own origin. Tunarr's address is
+typed once in the setup wizard and kept by the server in `config.json`; the
+companion is the only thing that uses it. It is not part of the client bundle or
+the Docker image. The served page also sends a `connect-src 'self'` Content
 Security Policy, so the browser could not reach Tunarr directly even by
 accident.
 
 ### Proxy routes
 
+`{tunarr}` is Tunarr's address from setup.
+
 | Companion route | Tunarr API |
 | --- | --- |
-| `GET /api/tunarr/health` | `GET {TUNARR_URL}/api/channels` (reports reachability and channel count) |
-| `GET /api/tunarr/channels` | `GET {TUNARR_URL}/api/channels` |
-| `GET /api/tunarr/channels/:id/programming` | `GET {TUNARR_URL}/api/channels/:id/programming` |
-| `POST /api/tunarr/channels/:id/programming` | `POST {TUNARR_URL}/api/channels/:id/programming` |
-| `GET /api/tunarr/channels/:id/lineup?from=…&to=…` | `GET {TUNARR_URL}/api/channels/:id/lineup` |
-| `GET /api/tunarr/channels/:id/schedule` | `GET {TUNARR_URL}/api/channels/:id/schedule` (slot schedule with show and collection names) |
-| `POST /api/tunarr/channels/:id/schedule-preview` | `POST {TUNARR_URL}/api/channels/:id/schedule-slots` or `/schedule-time-slots` (generates a lineup; saves nothing) |
-| `GET /api/tunarr/media-sources` | `GET {TUNARR_URL}/api/media-sources` (ids, names, types and enabled libraries only; addresses and accounts are dropped) |
-| `POST /api/tunarr/library/search` | `POST {TUNARR_URL}/api/programs/search` (built from `{ mediaSourceId, libraryId?, text?, type?, parentId?, page?, limit? }`) |
-| `GET /api/tunarr/programs/:id/descendants` | `GET {TUNARR_URL}/api/programs/:id/descendants` (every program in a show or season) |
+| `GET /api/tunarr/health` | `GET {tunarr}/api/channels` (reports reachability and channel count) |
+| `GET /api/tunarr/channels` | `GET {tunarr}/api/channels` |
+| `GET /api/tunarr/channels/:id/programming` | `GET {tunarr}/api/channels/:id/programming` |
+| `POST /api/tunarr/channels/:id/programming` | `POST {tunarr}/api/channels/:id/programming` |
+| `GET /api/tunarr/channels/:id/lineup?from=…&to=…` | `GET {tunarr}/api/channels/:id/lineup` |
+| `GET /api/tunarr/channels/:id/schedule` | `GET {tunarr}/api/channels/:id/schedule` (slot schedule with show and collection names) |
+| `POST /api/tunarr/channels/:id/schedule-preview` | `POST {tunarr}/api/channels/:id/schedule-slots` or `/schedule-time-slots` (generates a lineup; saves nothing) |
+| `GET /api/tunarr/media-sources` | `GET {tunarr}/api/media-sources` (ids, names, types and enabled libraries only; addresses and accounts are dropped) |
+| `POST /api/tunarr/library/search` | `POST {tunarr}/api/programs/search` (built from `{ mediaSourceId, libraryId?, text?, type?, parentId?, page?, limit? }`) |
+| `GET /api/tunarr/programs/:id/descendants` | `GET {tunarr}/api/programs/:id/descendants` (every program in a show or season) |
 | `GET`/`POST /api/tunarr/filler-lists`, `PUT`/`DELETE …/:id`, `GET …/:id/programs` | Tunarr's filler-list API |
 | `GET`/`POST /api/tunarr/custom-shows`, `PUT`/`DELETE …/:id`, `GET …/:id/programs` | Tunarr's custom-show API (playlist sync settings are preserved on update) |
-| `GET /api/tunarr/smart-collections` | `GET {TUNARR_URL}/api/smart_collections` |
-| `GET`/`PUT /api/tunarr/channels/:id/settings` | `GET`/`PUT {TUNARR_URL}/api/channels/:id` (only programming-related fields can change; everything else is kept as Tunarr has it) |
-| `GET /api/tunarr/channels/:id/logo?v=…` | The channel's `icon.path`: Tunarr-hosted logos (`/images/…`, whatever host they were saved under) from `TUNARR_URL`; other logos from their public site through a guarded fetch. `204` when there is no usable logo |
-| `POST /api/tunarr/channels/create`, `DELETE /api/tunarr/channels/:id` | `POST {TUNARR_URL}/api/channels` (`new` with Tunarr's defaults, or `copy`), `DELETE {TUNARR_URL}/api/channels/:id` |
+| `GET /api/tunarr/smart-collections` | `GET {tunarr}/api/smart_collections` |
+| `GET`/`PUT /api/tunarr/channels/:id/settings` | `GET`/`PUT {tunarr}/api/channels/:id` (only programming-related fields can change; everything else is kept as Tunarr has it) |
+| `GET /api/tunarr/channels/:id/logo?v=…` | The channel's `icon.path`: Tunarr-hosted logos (`/images/…`, whatever host they were saved under) from `{tunarr}`; other logos from their public site through a guarded fetch. `204` when there is no usable logo |
+| `POST /api/tunarr/channels/create`, `DELETE /api/tunarr/channels/:id` | `POST {tunarr}/api/channels` (`new` with Tunarr's defaults, or `copy`), `DELETE {tunarr}/api/channels/:id` |
 | `GET /api/tunarr/transcode-configs`, `PUT`/`DELETE …/:id`, `POST …/:id/copy` | Tunarr's transcode-config API (edits are an allowlist merged onto Tunarr's copy; the default profile and profiles in use can't be deleted) |
 | `GET /api/tunarr/media-sources/manage`, `POST …/add`, `DELETE …/:id`, `POST …/:id/refresh`, `PUT …/:id/libraries/:libraryId`, `POST …/:id/libraries/:libraryId/scan` | Tunarr's media-source API (Jellyfin and Emby sign-in goes through Tunarr's `/api/jellyfin/login` / `/api/emby/login`; addresses, tokens, accounts and folder paths are never returned) |
 | `POST /api/tunarr/smart-collections/create`, `POST …/preview`, `GET`/`PUT`/`DELETE …/:id` | Tunarr's smart-collection API and `POST /api/programs/search` for previews (rules are turned into Tunarr's filter by the companion) |
@@ -174,24 +212,24 @@ accident.
 | `GET /api/tunarr/filler-roles`, `PUT`/`DELETE …/:id` | Lineup's own filler-list roles (`LINEUP_DATA_DIR/filler-roles.json`); not Tunarr |
 | `GET /api/tunarr/station-ids`, `PUT …/:channelId` | Station IDs picked one by one for each channel (`LINEUP_DATA_DIR/station-ids.json`); not Tunarr |
 | `GET`/`PUT /api/tunarr/server-settings` | Server settings the desk may change (`LINEUP_DATA_DIR/settings.json`), and whether the others are set; values of addresses, keys and paths are never returned |
-| `POST /api/tunarr/filler-lists/from-library` | Builds a filler list from everything Tunarr indexed in one library (`POST {TUNARR_URL}/api/programs/search`, then Tunarr's filler-list API) and follows that library from then on |
-| `GET /api/tunarr/filler-folders`, `POST …/sync`, `POST …/add` | Automatic pickup: which lists follow which folders; `sync` adds the upload folder to Tunarr, makes lists for folders named for a role and refreshes followed lists after a newer scan; `add` adds a folder on the Tunarr server with a role (`POST {TUNARR_URL}/api/media-sources`) |
-| `GET /api/tunarr/media-folder`, `PUT`/`DELETE …/:role/:file`, `POST …/:role/:file/move` | Lineup's media folder (`LINEUP_MEDIA_DIR`): list, upload (raw video bytes, streamed to disk), delete and move files between role folders |
+| `POST /api/tunarr/filler-lists/from-library` | Builds a filler list from everything Tunarr indexed in one library (`POST {tunarr}/api/programs/search`, then Tunarr's filler-list API) and follows that library from then on |
+| `GET /api/tunarr/filler-folders`, `POST …/sync`, `POST …/add` | Automatic pickup: which lists follow which folders; `sync` adds the upload folder to Tunarr, makes lists for folders named for a role and refreshes followed lists after a newer scan; `add` adds a folder on the Tunarr server with a role (`POST {tunarr}/api/media-sources`) |
+| `GET /api/tunarr/media-folder`, `PUT`/`DELETE …/:role/:file`, `POST …/:role/:file/move` | Lineup's media folder (chosen in setup): list, upload (raw video bytes, streamed to disk), delete and move files between role folders |
 | `GET /api/tunarr/ai`, `POST /api/tunarr/ai/template` | Lineup's AI assistant: status, and a template from `{ prompt, channelId?, includeLibrary, baseTemplate? }`. Reads context from Tunarr (search, lists, channel programming) and calls the configured AI provider |
-| `GET /api/tunarr/guide?from=…&to=…` | `GET {TUNARR_URL}/api/guide/channels` (every channel, up to 24 hours; reduced to times, titles and one line of detail) |
-| `GET /api/tunarr/sessions` | `GET {TUNARR_URL}/api/sessions` (viewer and stream counts per channel; addresses and user agents are dropped) |
+| `GET /api/tunarr/guide?from=…&to=…` | `GET {tunarr}/api/guide/channels` (every channel, up to 24 hours; reduced to times, titles and one line of detail) |
+| `GET /api/tunarr/sessions` | `GET {tunarr}/api/sessions` (viewer and stream counts per channel; addresses and user agents are dropped) |
 | `GET /api/tunarr/redirects` | Every channel's programming, for the redirect graph (loops) |
-| `GET /api/tunarr/channels/:id/stream.m3u8`, `GET …/hls/:file` | `GET {TUNARR_URL}/stream/channels/:id.m3u8?mode=hls` and `/stream/channels/:id/hls/:file`. Playlists are rewritten to point at the companion; one naming anything but this channel's HLS files is refused. Segments only of video/audio types |
+| `GET /api/tunarr/channels/:id/stream.m3u8`, `GET …/hls/:file` | `GET {tunarr}/stream/channels/:id.m3u8?mode=hls` and `/stream/channels/:id/hls/:file`. Playlists are rewritten to point at the companion; one naming anything but this channel's HLS files is refused. Segments only of video/audio types |
 | `GET /api/tunarr/media-folder/:role/:file` | Plays a media-folder file back (byte ranges), for previews |
 | `GET`/`POST /api/tunarr/channels/:id/snapshots`, `GET`/`DELETE …/:snapshotId` | Lineup's own snapshots (`LINEUP_DATA_DIR/snapshots`); `POST` takes one from Tunarr's current copy |
 | `GET /api/tunarr/drafts`, `GET`/`PUT`/`DELETE …/:channelId` | Lineup's own shared drafts (`LINEUP_DATA_DIR/drafts`) |
 | `GET`/`POST /api/tunarr/scheduled`, `DELETE …/:id` | Lineup's own scheduled changes (`LINEUP_DATA_DIR/scheduled.json`), saved to Tunarr by the scheduler |
 | `POST /api/tunarr/ai/review` | The AI review of a week: `{ channelName, summary, issues }` to the configured provider; returns suggestions only |
-| `GET /api/tunarr/programs/:id/artwork/:type` | `GET {TUNARR_URL}/api/programs/:id/artwork/:type` (image types only; `:id` must be a UUID; `:type` is `poster`, `thumbnail`, `landscape` or `banner`) |
+| `GET /api/tunarr/programs/:id/artwork/:type` | `GET {tunarr}/api/programs/:id/artwork/:type` (image types only; `:id` must be a UUID; `:type` is `poster`, `thumbnail`, `landscape` or `banner`) |
 
 The proxy is deliberately narrow (`server/tunarrProxy.ts`):
 
-- The upstream origin comes only from `TUNARR_URL`. Nothing in a request can change it.
+- The upstream origin comes only from the address saved in setup. Nothing in a proxied request can change it; it changes only through the setup routes below.
 - Any other path or method is refused (`404 route_not_allowed`, `405 method_not_allowed`).
 - Channel IDs must match `[A-Za-z0-9][A-Za-z0-9_-]{0,63}`. Unexpected query parameters are rejected.
 - `from`/`to` must be ISO 8601 date-times, `to` must be after `from`, and the range is capped at 14 days.
@@ -204,21 +242,34 @@ The proxy is deliberately narrow (`server/tunarrProxy.ts`):
 - **Every save needs `If-Match: "<version>"`,** the version of the channel it was based on. Without it the response is 428; if the channel changed meanwhile, 412 `lineup_changed`.
 - Writes from another site are blocked: the `Origin` must match the companion's host.
 - Browser cookies, `Authorization` and hop-by-hop headers are never forwarded. Upstream redirects are not followed.
-- Timeouts are 10 s for reads and 30 s for saves. Override them with `TUNARR_TIMEOUT_MS` and `TUNARR_SAVE_TIMEOUT_MS`.
+- Timeouts are 10 s for reads and 30 s for saves. Change them under **Setup → Server Settings…**.
 - **Large channels.** A channel's programming reaches the browser with its whole lineup untouched but only the program details the desk shows (title, show, season, episode), compressed, and with an ETag so an unchanged channel isn't downloaded again. A 20,000-item channel that Tunarr sends as 7.8 MB arrives as about 110–210 KB. Long days mount 200 rows at a time; the window follows the cursor, and **Show earlier/later programs** moves it. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#loading-large-channels).
 - Errors come back as `{"error":{"code","message"}}`. Messages name the Tunarr host but never credentials, and never include stack traces.
 - Artwork responses must be an image type (JPEG, PNG, WebP, GIF or AVIF) of at most 8 MB.
-- **Logos from public sites** (YouTube, TMDB…) are fetched by the companion only over HTTP(S) on ports 80/443, only when every address the host resolves to is public (no loopback, private, link-local, CGNAT/Tailscale or multicast ranges; the check is pinned to the connection), with at most 3 redirects (each re-checked), an image content type, 4 MB and 8 s. Results are cached in memory for an hour. Set `LINEUP_EXTERNAL_LOGOS=false` to turn this off; channels then show logos only when Tunarr hosts them.
+- **Logos from public sites** (YouTube, TMDB…) are fetched by the companion only over HTTP(S) on ports 80/443, only when every address the host resolves to is public (no loopback, private, link-local, CGNAT/Tailscale or multicast ranges; the check is pinned to the connection), with at most 3 redirects (each re-checked), an image content type, 4 MB and 8 s. Results are cached in memory for an hour. Turn off **Load logos from public sites** (Server Settings) to stop this; channels then show logos only when Tunarr hosts them.
 
 If Tunarr sits behind a reverse proxy with basic auth, you can put credentials
-in `TUNARR_URL` (`http://user:pass@host`). The server sends them as an
-`Authorization` header and never shows them to the browser.
+in Tunarr's address (`http://user:pass@host`). The server sends them as an
+`Authorization` header and never shows them to the browser; Server Settings shows
+the address without them.
+
+### Setup routes
+
+| Companion route | What it does |
+| --- | --- |
+| `GET /api/tunarr/setup` | `{ "needed": true/false }`, the only thing it says without the code |
+| `POST /api/tunarr/setup/unlock`, `…/detect`, `…/test`, `…/finish` | The wizard. Each needs `{ "code" }`; they answer `409` once setup is done. `detect` asks the fixed places above for `/api/channels`; `test` asks a typed address; `finish` validates and saves everything |
+| `GET`/`PUT /api/tunarr/server-config` | After setup, for the signed-in user: Tunarr's address, AI, the media folder, and the sign-in (changing it needs the current password). Keys, passwords and Tunarr's credentials are write-only |
+| `POST /api/tunarr/server-config/detect`, `…/test` | The same detection and test, after setup |
+
+Until setup is done every other route answers `503 setup_required` (uploads
+included).
 
 ### Live mode vs demo mode
 
 - On load, the interface calls `/api/tunarr/health`.
   - **Connected:** the status reads "Tunarr connected." and your channels load.
-  - **`TUNARR_URL` missing:** a dialog explains how to set it.
+  - **Not set up yet:** the setup wizard opens.
   - **Unreachable:** the dialog shows the error and the host it tried.
   - **Hosted preview:** no companion server exists there, so live mode is reported as unavailable.
 - Demo data appears only after you choose **Use demo data**. It is labeled "Demo mode" and "Demo channels", and it never reads from or writes to Tunarr. A failed live request never switches to demo data on its own.
@@ -230,22 +281,23 @@ in `TUNARR_URL` (`http://user:pass@host`). The server sends them as an
 
 ### Sign-in
 
-The companion has no sign-in by default. Anyone who can reach its port can
-edit your channels. Set `LINEUP_PASSWORD` (and optionally `LINEUP_USERNAME`,
-default `lineup`) to require HTTP Basic sign-in for everything except
+Lineup can rewrite your channels, so it always asks for the user name and
+password chosen in the setup wizard (HTTP Basic), for everything except
 `/healthz`. Basic auth sends the password with every request, so use it on a
-trusted network or behind HTTPS.
+trusted network or behind HTTPS. Change the user name or password under
+**Setup → Server Settings… → Sign-in**; it needs the current password, and every
+browser then signs in again.
 
 ### Host names
 
-Without sign-in, the companion only answers when it's opened by IP address
-(`http://192.168.1.20:3000`) or as `localhost`. This stops a web page on another
-site from pointing its own host name at your machine and editing your channels
-through your browser (DNS rebinding). To open Lineup by a name such as
-`http://nas.local:3000` or a reverse-proxy domain, list it in
+Because sign-in is always on after setup, Lineup answers to any host name
+(`http://nas.local:3000`, a reverse-proxy domain): the browser only sends the
+password to the address you signed in on, which also stops DNS rebinding. During
+setup any name works too, since only the setup-code routes answer. A server
+started from tests or scripts without `config.json` and without a password
+answers only to IP addresses, `localhost` and the names in
 `LINEUP_ALLOWED_HOSTS` (comma-separated; `.example.com` also allows its
-subdomains). With `LINEUP_PASSWORD` set, any name works, because the browser
-only sends the password to the address you signed in on.
+subdomains).
 
 ## Run with Docker Compose (recommended)
 
@@ -257,12 +309,12 @@ docker compose up -d
 
 Open **http://localhost:3000**. Tunarr itself stays at http://localhost:8000.
 
-- The `lineup` container reaches Tunarr at `http://tunarr:8000` over the shared `tunarr` network, set with `TUNARR_URL` in the compose file.
-- If Tunarr already runs in another compose project, attach the `lineup` service to that project's network and point `TUNARR_URL` at Tunarr's service name.
+- Run `docker compose logs lineup` for the setup code. The wizard finds Tunarr at `http://tunarr:8000` over the shared `tunarr` network.
+- If Tunarr already runs in another compose project, attach the `lineup` service to that project's network and type `http://<Tunarr's service name>:8000` in the wizard.
 - The image has a healthcheck (`GET /healthz`).
 - The published `chrisbenincasa/tunarr:latest` image is amd64-only. On Apple silicon, add `platform: linux/amd64` to the `tunarr` service.
 - Lineup can rewrite channel programming. Publish it as `127.0.0.1:3000:3000` if it should only be reachable from the Docker host.
-- Saved templates are kept in the `lineup-data` named volume (`/data` in the container). Add the AI settings from the compose file's comments to turn on **Ask AI…**.
+- Settings (`config.json`), saved templates and the rest are kept in the `lineup-data` named volume (`/data` in the container). Turn on **Ask AI…** in the wizard's extras or under Server Settings.
 
 The compose file uses the published image (`ghcr.io/augustosc-eu/tunarr-lineup`, tags `latest`
 or a version such as `2026.10.16`, or `2026.10` for the latest release of that month). To build it from source instead, replace
@@ -270,8 +322,7 @@ or a version such as `2026.10.16`, or `2026.10` for the latest release of that m
 
 ```sh
 docker build -t tunarr-lineup .
-docker run -d --name tunarr-lineup -p 3000:3000 \
-  -e TUNARR_URL=http://192.168.1.50:8000 -v lineup-data:/data tunarr-lineup
+docker run -d --name tunarr-lineup -p 3000:3000 -v lineup-data:/data tunarr-lineup
 ```
 
 ## Desktop app (macOS, Windows, Linux)
@@ -286,16 +337,19 @@ Node to install. Download it from the GitHub release:
 | Windows (x64 / ARM) | `Tunarr-Lineup-<version>-win-x64.exe` / `-win-arm64.exe` installer, or `-win-portable.exe` |
 | Linux (x64 / ARM) | `.AppImage` or `.deb` for `x86_64`/`amd64` and `arm64` |
 
-On first launch choose **File → Open Settings File…**, set `TUNARR_URL` (the
-same variables as the server's `.env`, below), save, and choose **File → Restart
-Lineup Server**. The settings file, saved templates and other Lineup data live
-in the app's data folder (**File → Show Data Folder**); the server's output is
-under **File → Show Server Log**.
+On first launch the setup wizard opens with its code already filled in: let it
+find Tunarr, choose a user name and password, and you're done. The app's own
+window signs in by itself (with a key made for each launch); the password is for
+other devices. Lineup's settings (`config.json`), saved templates and other data
+live in the app's data folder (**File → Show Data Folder**); the server's output
+is under **File → Show Server Log**. An older `lineup.env` with `TUNARR_URL` and
+the rest is copied into `config.json` once.
 
-- **Share it with a TV, iPad or phone:** set `HOST=0.0.0.0`, `PORT=3000` and a
-  `LINEUP_PASSWORD` in the settings file, then open
-  `http://<this computer's address>:3000` on the other device.
-- **Scheduled changes** (`LINEUP_SCHEDULER=on`) are saved while the app runs. On
+- **Share it with a TV, iPad or phone:** set `HOST=0.0.0.0` and `PORT=3000` in
+  the settings file (**File → Open Settings File…**), choose **File → Restart
+  Lineup Server**, then open `http://<this computer's address>:3000` on the
+  other device and sign in.
+- **Scheduled changes** (turned on in the wizard or Server Settings) are saved while the app runs. On
   macOS closing the window keeps the app running; quit it to stop the server.
 - **Unsigned builds:** unless the release was signed, macOS says the app can't
   be checked: Control-click it in Finder, choose **Open**, then **Open** again
@@ -331,7 +385,7 @@ server keeps running there, so scheduled changes don't depend on the tablet.
 2. Type your **Lineup server's** address, the one you'd open in a browser, for
    example `http://192.168.1.50:3000` (not Tunarr's address). Without `http://`
    and a port, port 3000 is assumed. The app checks the server answers first.
-3. With `LINEUP_PASSWORD` set, sign in once; **Remember on this device** keeps it.
+3. Sign in once with the user name and password from setup; **Remember on this device** keeps it.
 
 - **Remote and keyboard:** Back works like Escape (closes what's open), CH± step
   channels, and the D-pad and OK drive the desk as in a browser. The remote's
@@ -363,7 +417,7 @@ to that companion.
   Chrome only installs from a secure origin: `https://…` (for example behind a
   reverse proxy or Tailscale Serve) or `localhost`. Over plain
   `http://192.168.…` it adds a shortcut that opens in Chrome instead.
-- **With `LINEUP_PASSWORD` set** you sign in once when the installed app opens.
+- You sign in once when the installed app opens.
 
 There is no offline mode: the desk needs its companion to reach Tunarr.
 
@@ -374,40 +428,24 @@ Requires Node 22.13 or newer.
 ```sh
 npm install
 
-# Development: Vite dev server with the same /api/tunarr proxy built in
-TUNARR_URL=http://localhost:8000 npm run dev:local     # http://localhost:3000
+# Development: Vite dev server with the same /api/tunarr proxy and setup wizard built in
+npm run dev:local      # http://localhost:3000; the setup code is printed here
 
 # Production build + server
 npm run build:local
-TUNARR_URL=http://localhost:8000 npm run start:local   # http://localhost:3000
+npm run start:local    # http://localhost:3000
 ```
 
-`dev:local` also reads `TUNARR_URL` from a `.env` / `.env.local` file. Only
-the server sees it.
-
-Server environment variables:
+Nothing needs setting: the wizard does the rest. These environment variables
+only say where and how the server runs:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `TUNARR_URL` | (none) | Tunarr base URL as seen from the server, e.g. `http://tunarr:8000` |
 | `PORT` | `3000` | Listen port |
 | `HOST` | `0.0.0.0` | Listen address |
-| `TUNARR_TIMEOUT_MS` | `10000` | Upstream timeout for reads |
-| `TUNARR_SAVE_TIMEOUT_MS` | `30000` | Upstream timeout for saves |
-| `LINEUP_EXTERNAL_LOGOS` | `true` | Set to `false` to stop the companion fetching channel logos hosted on public sites |
-| `LINEUP_DATA_DIR` | `./data` (`/data` in Docker) | Where Lineup keeps its own data: saved templates, filler-list roles, picked station IDs, server settings, snapshots, shared drafts and scheduled changes |
-| `LINEUP_SCHEDULER` | `off` | `on` lets the Lineup server save scheduled changes (dated saves, seasonal overlays, events that air once) when they're due |
-| `LINEUP_MEDIA_DIR` | (none: uploads off) | The media folder for filler videos, as Lineup sees it. Must also be mounted into Tunarr |
-| `LINEUP_MEDIA_TUNARR_DIR` | same as `LINEUP_MEDIA_DIR` | The same folder as Tunarr sees it, e.g. `/media/lineup` |
-| `LINEUP_MEDIA_MAX_MB` | `4096` | Largest file Lineup accepts, in MB |
-| `LINEUP_AI_PROVIDER` | (auto) | `anthropic` or `openai` (any OpenAI-compatible API, including Ollama) |
-| `LINEUP_AI_API_KEY` | (none) | API key; `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` also work |
-| `LINEUP_AI_MODEL` | `claude-sonnet-5-5` for Anthropic | Model name (required for OpenAI-compatible providers) |
-| `LINEUP_AI_BASE_URL` | the provider's API | E.g. `http://ollama:11434/v1` for a local model |
-| `LINEUP_AI_TIMEOUT_MS` | `180000` | How long to wait for the AI |
-| `LINEUP_PASSWORD` | (none) | Turns on HTTP Basic sign-in |
-| `LINEUP_USERNAME` | `lineup` | Sign-in user name |
-| `LINEUP_ALLOWED_HOSTS` | (none) | Extra host names Lineup answers to without sign-in, e.g. `nas.local,.home.example` (`*` for any); IP addresses and `localhost` always work |
+| `LINEUP_DATA_DIR` | `./data` (`/data` in Docker) | Where Lineup keeps its own data: `config.json` (settings from setup), saved templates, filler-list roles, picked station IDs, server settings, snapshots, shared drafts and scheduled changes |
+| `LINEUP_ALLOWED_HOSTS` | (none) | Only for a server without sign-in (no `config.json`, tests): extra host names it answers to, e.g. `nas.local,.home.example` (`*` for any) |
+| `LINEUP_SETUP_CODE` | (random) | Use this setup code instead of printing a random one (at least 10 letters or digits). The desktop app sets it |
 | `STATIC_DIR` | `dist-local` | Directory holding the built interface |
 | `LINEUP_COMPRESSION` | `on` | Compress JSON and the interface's files (gzip, or Brotli over HTTPS). Set `off` if a reverse proxy in front already compresses |
 | `LINEUP_PROGRAMMING_CACHE_MS` | `0` | Reuse a channel's programming read from Tunarr for this long. `0` reads Tunarr on every load, so changes made in Tunarr's own UI show at once; a few thousand helps a slow Tunarr, but such changes then take that long to appear. Lineup's own saves always show at once |
@@ -421,14 +459,14 @@ read timeout of at least 60 s covers a large channel over a slow link. The
 desk is served from the root path; sub-path installs (`/lineup/`) aren't
 supported yet.
 
-**Setup → Server Settings…** changes the settings that have nothing to do with
-security while the server runs: `TUNARR_TIMEOUT_MS`, `TUNARR_SAVE_TIMEOUT_MS`,
-`LINEUP_EXTERNAL_LOGOS`, `LINEUP_SCHEDULER`, `LINEUP_AI_MODEL`,
-`LINEUP_AI_TIMEOUT_MS` and `LINEUP_MEDIA_MAX_MB`. Values saved there are kept in
-`LINEUP_DATA_DIR/settings.json` and win over the environment until you press
-**Use .env value**. Everything else (the Tunarr address, keys, the password,
-allowed hosts, folders, the listen address) stays in the environment; the
-dialog only says whether each is set.
+**Setup → Server Settings…** changes everything from setup while the server
+runs: Tunarr's address (with **Find Tunarr** and **Test connection**), the AI
+provider, key, model and address, the media folder, and the sign-in. Below them
+are the tuning settings: Tunarr's read and save timeouts, public logos,
+scheduled changes, the AI timeout and the largest upload. Tuning values saved
+there are kept in `settings.json` and win over the value from setup until you
+press **Reset**. Where the server listens, its data folder and allowed host
+names are set where it starts; the dialog only says whether each is set.
 
 ## Filler folders
 
@@ -437,7 +475,7 @@ dialog only says whether each is set.
 - **Tunarr libraries named for a role** ("Commercials", "Station IDs", `/media/promos`, "bumpers"; whole words of the name) get a filler list with that role after their scan. Plex, Jellyfin, Emby and local libraries all count. Other libraries are listed under **Other libraries** with a one-time **Make filler list**.
 - **Folders on the Tunarr server** can be added with a role (a path as Tunarr sees it, e.g. `/media/commercials`); their list appears after Tunarr's scan.
 - **Followed lists stay in step:** after every Tunarr scan that's newer than the list, its programs are replaced with the folder's. Delete a list in Tunarr and Lineup stops following that folder for good (Make filler list follows it again).
-- **The upload folder** lets you add files from the desk. It needs one folder mounted into both containers. `docker-compose.example.yml` already has it: a `lineup-media` volume at `/media/lineup` in Tunarr and Lineup, with `LINEUP_MEDIA_DIR=/media/lineup`. For an existing compose file, the dialog shows these lines with a **Copy lines** button:
+- **The upload folder** lets you add files from the desk. It needs one folder both Lineup and Tunarr can reach, chosen as the media folder in setup or under Server Settings (it must already exist, and can't be Lineup's own data folder). `docker-compose.example.yml` already mounts a `lineup-media` volume at `/media/lineup` in Tunarr and Lineup; choose `/media/lineup`. For an existing compose file, the dialog shows these lines with a **Copy lines** button:
 
 ```yaml
 services:
@@ -445,30 +483,28 @@ services:
     volumes:
       - lineup-media:/media/lineup
   lineup:
-    environment:
-      - LINEUP_MEDIA_DIR=/media/lineup
     volumes:
       - lineup-media:/media/lineup
 volumes:
   lineup-media:
 ```
 
-To keep the videos in a host folder you can browse (e.g. `./filler-media:/media/lineup` in both), make it writable by the Lineup container's user first: `sudo chown 1000:1000 filler-media`. If Tunarr sees the folder at a different path than Lineup, set `LINEUP_MEDIA_TUNARR_DIR` to Tunarr's path.
+To keep the videos in a host folder you can browse (e.g. `./filler-media:/media/lineup` in both), make it writable by the Lineup container's user first: `sudo chown 1000:1000 filler-media`. If Tunarr sees the folder at a different path than Lineup, fill in **The same folder as Tunarr sees it**.
 
-Lineup creates `station-ids`, `commercials`, `promos`, `bumpers` and `other-filler` inside it and adds them to Tunarr by itself. Uploading starts a scan, and each role's list follows. Uploads never overwrite a file and are written under a temporary name until complete. Anyone who can open Lineup can upload, so turn on sign-in (`LINEUP_PASSWORD`) if others can reach it.
+Lineup creates `station-ids`, `commercials`, `promos`, `bumpers` and `other-filler` inside it and adds them to Tunarr by itself. Uploading starts a scan, and each role's list follows. Uploads never overwrite a file and are written under a temporary name until complete. Anyone signed in to Lineup can upload.
 
 ## AI setup
 
-The AI assistant is off until the Lineup server has a provider. Everything is
-configured on the server; the browser never sees the key or the provider's
-address.
+The AI assistant is off until the Lineup server has a provider: choose one in
+the wizard's extras or under **Setup → Server Settings… → AI programming
+assistant**. The key is kept by the server and never shown again; the browser
+never sees the key or the provider's address.
 
-```sh
-# Anthropic
-LINEUP_AI_PROVIDER=anthropic LINEUP_AI_API_KEY=sk-ant-... npm run start:local
-# A local model with Ollama (nothing leaves your network)
-LINEUP_AI_PROVIDER=openai LINEUP_AI_BASE_URL=http://localhost:11434/v1 LINEUP_AI_MODEL=llama3.1 npm run start:local
-```
+- **Anthropic:** provider Anthropic and an API key (`sk-ant-…`). The model
+  defaults to `claude-sonnet-5-5`.
+- **A local model with Ollama** (nothing leaves your network): provider
+  OpenAI-compatible, address `http://localhost:11434/v1` (or
+  `http://ollama:11434/v1` in Compose), model `llama3.1`, no key.
 
 What is sent to the provider with each request:
 
@@ -511,8 +547,11 @@ Contributor and agent documentation: `AGENTS.md`, `docs/PRODUCT.md`,
 Tests live in `tests/`:
 
 - `tunarrProxy.test.ts`: routing, SSRF guards, timeouts, unreachable Tunarr, error normalization, the artwork route, and header stripping over real HTTP.
-- `server.test.ts`: static serving, path-traversal guards, CSP, and optional sign-in.
-- `hardening.test.ts`: host-name checks (DNS rebinding), own-key validation, saved-template size limits, and templates without `TUNARR_URL`.
+- `server.test.ts`: static serving, path-traversal guards, CSP, and sign-in.
+- `setup.test.ts`: `config.json` (the one-time import, owner-only file, hashed password), the setup code and its lockout, detection, the wizard and server-config routes, and sign-in over HTTP after setup.
+- `setupWizard.test.tsx`: the wizard and Server Settings' connection sections through the real setup routes.
+- `e2e/setup.spec.ts`: setting up a fresh server in the browser by keyboard, then signing in.
+- `hardening.test.ts`: host-name checks (DNS rebinding), own-key validation, saved-template size limits, and templates without Tunarr's address.
 - `lineup.test.ts`, `broadcast.test.ts`: reorder, block moves, move-to-time, timecode, day totals, CSV, undo history, artwork URLs, and save payload preservation for every lineup item type.
 - `page.test.tsx`: live loading, date navigation, reorder → save → re-fetch, conflict detection, remote-key slide, block moves, menus, log export, no silent demo fallback, and the Appearance dialog (skins applied, saved, restored, and working without storage).
 - `skins.test.ts`: skin ids and the Platinum fallback, `public/skin-init.js` in a sandbox, and that every skin only overrides tokens Platinum defines.

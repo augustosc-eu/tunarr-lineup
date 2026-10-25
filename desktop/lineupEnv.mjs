@@ -1,24 +1,31 @@
 // @ts-check
-// The desktop app's settings file (lineup.env in the app's data folder). Same
-// variables as the companion's .env; the desktop shell hands them to the
-// companion process and never to the window, so TUNARR_URL stays server-side.
+// The desktop app's settings file (lineup.env in the app's data folder). Since
+// the setup wizard (D62) it only says where the companion listens; Tunarr's
+// address and everything else are set in the app. An older file's TUNARR_URL,
+// password and the rest are copied into the companion's config.json once. The
+// desktop shell hands the file to the companion process and never to the window.
+import { randomInt } from 'node:crypto';
 
 /** Written on first launch so there is a file to open from File → Open Settings File…. */
-export const ENV_TEMPLATE = `# Tunarr Lineup desktop settings. Same variables as the server's .env (see the README).
+export const ENV_TEMPLATE = `# Tunarr Lineup desktop settings. Tunarr's address, the sign-in, AI and the
+# media folder are set in the app (Setup → Server Settings), not here.
 # Save this file, then choose File → Restart Lineup Server.
 
-# Your Tunarr, as this computer reaches it:
-# TUNARR_URL=http://localhost:8000
-
 # Let a TV, iPad or phone on your network use this computer's desk
-# (open http://<this computer's address>:3000 there). Set a password first:
+# (open http://<this computer's address>:3000 there and sign in):
 # HOST=0.0.0.0
 # PORT=3000
-# LINEUP_PASSWORD=
-
-# Save scheduled changes while the app is open:
-# LINEUP_SCHEDULER=on
 `;
+
+/** The user name the window signs in with (server/auth.ts APP_USER). */
+export const APP_USER = 'lineup-desktop';
+
+// The same alphabet and shape as server/setup.ts.
+const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+export function newSetupCode() {
+  const chars = Array.from({ length: 10 }, () => CODE_ALPHABET[randomInt(CODE_ALPHABET.length)]).join('');
+  return `${chars.slice(0, 5)}-${chars.slice(5)}`;
+}
 
 const KEY = /^[A-Z][A-Z0-9_]{0,63}$/;
 
@@ -51,10 +58,11 @@ export function parseLineupEnv(text) {
  * The companion's environment: the shell's own, then the settings file, then
  * what the desktop app decides (data and interface folders, listen address).
  * HOST and PORT from the file win so the desk can be shared on the network.
- * @param {{ processEnv: Record<string, string | undefined>, fileEnv: Record<string, string>, dataDir: string, staticDir: string, port: number }} options
+ * The app key and setup code let the window sign in and open the setup wizard.
+ * @param {{ processEnv: Record<string, string | undefined>, fileEnv: Record<string, string>, dataDir: string, staticDir: string, port: number, appKey?: string, setupCode?: string }} options
  * @returns {Record<string, string>}
  */
-export function companionEnv({ processEnv, fileEnv, dataDir, staticDir, port }) {
+export function companionEnv({ processEnv, fileEnv, dataDir, staticDir, port, appKey, setupCode }) {
   /** @type {Record<string, string>} */
   const env = {};
   for (const [key, value] of Object.entries(processEnv)) if (value !== undefined) env[key] = value;
@@ -64,6 +72,8 @@ export function companionEnv({ processEnv, fileEnv, dataDir, staticDir, port }) 
   env.LINEUP_DATA_DIR = fileEnv.LINEUP_DATA_DIR || dataDir;
   env.HOST = fileEnv.HOST || '127.0.0.1';
   env.PORT = String(port);
+  if (appKey) env.LINEUP_APP_KEY = appKey;
+  if (setupCode) env.LINEUP_SETUP_CODE = setupCode;
   return env;
 }
 

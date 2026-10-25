@@ -11,6 +11,7 @@ import { createSharedDraftStore, type SharedDraftStore } from './sharedDraftStor
 import { createSnapshotStore, type SnapshotStore } from './snapshotStore.js';
 import { applySettings, createSettingsStore, type SettingsStore } from './settings.js';
 import { createStationIdStore, type StationIdStore } from './stationIdStore.js';
+import { handleSetupRoute, matchSetupRoute, setupRequired, type Setup, type SetupRoute } from './setup.js';
 import { handleWatchRoute, matchWatchRoute } from './watch.js';
 import { handleContentRoute, matchContentRoute, setChannelStartTime, type ContentRoute } from './content.js';
 import { channelLogo, type ExternalImageFetcher } from './logos.js';
@@ -73,6 +74,8 @@ export type ProxyConfig = {
   programmingCache?: ProgrammingCache;
   /** Compress JSON and the interface's files (LINEUP_COMPRESSION, default on). */
   compression?: boolean;
+  /** The setup wizard and config.json (server/setup.ts); unset when configured only from the environment (tests). */
+  setup?: Setup;
 };
 
 export type ProxyRequest = {
@@ -299,11 +302,11 @@ async function fetchArtwork(config: ProxyConfig, target: TunarrTarget, programId
 function notConfigured(config: ProxyConfig) {
   return config.configError
     ? { code: 'invalid_config', message: config.configError }
-    : { code: 'not_configured', message: 'TUNARR_URL is not set on the Lineup server.' };
+    : { code: 'not_configured', message: 'Tunarr’s address is not set up on the Lineup server.' };
 }
 
 /** Library, list and channel-settings routes (content.ts) and Tunarr setup routes (admin.ts). */
-async function handleContent(request: ProxyRequest, config: ProxyConfig, url: URL, method: string, route: ContentRoute | AdminRoute | LineupRoute, kind: 'content' | 'admin' | 'lineup'): Promise<ProxyResponse> {
+async function handleContent(request: ProxyRequest, config: ProxyConfig, url: URL, method: string, route: ContentRoute | AdminRoute | LineupRoute | SetupRoute, kind: 'content' | 'admin' | 'lineup' | 'setup'): Promise<ProxyResponse> {
   if (!route.methods.includes(method)) {
     return fail(405, 'method_not_allowed', `${method.slice(0, 10)} is not allowed on this route.`, {}, { allow: route.methods.join(', ') });
   }
@@ -318,6 +321,7 @@ async function handleContent(request: ProxyRequest, config: ProxyConfig, url: UR
       return fail(400, 'invalid_json', 'Request body is not valid JSON.');
     }
   }
+  if (kind === 'setup') return await handleSetupRoute(route as SetupRoute, { config, method, body });
   const target = config.target;
   // Saved templates, filler roles, media files and the AI status are Lineup's own; everything else reads Tunarr.
   const needsTunarr = kind !== 'lineup' || route.name === 'ai-template' || route.name === 'filler-sync' || route.name === 'filler-folder-add' || (route.name === 'snapshots' && method === 'POST');
@@ -341,6 +345,10 @@ export async function handleTunarrApi(request: ProxyRequest, config: ProxyConfig
     const method = request.method.toUpperCase();
     if (url.pathname.startsWith(`${API_PREFIX}/`)) {
       const subpath = url.pathname.slice(API_PREFIX.length);
+      const setupRoute = matchSetupRoute(subpath);
+      if (setupRoute) return await handleContent(request, config, url, method, setupRoute, 'setup');
+      // Nothing else answers until setup is done (server/setup.ts).
+      if (config.setup?.needed()) return setupRequired(subpath === '/health');
       const lineup = matchLineupRoute(subpath);
       if (lineup && 'invalid' in lineup) return fail(400, 'invalid_parameter', lineup.invalid);
       if (lineup) return await handleContent(request, config, url, method, lineup, 'lineup');

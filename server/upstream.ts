@@ -76,7 +76,7 @@ export async function fetchUpstream(
   }
 
   if (response.status >= 300 && response.status < 400) {
-    throw new UpstreamError(502, 'tunarr_redirect', `Tunarr at ${target.host} answered with a redirect. Check TUNARR_URL.`);
+    throw new UpstreamError(502, 'tunarr_redirect', `Tunarr at ${target.host} answered with a redirect. Check Tunarr’s address under Setup → Server Settings.`);
   }
   if (response.status === 404) throw new UpstreamError(404, 'not_found', options.notFound);
   if (response.status === 400) {
@@ -105,7 +105,7 @@ export async function callTunarr(
   try {
     return JSON.parse(new TextDecoder().decode(bytes)) as unknown;
   } catch {
-    throw new UpstreamError(502, 'tunarr_invalid_response', `Tunarr at ${target.host} returned a response that is not JSON. Check TUNARR_URL.`);
+    throw new UpstreamError(502, 'tunarr_invalid_response', `Tunarr at ${target.host} returned a response that is not JSON. Check Tunarr’s address under Setup → Server Settings.`);
   }
 }
 

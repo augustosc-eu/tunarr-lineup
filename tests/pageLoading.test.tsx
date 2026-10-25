@@ -180,7 +180,10 @@ describe('channels of every size', () => {
     render(<Home />);
     await waitFor(() => expect(rows().length).toBeGreaterThan(0), { timeout: 10_000 });
     const openMs = performance.now() - started;
-    expect(document.querySelector('.day-count')?.textContent).toBe('2880 programs');
+    // 30-second items fill the local day, which is 23 or 25 hours on a clock-change day.
+    const today = new Date();
+    const dayMs = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1).getTime() - new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
+    expect(document.querySelector('.day-count')?.textContent).toBe(`${dayMs / 30_000} programs`);
     expect(rows().length).toBeLessThanOrEqual(ROW_WINDOW);
     expect(screen.queryByText(/Show later programs/) ?? screen.queryByText(/Show earlier programs/)).toBeTruthy();
 

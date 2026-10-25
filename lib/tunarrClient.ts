@@ -13,6 +13,7 @@ import type { Snapshot, SnapshotSummary } from '../server/snapshotStore';
 import type { GuideChannel } from '../server/watch';
 import type { Review } from '../server/ai';
 import type { SettingsView } from '../server/settings';
+import type { ConfigView, Probe } from '../server/setup';
 import type { StationIdPicks } from '../server/stationIdStore';
 
 export type ScheduleDraft = { type: SlotSchedule['type']; settings?: Record<string, unknown>; slots: Slot[]; extraPrograms?: string[] };
@@ -23,7 +24,7 @@ export type MediaFile = { name: string; size: number; modifiedAt: number };
 export type MediaRoleFolder = { role: FillerRole; folder: string; files: MediaFile[]; tunarr: { mediaSourceId: string; libraryId: string; lastScannedAt?: number; scanning: boolean } | null };
 export type MediaFolderStatus = { enabled: true; maxBytes: number; folders: MediaRoleFolder[]; tunarrError?: string } | { enabled: false; message: string };
 export type FillerSync = { connected: boolean; created: Array<{ id: string; name: string; count: number; role: FillerRole }>; updated: Array<{ id: string; count: number }>; errors: string[] };
-export type { ChangeSummary, Review, SettingsView, Snapshot, SnapshotSummary, StationIdPicks };
+export type { ChangeSummary, ConfigView, Probe, Review, SettingsView, Snapshot, SnapshotSummary, StationIdPicks };
 export type ScheduledList = { enabled: boolean; message?: string; changes: ChangeSummary[] };
 /** One change in a plan sent to the scheduler (server/scheduler.ts validatePlan). */
 export type PlannedChange = {
@@ -66,6 +67,7 @@ export type ConnectionState =
   | { status: 'checking' }
   | { status: 'connected'; host: string; channelCount: number }
   | { status: 'not_configured'; message: string }
+  | { status: 'setup_required'; message: string }
   | { status: 'unreachable'; host?: string; message: string }
   | { status: 'unavailable'; message: string };
 
@@ -209,11 +211,23 @@ export async function checkHealth(options: Pick<RequestOptions, 'signal' | 'time
   if (data.status === 'connected' && response.ok) {
     return { status: 'connected', host: data.tunarrHost ?? 'Tunarr', channelCount: data.channelCount ?? 0 };
   }
+  if (data.status === 'setup_required') return { status: 'setup_required', message: data.error?.message ?? 'Lineup isn’t set up yet.' };
   if (data.status === 'not_configured') {
-    return { status: 'not_configured', message: data.error?.message ?? 'TUNARR_URL is not set on the Lineup server.' };
+    return { status: 'not_configured', message: data.error?.message ?? 'Tunarr’s address is not set up on the Lineup server.' };
   }
   return { status: 'unreachable', host: data.tunarrHost, message: data.error?.message ?? 'Tunarr did not respond.' };
 }
+
+export type AiFields = { provider: '' | 'anthropic' | 'openai'; apiKey?: string; baseUrl?: string; model?: string };
+/** A field left out is kept; `apiKey` left out keeps the saved key. */
+export type ConfigChanges = {
+  tunarrUrl?: string;
+  ai?: AiFields;
+  media?: { dir: string; tunarrDir?: string };
+  options?: { scheduler?: boolean; externalLogos?: boolean };
+  account?: { currentPassword: string; username?: string; newPassword?: string };
+};
+export type SetupFinish = Omit<ConfigChanges, 'account'> & { code: string; tunarrUrl: string; account: { username: string; password: string } };
 
 export const tunarrApi = {
   channels: (options?: RequestOptions) => request<Channel[]>('/api/tunarr/channels', undefined, options),
@@ -309,9 +323,22 @@ export const tunarrApi = {
   /** Station IDs picked one by one for each channel (server/stationIdStore.ts). */
   stationIdPicks: () => request<StationIdPicks>('/api/tunarr/station-ids'),
   setStationIdPicks: (channelId: string, programIds: string[]) => request<StationIdPicks>(`/api/tunarr/station-ids/${encodeURIComponent(channelId)}`, jsonBody('PUT', { programIds })),
+  /** The setup wizard (server/setup.ts): every call but the status needs the setup code. */
+  setup: {
+    status: () => request<{ needed: boolean }>('/api/tunarr/setup'),
+    unlock: (code: string) => request<ConfigView>('/api/tunarr/setup/unlock', jsonBody('POST', { code })),
+    detect: (code: string) => request<{ found: Probe[]; tried: string[] }>('/api/tunarr/setup/detect', jsonBody('POST', { code })),
+    test: (code: string, tunarrUrl: string) => request<Probe>('/api/tunarr/setup/test', jsonBody('POST', { code, tunarrUrl })),
+    finish: (body: SetupFinish) => request<{ done: true; username: string }>('/api/tunarr/setup/finish', jsonBody('POST', body)),
+  },
+  /** Tunarr's address, the sign-in, AI and the media folder, once set up. */
+  serverConfig: () => request<ConfigView>('/api/tunarr/server-config'),
+  saveServerConfig: (body: ConfigChanges) => request<ConfigView>('/api/tunarr/server-config', jsonBody('PUT', body)),
+  detectTunarr: () => request<{ found: Probe[]; tried: string[] }>('/api/tunarr/server-config/detect', jsonBody('POST', {})),
+  testTunarr: (tunarrUrl: string) => request<Probe>('/api/tunarr/server-config/test', jsonBody('POST', { tunarrUrl })),
   /** The settings the desk may change, and whether the others are set (server/settings.ts). */
   settings: () => request<SettingsView>('/api/tunarr/server-settings'),
-  /** `null` goes back to the .env value. */
+  /** `null` goes back to the value from setup. */
   saveSettings: (values: Record<string, number | boolean | string | null>) => request<SettingsView>('/api/tunarr/server-settings', jsonBody('PUT', { values })),
   savedTemplates: () => request<Template[]>('/api/tunarr/templates'),
   createTemplate: (template: Omit<Template, 'id'> & { id?: string }) => request<Template>('/api/tunarr/templates', jsonBody('POST', template)),

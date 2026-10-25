@@ -4,7 +4,7 @@ import { createReadStream } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
 import http from 'node:http';
 import path from 'node:path';
-import { AUTH_CHALLENGE, isAuthorized, type AuthConfig } from './auth.js';
+import { AUTH_CHALLENGE, authorize, type AuthConfig } from './auth.js';
 import { compress, isCompressible, pickEncoding, type Encoding } from './compression.js';
 import { hostRefusal, isAllowedHost, type HostPolicy } from './hosts.js';
 import { handleNodeApiRequest, isTunarrApiPath } from './nodeAdapter.js';
@@ -82,10 +82,14 @@ async function sendFile(req: http.IncomingMessage, res: http.ServerResponse, fil
   else createReadStream(filePath).pipe(res);
 }
 
-export function createLineupServer({ config, auth, staticRoot, hosts = { any: false, names: [] } }: { config: ProxyConfig; auth: AuthConfig; staticRoot: string; hosts?: HostPolicy }) {
+/** `auth` is the sign-in to ask for, or a function giving the current one (it changes when setup is done). */
+export function createLineupServer({ config, auth: authOption, staticRoot, hosts = { any: false, names: [] } }: { config: ProxyConfig; auth: AuthConfig | (() => AuthConfig); staticRoot: string; hosts?: HostPolicy }) {
+  const currentAuth = typeof authOption === 'function' ? authOption : () => authOption;
   // Video uploads can take a while on a slow network; Node's 5-minute default would cut them off.
-  return http.createServer({ requestTimeout: config.mediaFolder ? 4 * 3_600_000 : 300_000 }, async (req, res) => {
+  // A server set up from the desk may get a media folder later.
+  return http.createServer({ requestTimeout: config.mediaFolder || config.setup ? 4 * 3_600_000 : 300_000 }, async (req, res) => {
     try {
+      const auth = currentAuth();
       const method = req.method ?? 'GET';
       const pathname = (req.url ?? '/').split('?')[0];
 
@@ -94,13 +98,14 @@ export function createLineupServer({ config, auth, staticRoot, hosts = { any: fa
         res.end(JSON.stringify({ status: 'ok' }));
         return;
       }
-      // Without sign-in, refuse unknown host names (DNS rebinding; see hosts.ts).
-      if (!auth && !isAllowedHost(req.headers.host, hosts)) {
+      // Without sign-in, refuse unknown host names (DNS rebinding; see hosts.ts). Before setup
+      // only the setup-code routes answer, and a rebound page can't know the code.
+      if (!auth && !config.setup?.needed() && !isAllowedHost(req.headers.host, hosts)) {
         res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
         res.end(hostRefusal(req.headers.host ?? ''));
         return;
       }
-      if (!isAuthorized(req.headers.authorization, auth)) {
+      if (!(await authorize(req.headers.authorization, auth))) {
         res.writeHead(401, { ...AUTH_CHALLENGE, 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
         res.end('Sign in to Tunarr Lineup.');
         return;

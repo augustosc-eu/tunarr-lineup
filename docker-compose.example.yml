@@ -35,44 +35,24 @@ services:
     restart: unless-stopped
     depends_on:
       - tunarr
-    environment:
-      # Server-side only. Must be the address Tunarr has on this network.
-      - TUNARR_URL=http://tunarr:8000
-      # Optional: require sign-in (HTTP Basic). Strongly recommended if
-      # Lineup is reachable by anyone other than you.
-      # - LINEUP_PASSWORD=change-me
-      # - LINEUP_USERNAME=lineup
-      # Without sign-in, Lineup answers only to IP addresses and localhost.
-      # Add the names you open it by (e.g. nas.local or your proxy's domain):
-      # - LINEUP_ALLOWED_HOSTS=nas.local,lineup.home.example
-      # Optional: upstream timeouts in milliseconds.
-      # - TUNARR_TIMEOUT_MS=10000
-      # - TUNARR_SAVE_TIMEOUT_MS=30000
-      # - LINEUP_EXTERNAL_LOGOS=false   # only show logos Tunarr hosts itself
-      # Optional: AI programming assistant (Channel → Programming Templates → Ask AI).
-      # Anthropic:
-      # - LINEUP_AI_PROVIDER=anthropic
-      # - LINEUP_AI_API_KEY=sk-ant-...
-      # - LINEUP_AI_MODEL=claude-sonnet-5-5
-      # Or any OpenAI-compatible API, e.g. a local Ollama:
-      # - LINEUP_AI_PROVIDER=openai
-      # - LINEUP_AI_BASE_URL=http://ollama:11434/v1
-      # - LINEUP_AI_MODEL=llama3.1
-      # Upload station IDs, commercials and promos from Setup → Filler Folders.
-      # The lineup-media volume is mounted at the same path in both containers.
-      # Remove this line to turn uploads off. If Tunarr sees the folder at a
-      # different path, set LINEUP_MEDIA_TUNARR_DIR to it.
-      - LINEUP_MEDIA_DIR=/media/lineup
-      # - LINEUP_MEDIA_MAX_MB=4096
-      # Let Lineup save changes on a date (Save Later, seasonal overlays, events that air once).
-      # - LINEUP_SCHEDULER=on
+    # No settings needed here. On the first start, open Lineup and type the
+    # setup code from `docker logs tunarr-lineup`; the setup wizard finds
+    # Tunarr at http://tunarr:8000 and asks for a user name and password.
+    # Everything else (AI, the upload folder, scheduled changes) is optional
+    # and set in the wizard or later under Setup → Server Settings, kept in
+    # config.json in the lineup-data volume.
+    # environment:
+      # Older installs: TUNARR_URL, LINEUP_PASSWORD, LINEUP_AI_* and the rest
+      # are copied into config.json on the first start, then ignored.
+      # - TUNARR_URL=http://tunarr:8000
     volumes:
-      # Saved programming templates. A named volume, so the container's
-      # non-root user owns it.
+      # Lineup's settings (config.json), saved templates and the rest. A named
+      # volume, so the container's non-root user owns it.
       - lineup-data:/data
-      # The filler upload folder, shared with Tunarr. To use a host folder
-      # instead (e.g. ./filler-media), mount it here and in tunarr, and make
-      # it writable by uid 1000: sudo chown 1000:1000 filler-media
+      # The filler upload folder, shared with Tunarr: choose /media/lineup as
+      # the media folder in setup. To use a host folder instead (e.g.
+      # ./filler-media), mount it here and in tunarr, and make it writable by
+      # uid 1000: sudo chown 1000:1000 filler-media
       - lineup-media:/media/lineup
     ports:
       # Lineup can rewrite channel programming. Use "127.0.0.1:3000:3000"

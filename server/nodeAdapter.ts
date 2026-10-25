@@ -4,6 +4,7 @@ import path from 'node:path';
 import { compress, isCompressible, pickEncoding } from './compression.js';
 import { StoreError } from './jsonFile.js';
 import { matchLineupRoute } from './lineupRoutes.js';
+import { setupRequired } from './setup.js';
 import type { FillerRole } from './fillerRoles.js';
 import type { MediaFolder } from './mediaFolder.js';
 import { API_PREFIX, handleTunarrApi, isCrossOrigin, type ProxyConfig, type ProxyResponse } from './tunarrProxy.js';
@@ -61,7 +62,7 @@ export type UploadPlan = { media: MediaFolder; role: FillerRole; file: string; l
 /** Checks an upload (PUT /api/tunarr/media-folder/:role/:file) before any of its body is read. */
 export function planUpload(url: string, headers: IncomingMessage['headers'], config: ProxyConfig): UploadPlan | ProxyResponse {
   const media = config.mediaFolder;
-  if (!media || 'off' in media) return fail(503, 'media_folder_off', media && 'off' in media ? media.off : 'The media folder is off. Set LINEUP_MEDIA_DIR on the Lineup server to upload files.');
+  if (!media || 'off' in media) return fail(503, 'media_folder_off', media && 'off' in media ? media.off : 'The media folder is off. Choose one under Setup → Server Settings to upload files.');
   if (isCrossOrigin({ host: headers.host, origin: headers.origin, 'x-forwarded-host': headers['x-forwarded-host'] })) return fail(403, 'cross_origin_blocked', 'Requests must come from this app.');
   const [pathname, query] = url.split('?');
   if (query !== undefined) return fail(400, 'invalid_query', 'This route does not accept query parameters.');
@@ -167,6 +168,12 @@ async function handlePlayback(req: IncomingMessage, res: ServerResponse, config:
 /** Adapts Node's http request/response to the framework-free proxy handler. */
 export async function handleNodeApiRequest(req: IncomingMessage, res: ServerResponse, config: ProxyConfig) {
   const method = req.method ?? 'GET';
+  // Uploads and playback skip the proxy below, so the setup gate is repeated here.
+  if (config.setup?.needed() && (req.url ?? '').startsWith(MEDIA_PREFIX)) {
+    const result = setupRequired(false);
+    send(res, result.status, result.headers, result.body);
+    return;
+  }
   if (method === 'PUT' && (req.url ?? '').startsWith(MEDIA_PREFIX)) return handleUpload(req, res, config);
   // Playing a media-folder file back; /move and the folder listing go to the proxy as usual.
   if ((method === 'GET' || method === 'HEAD') && (req.url ?? '').startsWith(MEDIA_PREFIX) && !(req.url ?? '').split('?')[0].endsWith('/move')) return handlePlayback(req, res, config);

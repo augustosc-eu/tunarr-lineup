@@ -42,9 +42,9 @@ const proposal = {
 describe('AI configuration', () => {
   it('is off until a provider is set up', () => {
     expect(createAiConfig({})).toHaveProperty('off');
-    expect(createAiConfig({ LINEUP_AI_PROVIDER: 'anthropic' })).toEqual({ off: expect.stringMatching(/API_KEY/) });
+    expect(createAiConfig({ LINEUP_AI_PROVIDER: 'anthropic' })).toEqual({ off: expect.stringMatching(/API key/) });
     expect(createAiConfig({ ANTHROPIC_API_KEY: 'sk-ant' })).toMatchObject({ provider: 'anthropic', model: 'claude-sonnet-5-5', baseUrl: 'https://api.anthropic.com', apiKey: 'sk-ant' });
-    expect(createAiConfig({ LINEUP_AI_BASE_URL: 'http://ollama:11434/v1/' })).toEqual({ off: expect.stringMatching(/LINEUP_AI_MODEL/) });
+    expect(createAiConfig({ LINEUP_AI_BASE_URL: 'http://ollama:11434/v1/' })).toEqual({ off: expect.stringMatching(/AI model/) });
     expect(createAiConfig({ LINEUP_AI_BASE_URL: 'http://ollama:11434/v1/', LINEUP_AI_MODEL: 'llama3.1' })).toMatchObject({ provider: 'openai', baseUrl: 'http://ollama:11434/v1', apiKey: undefined });
     expect(createAiConfig({ LINEUP_AI_PROVIDER: 'openai', LINEUP_AI_BASE_URL: 'file:///etc', LINEUP_AI_MODEL: 'x' })).toHaveProperty('off');
   });
