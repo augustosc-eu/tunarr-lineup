@@ -8,6 +8,13 @@ were renamed 2026.10.1 and 2026.10.2.
 
 ## [Unreleased]
 
+## [2026.10.19] - 2026-10-25
+
+### Fixed
+
+- Watch Live on iPhones and iPads: full screen now works (older iPads use the prefixed call, and an iPhone opens the picture in its own video player), and the remote's `−`/`+` mute and unmute there, since those devices set the volume only with their own buttons.
+- Turning the volume all the way down now silences the picture.
+
 ## [2026.10.18] - 2026-10-25
 
 ### Fixed
@@ -262,7 +269,8 @@ First public release.
   reaches Tunarr through a narrow allowlisted proxy. Optional HTTP Basic
   sign-in and host-name checks against DNS rebinding.
 
-[Unreleased]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.18...HEAD
+[Unreleased]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.19...HEAD
+[2026.10.19]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.18...v2026.10.19
 [2026.10.18]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.17...v2026.10.18
 [2026.10.17]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.16...v2026.10.17
 [2026.10.16]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.15...v2026.10.16
