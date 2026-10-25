@@ -8,6 +8,16 @@ were renamed 2026.10.1 and 2026.10.2.
 
 ## [Unreleased]
 
+## [2026.10.18] - 2026-10-25
+
+### Fixed
+
+- The 2026.10.17 Docker image and desktop app weren't built (its lock file didn't match its dependencies). This release has the same changes, plus the updates below.
+
+### Changed
+
+- Updated Vitest (4.1.12), undici (7.30.1) and zod (4.6.7) for security fixes.
+
 ## [2026.10.17] - 2026-10-25
 
 ### Added
@@ -252,7 +262,8 @@ First public release.
   reaches Tunarr through a narrow allowlisted proxy. Optional HTTP Basic
   sign-in and host-name checks against DNS rebinding.
 
-[Unreleased]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.17...HEAD
+[Unreleased]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.18...HEAD
+[2026.10.18]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.17...v2026.10.18
 [2026.10.17]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.16...v2026.10.17
 [2026.10.16]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.15...v2026.10.16
 [2026.10.15]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.14...v2026.10.15

@@ -317,7 +317,7 @@ Open **http://localhost:3000**. Tunarr itself stays at http://localhost:8000.
 - Settings (`config.json`), saved templates and the rest are kept in the `lineup-data` named volume (`/data` in the container). Turn on **Ask AI…** in the wizard's extras or under Server Settings.
 
 The compose file uses the published image (`ghcr.io/augustosc-eu/tunarr-lineup`, tags `latest`
-or a version such as `2026.10.17`, or `2026.10` for the latest release of that month). To build it from source instead, replace
+or a version such as `2026.10.18`, or `2026.10` for the latest release of that month). To build it from source instead, replace
 `image:` with `build: .` on the `lineup` service, or:
 
 ```sh
