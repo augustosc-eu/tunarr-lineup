@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, 
 import { stepFocus, windowStart, type GuideChannel } from '../../lib/guideGrid';
 import type { Channel } from '../../lib/lineup';
 import type { ViewerCounts } from '../../lib/tunarrClient';
-import { addDigit, channelByNumber, CLASSIC_LOAD_MS, CLASSIC_MAX_PAGE, CLASSIC_SPAN_MS, DIGIT_WAIT_MS, MAX_RETRIES, mightContinue, nowAndNext, progress, remoteAction, stepChannel, visibleRows, type RemoteAction } from '../../lib/tvRemote';
+import { addDigit, channelByNumber, CLASSIC_LOAD_MS, CLASSIC_MAX_PAGE, CLASSIC_SPAN_MS, DIGIT_WAIT_MS, MAX_RETRIES, mightContinue, nowAndNext, progress, remoteAction, stepChannel, toggleFullscreen, visibleRows, volumeIsFixed, type FullscreenVideo, type RemoteAction } from '../../lib/tvRemote';
 import { useLiveStream } from '../useLiveStream';
 import { CableGuide, clock, type CableFocus } from './CableGuide';
 import { TvRemote } from './TvRemote';
@@ -88,7 +88,7 @@ export function WatchDialog({ channel, channels, now, viewers, loadGuide, logo, 
 
   // The player's sound follows the remote; autoplay without sound shows as muted.
   const muted = mutedByUser || autoMuted;
-  useEffect(() => { const element = video.current; if (element) { element.muted = muted; element.volume = volume; } }, [muted, volume]);
+  useEffect(() => { const element = video.current; if (element) { element.muted = muted || volume === 0; element.volume = volume; } }, [muted, volume]);
   useEffect(() => { section.current?.focus({ preventScroll: true }); }, []);
 
   const tune = (channelId: string | null | undefined) => {
@@ -165,11 +165,10 @@ export function WatchDialog({ channel, channels, now, viewers, loadGuide, logo, 
     }
   };
 
-  const toggleFullscreen = () => {
+  const fullscreen = () => {
     const element = screen.current;
     if (!element) return;
-    if (document.fullscreenElement) void document.exitFullscreen?.().catch(() => {});
-    else void element.requestFullscreen?.().catch(() => flash('Full screen isn’t available here'));
+    void toggleFullscreen(document, element, video.current as FullscreenVideo | null).then((result) => { if (result === 'unavailable') flash('Full screen isn’t available here'); });
   };
 
   const act = (action: RemoteAction) => {
@@ -186,6 +185,13 @@ export function WatchDialog({ channel, channels, now, viewers, loadGuide, logo, 
       case 'last': if (lastChannel) tune(lastChannel); else flash('No last channel yet'); return;
       case 'mute': flash(muted ? 'Sound on' : 'Mute'); setMuted(!muted); clearAutoMuted(); return;
       case 'volume': {
+        if (volumeIsFixed(video.current)) {
+          // iPhones and iPads set the level only with their own buttons; the remote can still turn the sound off and on.
+          setMuted(action.direction < 0);
+          clearAutoMuted();
+          flash(`${action.direction < 0 ? 'Mute' : 'Sound on'} · use the device’s volume buttons`);
+          return;
+        }
         const next = Math.round(Math.max(0, Math.min(1, volume + action.direction * 0.1)) * 10) / 10;
         setVolume(next);
         setMuted(false);
@@ -199,7 +205,7 @@ export function WatchDialog({ channel, channels, now, viewers, loadGuide, logo, 
         if (element.paused) { void element.play().catch(() => {}); flash('▶ Play'); } else { element.pause(); flash('❚❚ Pause'); }
         return;
       }
-      case 'fullscreen': toggleFullscreen(); return;
+      case 'fullscreen': fullscreen(); return;
       default: break;
     }
     if (digits && action.kind === 'ok') { commitDigits(digits); return; }
@@ -243,7 +249,7 @@ export function WatchDialog({ channel, channels, now, viewers, loadGuide, logo, 
         <div className="watch-body">
           <div ref={screen} className={`tv-screen ${guideOpen ? 'guide-on' : ''}`}>
             {/* Live TV has no captions track to offer here; Tunarr burns subtitles in when the channel asks for them. */}
-            <video ref={video} autoPlay playsInline aria-label={`Live: CH ${channel.number} ${channel.name}`} onDoubleClick={toggleFullscreen} />
+            <video ref={video} autoPlay playsInline aria-label={`Live: CH ${channel.number} ${channel.name}`} onDoubleClick={fullscreen} />
             {(status.kind === 'tuning' || status.kind === 'retrying') && !guideOpen && <div className="tv-static" aria-hidden="true" />}
             {status.kind === 'tuning' && !guideOpen && <p className="tv-message">Tuning CH {channel.number}… Tunarr starts the stream when it’s asked for.</p>}
             {status.kind === 'retrying' && !guideOpen && <div className="tv-message" role="alert"><b>No signal</b> {status.reason} Trying again in {status.seconds} s. <button type="button" onClick={retry}>Retry now</button></div>}

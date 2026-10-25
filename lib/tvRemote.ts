@@ -100,3 +100,42 @@ export function visibleRows(total: number, focus: number, top: number, size: num
   if (focus >= top + size) return focus - size + 1;
   return Math.min(top, total - size);
 }
+
+type FullscreenDocument = { fullscreenElement?: Element | null; webkitFullscreenElement?: Element | null; exitFullscreen?: () => Promise<void>; webkitExitFullscreen?: () => void };
+type FullscreenTarget = { requestFullscreen?: () => Promise<void>; webkitRequestFullscreen?: () => void };
+export type FullscreenVideo = { webkitEnterFullscreen?: () => void; webkitExitFullscreen?: () => void; webkitDisplayingFullscreen?: boolean };
+
+/**
+ * Turns full screen on or off for the picture. Older iPads only have the
+ * webkit-prefixed call, and iPhones can't put a page element full screen at
+ * all, so there the video opens in the phone's own player instead.
+ */
+export async function toggleFullscreen(doc: FullscreenDocument, screen: FullscreenTarget, video: FullscreenVideo | null): Promise<'entered' | 'exited' | 'unavailable'> {
+  try {
+    if (doc.fullscreenElement || doc.webkitFullscreenElement) {
+      if (doc.exitFullscreen) await doc.exitFullscreen(); else doc.webkitExitFullscreen?.();
+      return 'exited';
+    }
+    if (video?.webkitDisplayingFullscreen) { video.webkitExitFullscreen?.(); return 'exited'; }
+    if (screen.requestFullscreen) { await screen.requestFullscreen(); return 'entered'; }
+    if (screen.webkitRequestFullscreen) { screen.webkitRequestFullscreen(); return 'entered'; }
+    if (video?.webkitEnterFullscreen) { video.webkitEnterFullscreen(); return 'entered'; }
+  } catch {
+    // Refused (no press first, or the video isn't ready yet).
+  }
+  return 'unavailable';
+}
+
+/**
+ * Whether the page can't set the player's volume: iPhones and iPads keep it
+ * at 1 and use only their own buttons. Muting still works there.
+ */
+export function volumeIsFixed(video: { volume: number } | null): boolean {
+  if (!video) return false;
+  const before = video.volume;
+  const probe = before === 0.5 ? 0.25 : 0.5;
+  try { video.volume = probe; } catch { return true; }
+  const fixed = Math.abs(video.volume - probe) > 0.01;
+  video.volume = before;
+  return fixed;
+}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { addDigit, channelByNumber, MAX_RETRIES, mightContinue, nowAndNext, progress, remoteAction, retryDelay, stepChannel, visibleRows } from '../lib/tvRemote';
+import { addDigit, channelByNumber, MAX_RETRIES, mightContinue, nowAndNext, progress, remoteAction, retryDelay, stepChannel, toggleFullscreen, visibleRows, volumeIsFixed } from '../lib/tvRemote';
 
 const channels = [{ id: 'b', number: 12 }, { id: 'a', number: 3 }, { id: 'c', number: 120 }, { id: 'd', number: 7 }];
 const entry = (start: number, stop: number, title = 'Show') => ({ start, stop, type: 'content', title, detail: '' });
@@ -58,5 +58,36 @@ describe('watching like a cable box', () => {
     expect(visibleRows(20, 7, 0, 5)).toBe(3);
     expect(visibleRows(20, 2, 3, 5)).toBe(2);
     expect(visibleRows(20, 19, 18, 5)).toBe(15);
+  });
+});
+
+describe('full screen and volume on phones and tablets', () => {
+  it('uses the standard call, then the webkit one, then the iPhone video player', async () => {
+    const calls: string[] = [];
+    const doc = {};
+    expect(await toggleFullscreen(doc, { requestFullscreen: async () => { calls.push('standard'); } }, null)).toBe('entered');
+    expect(await toggleFullscreen(doc, { webkitRequestFullscreen: () => { calls.push('webkit'); } }, null)).toBe('entered');
+    expect(await toggleFullscreen(doc, {}, { webkitEnterFullscreen: () => { calls.push('video'); } })).toBe('entered');
+    expect(calls).toEqual(['standard', 'webkit', 'video']);
+    expect(await toggleFullscreen(doc, {}, {})).toBe('unavailable');
+  });
+
+  it('leaves full screen whichever way it was entered, and reports refusals', async () => {
+    const calls: string[] = [];
+    expect(await toggleFullscreen({ fullscreenElement: {} as Element, exitFullscreen: async () => { calls.push('standard'); } }, {}, null)).toBe('exited');
+    expect(await toggleFullscreen({ webkitFullscreenElement: {} as Element, webkitExitFullscreen: () => { calls.push('webkit'); } }, {}, null)).toBe('exited');
+    expect(await toggleFullscreen({}, {}, { webkitDisplayingFullscreen: true, webkitExitFullscreen: () => { calls.push('video'); } })).toBe('exited');
+    expect(calls).toEqual(['standard', 'webkit', 'video']);
+    expect(await toggleFullscreen({}, {}, { webkitEnterFullscreen: () => { throw new Error('InvalidStateError'); } })).toBe('unavailable');
+    expect(await toggleFullscreen({}, { requestFullscreen: () => Promise.reject(new Error('denied')) }, null)).toBe('unavailable');
+  });
+
+  it('tells a player whose volume the page can’t set (iOS) from one it can', () => {
+    const settable = { volume: 0.7 };
+    expect(volumeIsFixed(settable)).toBe(false);
+    expect(settable.volume).toBe(0.7);
+    const ios = { get volume() { return 1; }, set volume(_value: number) { /* ignored, as on iOS */ } };
+    expect(volumeIsFixed(ios)).toBe(true);
+    expect(volumeIsFixed(null)).toBe(false);
   });
 });
