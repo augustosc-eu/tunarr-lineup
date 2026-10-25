@@ -33,5 +33,5 @@ export function isAllowedHost(header: string | undefined, policy: HostPolicy) {
 
 export function hostRefusal(header: string) {
   const name = hostName(header).slice(0, 100);
-  return `Lineup doesn't answer to the host name "${name}". Open it by IP address or as localhost, or add ${name} to LINEUP_ALLOWED_HOSTS on the Lineup server (or turn on sign-in with LINEUP_PASSWORD).`;
+  return `Lineup doesn't answer to the host name "${name}". Open it by IP address or as localhost, or add ${name} to LINEUP_ALLOWED_HOSTS on the Lineup server.`;
 }

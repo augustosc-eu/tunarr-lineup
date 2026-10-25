@@ -19,14 +19,12 @@ const size = (bytes: number) => (bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toF
 const scannedText = (folder: Folder) => (folder.scanning ? 'scanning…' : folder.scanned ? `scanned ${new Date(folder.scanned).toLocaleDateString('en', { month: 'short', day: 'numeric' })}` : 'not scanned yet');
 const lastSegment = (path: string) => path.split(/[\\/]/).filter(Boolean).pop() ?? path;
 
-/** What turns uploads on in docker-compose.yml: one volume, same path in both containers. */
+/** The shared folder uploads need in docker-compose.yml: one volume, same path in both containers. */
 export const MEDIA_COMPOSE_SNIPPET = `services:
   tunarr:
     volumes:
       - lineup-media:/media/lineup
   lineup:
-    environment:
-      - LINEUP_MEDIA_DIR=/media/lineup
     volumes:
       - lineup-media:/media/lineup
 volumes:
@@ -44,7 +42,7 @@ function syncText(sync: FillerSync, lists: ListSummary[]) {
 /**
  * Filler folders: video files for station IDs, commercials, promos and bumpers,
  * kept in folders Tunarr reads. Lineup picks them up by itself (server
- * `syncFillerFolders`): the upload folder (LINEUP_MEDIA_DIR) is added to Tunarr,
+ * `syncFillerFolders`): the upload folder (the media folder from setup) is added to Tunarr,
  * every folder named for a role gets a filler list with that role, and lists
  * follow their folder after each scan. Libraries with no obvious role get a
  * one-time "Make filler list".
@@ -203,7 +201,7 @@ export function FillerFoldersDialog({ roles, onClose, onChanged }: Props) {
         <h3 className="section-title">Upload folder</h3>
         {status === null && !error && <p className="subtle">Loading…</p>}
         {status && !status.enabled && <div className="media-setup">
-          <p className="subtle">{status.message} To turn them on, add these lines to docker-compose.yml. They give Lineup and Tunarr one shared folder. Then run <code>docker compose up -d</code>. Outside Docker, see the README.</p>
+          <p className="subtle">{status.message} In Docker, first give Lineup and Tunarr one shared folder: add these lines to docker-compose.yml, run <code>docker compose up -d</code>, then choose <code>/media/lineup</code> there. Outside Docker, any folder both can reach works (see the README).</p>
           <pre ref={snippet} aria-label="docker-compose.yml lines for the upload folder" tabIndex={0}>{MEDIA_COMPOSE_SNIPPET}</pre>
           <p className="media-setup-copy"><button onClick={() => void copySnippet()}>Copy lines</button>{copied && <span className="subtle" aria-live="polite">{copied}</span>}</p>
         </div>}

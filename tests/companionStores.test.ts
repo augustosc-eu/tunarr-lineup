@@ -184,21 +184,21 @@ describe('server settings', () => {
     const body = json(response);
     expect(setting(body, 'TUNARR_TIMEOUT_MS')).toMatchObject({ value: 5, source: 'env', kind: 'seconds' });
     expect(setting(body, 'LINEUP_SCHEDULER')).toMatchObject({ value: false, source: 'default' });
-    expect(body.fixed).toContainEqual({ label: 'AI key', set: true });
+    expect(body.fixed).toContainEqual({ label: 'Data folder', set: true });
     expect(body.fixed).toContainEqual({ label: 'Allowed host names', set: false });
+    // The AI model moved to AI setup (/server-config).
+    expect(setting(body, 'LINEUP_AI_MODEL')).toBeUndefined();
   });
 
-  it('saves values over .env, applies them right away, and goes back on reset', async () => {
+  it('saves values over the setup values, applies them right away, and goes back on reset', async () => {
     const dir = await tempDir('settings');
     const config = createProxyConfig(env(dir));
-    expect(config.ai).toHaveProperty('off');
-    const saved = await handleTunarrApi(request('PUT', '/api/tunarr/server-settings', { values: { TUNARR_TIMEOUT_MS: 45, LINEUP_SCHEDULER: true, LINEUP_AI_MODEL: 'llama3', LINEUP_EXTERNAL_LOGOS: false } }), config);
+    const saved = await handleTunarrApi(request('PUT', '/api/tunarr/server-settings', { values: { TUNARR_TIMEOUT_MS: 45, LINEUP_SCHEDULER: true, LINEUP_EXTERNAL_LOGOS: false } }), config);
     expect(saved.status).toBe(200);
     expect(setting(json(saved), 'TUNARR_TIMEOUT_MS')).toMatchObject({ value: 45, source: 'saved', envValue: 5 });
     expect(config.timeoutMs).toBe(45_000);
     expect(config.externalLogos).toBe(false);
     expect(config.scheduler?.enabled).toBe(true);
-    expect(config.ai).toMatchObject({ provider: 'openai', model: 'llama3' });
     config.scheduler?.stop();
 
     // A restarted server picks the saved values up again.

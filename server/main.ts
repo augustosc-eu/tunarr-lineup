@@ -2,34 +2,26 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createLineupServer } from './app.js';
-import { createAuthConfig } from './auth.js';
-import { createHostPolicy } from './hosts.js';
-import { createProxyConfig, loadSavedSettings } from './tunarrProxy.js';
+import { bootCompanion, setupBanner } from './boot.js';
 
-const config = createProxyConfig(process.env);
-// Settings changed from the desk win over the environment; a broken settings.json is reported, not overwritten.
-await loadSavedSettings(config).catch((error) => console.error('[settings]', error instanceof Error ? error.message : error));
-const auth = createAuthConfig(process.env);
-const hosts = createHostPolicy(process.env);
-const port = Number(process.env.PORT) || 3000;
-const host = process.env.HOST || '0.0.0.0';
 const staticRoot = path.resolve(
   process.env.STATIC_DIR || path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'dist-local'),
 );
+const { config, setup, store, hosts, notes } = await bootCompanion(process.env, staticRoot);
+const port = Number(process.env.PORT) || 3000;
+const host = process.env.HOST || '0.0.0.0';
 
-const server = createLineupServer({ config, auth, staticRoot, hosts });
+const server = createLineupServer({ config, auth: () => setup.auth(), staticRoot, hosts });
 
 server.listen(port, host, () => {
   config.scheduler?.start();
-  const tunarr = config.target ? config.target.host : config.configError ? 'invalid TUNARR_URL' : 'not configured (set TUNARR_URL)';
-  console.log(`Tunarr Lineup listening on http://${host}:${port} · Tunarr: ${tunarr} · sign-in: ${auth ? `on (user "${auth.username}")` : 'off'}`);
-  if (!auth && host !== '127.0.0.1' && host !== 'localhost') {
-    console.log('Anyone who can reach this port can edit channel programming. Set LINEUP_PASSWORD to require sign-in.');
-  }
-  if (config.scheduler?.enabled) console.log('Scheduled changes are on (LINEUP_SCHEDULER): due changes are saved to Tunarr every 30 seconds.');
-  if (!auth && !hosts.any) {
-    console.log(`Answering to IP addresses and localhost${hosts.names.length ? ` and ${hosts.names.join(', ')}` : ''}. Add other host names to LINEUP_ALLOWED_HOSTS.`);
-  }
+  const tunarr = config.target ? config.target.host : 'not set up yet';
+  const account = setup.stored().account;
+  console.log(`Tunarr Lineup listening on http://${host}:${port} · Tunarr: ${tunarr} · sign-in: ${setup.needed() ? 'after setup' : `user "${account?.username}"`} · settings: ${store.location}`);
+  for (const note of notes) console.log(note);
+  // The desktop app hands its window the code itself.
+  if (setup.needed() && !process.env.LINEUP_SETUP_CODE) console.log(setupBanner(setup.code));
+  if (config.scheduler?.enabled) console.log('Scheduled changes are on: due changes are saved to Tunarr every 30 seconds.');
 });
 
 for (const signal of ['SIGTERM', 'SIGINT'] as const) {

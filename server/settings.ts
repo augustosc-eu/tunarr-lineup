@@ -1,9 +1,10 @@
-// Server settings the desk may change (owner decision 2026-10-19). Only
-// settings with nothing to do with security are editable: timeouts, the
-// scheduler, public logos, the AI model and the upload limit. Saved values
-// (LINEUP_DATA_DIR/settings.json) win over the environment until reset. Addresses,
-// keys, the password, allowed hosts and folder paths stay in .env, and the browser
-// only learns whether each is set, never its value.
+// Server settings the desk may change (owner decision 2026-10-19): timeouts,
+// the scheduler, public logos and the upload limit (the AI model moved to AI setup, D62). Saved values
+// (LINEUP_DATA_DIR/settings.json) win over the setup values (config.json,
+// server/configStore.ts) until reset. The Tunarr address, AI, the media folder
+// and the account are changed under /server-config (server/setup.ts, D62); where
+// the server listens, its data folder and allowed host names are set where it
+// starts, and the browser only learns whether each is set.
 import { createAiConfig } from './ai.js';
 import { createJsonFile, StoreError } from './jsonFile.js';
 import type { ProxyConfig } from './tunarrProxy.js';
@@ -16,7 +17,6 @@ export const EDITABLE_SETTINGS = [
   { key: 'TUNARR_SAVE_TIMEOUT_MS', label: 'Tunarr save timeout', group: 'Tunarr', kind: 'seconds', min: 1, max: 3600, default: 30, help: 'How long to wait for Tunarr to save programming.' },
   { key: 'LINEUP_EXTERNAL_LOGOS', label: 'Load logos from public sites', group: 'Tunarr', kind: 'toggle', default: true, help: 'The Lineup server fetches channel logos hosted on public websites.' },
   { key: 'LINEUP_SCHEDULER', label: 'Scheduled changes', group: 'Scheduling', kind: 'toggle', default: false, help: 'Save planned changes to Tunarr on their date, checked every 30 seconds.' },
-  { key: 'LINEUP_AI_MODEL', label: 'AI model', group: 'AI', kind: 'text', max: 200, default: '', help: 'The model name the AI provider uses. Empty uses the provider’s default.' },
   { key: 'LINEUP_AI_TIMEOUT_MS', label: 'AI timeout', group: 'AI', kind: 'seconds', min: 10, max: 1800, default: 180, help: 'How long to wait for the AI to answer.' },
   { key: 'LINEUP_MEDIA_MAX_MB', label: 'Largest upload', group: 'Media folder', kind: 'megabytes', min: 1, max: 102_400, default: 4096, help: 'The biggest video file the media folder accepts.' },
 ] as const satisfies readonly Spec[];
@@ -26,15 +26,10 @@ type Value = number | boolean | string;
 
 /** Shown as set or not, never with their values. */
 export const FIXED_SETTINGS: Array<{ keys: string[]; label: string }> = [
-  { keys: ['TUNARR_URL'], label: 'Tunarr address' },
-  { keys: ['LINEUP_PASSWORD'], label: 'Sign-in password' },
-  { keys: ['LINEUP_ALLOWED_HOSTS'], label: 'Allowed host names' },
   { keys: ['LINEUP_DATA_DIR'], label: 'Data folder' },
-  { keys: ['LINEUP_MEDIA_DIR'], label: 'Media folder' },
-  { keys: ['LINEUP_MEDIA_TUNARR_DIR'], label: 'Media folder as Tunarr sees it' },
-  { keys: ['LINEUP_AI_PROVIDER'], label: 'AI provider' },
-  { keys: ['LINEUP_AI_API_KEY', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY'], label: 'AI key' },
-  { keys: ['LINEUP_AI_BASE_URL'], label: 'AI address' },
+  { keys: ['LINEUP_ALLOWED_HOSTS'], label: 'Allowed host names' },
+  { keys: ['HOST'], label: 'Listen address' },
+  { keys: ['PORT'], label: 'Port' },
 ];
 
 export type SettingView = {
@@ -83,11 +78,12 @@ export function validateSetting(key: string, value: unknown): { env: string } | 
 
 export type SettingsStore = {
   readonly location: string;
-  /** The environment the server started with. */
+  /** What the settings fall back to: the setup values (config.json) over the server's environment. */
   readonly env: Record<string, string | undefined>;
+  setEnv(env: Record<string, string | undefined>): void;
   /** Saved values, as env text. */
   saved(): Promise<Record<string, string>>;
-  /** `null` drops a saved value, so .env applies again. */
+  /** `null` drops a saved value, so the setup value applies again. */
   update(values: Record<string, unknown>): Promise<Record<string, string>>;
 };
 
@@ -105,9 +101,11 @@ export function createSettingsStore(dir: string, env: Record<string, string | un
     }
     return out;
   }
+  let base = env;
   return {
     location: file.location,
-    env,
+    get env() { return base; },
+    setEnv(next) { base = next; },
     saved: () => file.serialize(read),
     update: (values) => file.serialize(async () => {
       const next = await read();
@@ -128,16 +126,18 @@ export function createSettingsStore(dir: string, env: Record<string, string | un
 }
 
 export function settingsView(env: Record<string, string | undefined>, saved: Record<string, string>): SettingsView {
-  const editable = EDITABLE_SETTINGS.map((spec): SettingView => {
+  // Widened, so a kind no current setting uses (text) still type-checks.
+  const editable = (EDITABLE_SETTINGS as readonly Spec[]).map((spec): SettingView => {
     const envValue = fromEnv(spec, env[spec.key]);
     const savedValue = spec.key in saved ? (spec.kind === 'text' ? saved[spec.key] : fromEnv(spec, saved[spec.key])) : null;
     const source = savedValue !== null ? 'saved' : envValue !== null ? 'env' : 'default';
-    const { key, label, group, help, kind } = spec;
-    const limits = 'min' in spec ? { min: spec.min, max: spec.max } : 'max' in spec ? { max: spec.max } : {};
+    const { label, group, help, kind } = spec;
+    const key = spec.key as SettingKey;
+    const limits = spec.min !== undefined ? { min: spec.min, max: spec.max } : spec.max !== undefined ? { max: spec.max } : {};
     return { key, label, group, help, kind, ...limits, value: savedValue ?? envValue ?? spec.default, envValue, defaultValue: spec.default, source };
   });
   const fixed = FIXED_SETTINGS.map(({ keys, label }) => ({ label, set: keys.some((key) => !!env[key]?.trim()) }));
-  return { editable, fixed, restartNote: 'These stay in the .env file (or the container’s environment); change them there and restart the Lineup server.' };
+  return { editable, fixed, restartNote: 'These are set where the Lineup server starts (its Docker or command-line settings); change them there and restart it.' };
 }
 
 /** Applies saved values on top of `env` to a running config. */

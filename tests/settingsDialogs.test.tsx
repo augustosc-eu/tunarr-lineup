@@ -25,14 +25,16 @@ afterEach(() => {
 });
 
 describe('ServerSettingsDialog', () => {
-  it('saves a setting, shows where each value comes from, and goes back to .env', async () => {
+  it('saves a setting, shows where each value comes from, and resets it', async () => {
     const config = createProxyConfig({ LINEUP_DATA_DIR: await mkdtemp(path.join(tmpdir(), 'lineup-settings-ui-')), TUNARR_TIMEOUT_MS: '5000', LINEUP_PASSWORD: 'hunter2' });
     throughCompanion(config);
     render(<ServerSettingsDialog onClose={() => undefined} />);
     const timeout = await screen.findByLabelText('Tunarr request timeout (seconds)');
     expect((timeout as HTMLInputElement).value).toBe('5');
-    expect(screen.getAllByText('From .env').length).toBe(1);
-    expect(screen.getByLabelText('Settings kept in .env').textContent).toContain('Sign-in passwordSet');
+    expect(screen.getAllByText('From setup').length).toBe(1);
+    expect(screen.getByLabelText('Settings set where the server starts').textContent).toContain('Data folderSet');
+    // Configured only where it runs (no config.json): no connection section.
+    expect(screen.queryByLabelText('Tunarr address')).toBeNull();
     expect(document.body.textContent).not.toContain('hunter2');
 
     fireEvent.change(timeout, { target: { value: '20' } });
@@ -41,7 +43,7 @@ describe('ServerSettingsDialog', () => {
     expect(config.timeoutMs).toBe(20_000);
     expect(screen.getByText('Saved here')).toBeTruthy();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Use the .env value for Tunarr request timeout' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Reset Tunarr request timeout' }));
     await waitFor(() => expect(config.timeoutMs).toBe(5000));
     expect(((await screen.findByLabelText('Tunarr request timeout (seconds)')) as HTMLInputElement).value).toBe('5');
   });

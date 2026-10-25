@@ -451,13 +451,24 @@ describe('no silent fallback to demo mode', () => {
     expect(screen.getByText('DEMO CHANNELS')).toBeTruthy();
   });
 
-  it('explains how to configure TUNARR_URL when it is missing', async () => {
-    fakeCompanion({ health: { status: 503, body: { status: 'not_configured', error: { code: 'not_configured', message: 'TUNARR_URL is not set on the Lineup server.' } } } });
+  it('explains where to set Tunarr’s address when it is missing', async () => {
+    fakeCompanion({ health: { status: 503, body: { status: 'not_configured', error: { code: 'not_configured', message: 'Tunarr’s address is not set up on the Lineup server.' } } } });
     render(<Home />);
     const dialog = await screen.findByRole('dialog');
     expect(within(dialog).getByText('Tunarr isn’t configured')).toBeTruthy();
-    expect(within(dialog).getByText('TUNARR_URL=http://tunarr:8000')).toBeTruthy();
+    expect(within(dialog).getByText('http://tunarr:8000')).toBeTruthy();
     expect(screen.queryByText('Studio Selects')).toBeNull();
+  });
+
+  it('opens the setup wizard on a server that isn’t set up, with demo data one choice away', async () => {
+    fakeCompanion({ health: { status: 503, body: { status: 'setup_required', error: { code: 'setup_required', message: 'Lineup isn’t set up yet.' } } } });
+    render(<Home />);
+    expect(await screen.findByText('Set up Tunarr Lineup')).toBeTruthy();
+    expect(screen.getByLabelText('Setup code')).toBeTruthy();
+    expect(screen.queryByText('Can’t reach Tunarr')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Use demo data' }));
+    expect(await screen.findByText('Studio Selects')).toBeTruthy();
+    expect(screen.queryByText('Set up Tunarr Lineup')).toBeNull();
   });
 
   it('treats a missing companion (hosted preview) as unavailable, not demo', async () => {

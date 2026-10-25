@@ -15,6 +15,7 @@ import { NewChannelDialog } from './components/NewChannelDialog';
 import { ProgramBin } from './components/ProgramBin';
 import { ScheduleEditor } from './components/ScheduleEditor';
 import { ServerSettingsDialog } from './components/ServerSettingsDialog';
+import { SetupWizard } from './components/SetupWizard';
 import { SmartCollectionsManager } from './components/SmartCollectionsManager';
 import { TemplatesDialog, type TemplateTarget } from './components/TemplatesDialog';
 import { TranscodeProfilesDialog } from './components/TranscodeProfilesDialog';
@@ -165,6 +166,7 @@ function connectionLabel(mode: Mode, connection: ConnectionState) {
     case 'checking': return 'Checking Tunarr…';
     case 'connected': return 'Tunarr connected';
     case 'not_configured': return 'Tunarr not configured';
+    case 'setup_required': return 'Lineup needs setting up';
     case 'unreachable': return 'Tunarr unreachable';
     case 'unavailable': return 'Live mode unavailable';
   }
@@ -723,6 +725,8 @@ export default function Home() {
     const state = await checkHealth({ timeoutMs: SHORT_TIMEOUT_MS });
     if (!mounted.current) return;
     setConnection(state);
+    // The setup wizard takes over the live desk (server/setup.ts).
+    if (state.status === 'setup_required') return void setMode('live');
     if (state.status !== 'connected') {
       setConnectionOpen(true);
       return;
@@ -751,6 +755,7 @@ export default function Home() {
     checkHealth({ signal: controller.signal, timeoutMs: SHORT_TIMEOUT_MS }).then((state) => {
       if (controller.signal.aborted) return;
       setConnection(state);
+      if (state.status === 'setup_required') return;
       if (state.status !== 'connected') {
         setConnectionOpen(true);
         return;
@@ -2276,12 +2281,12 @@ export default function Home() {
           </> : connection.status === 'not_configured' ? <>
             <h2 id="connect-title">Tunarr isn’t configured</h2>
             <p className="subtle">{connection.message}</p>
-            <p className="subtle">Set it to your Tunarr address and restart Lineup: <code>TUNARR_URL=http://tunarr:8000</code> in Docker Compose, or <code>TUNARR_URL=http://localhost:8000</code> when running locally. The address stays on the server; the browser never contacts Tunarr directly.</p>
+            <p className="subtle">Set Tunarr’s address under Setup → Server Settings: usually <code>http://tunarr:8000</code> in Docker Compose, or <code>http://localhost:8000</code> when Lineup runs beside Tunarr. The address stays on the server; the browser never contacts Tunarr directly.</p>
           </> : connection.status === 'unreachable' ? <>
             <h2 id="connect-title">Can’t reach Tunarr</h2>
             <p className="subtle">{connection.message}</p>
             {connection.host && <div className="info-row single"><span>Tried</span><b>{connection.host}</b></div>}
-            <p className="subtle">Check that Tunarr is running and that <code>TUNARR_URL</code> on the Lineup server points to it.</p>
+            <p className="subtle">Check that Tunarr is running and that its address under Setup → Server Settings points to it.</p>
           </> : <>
             <h2 id="connect-title">Live mode unavailable</h2>
             <p className="subtle">{connection.message} To edit a real Tunarr server, run the Lineup companion beside Tunarr (see the README), then open it from that server.</p>
@@ -2418,6 +2423,7 @@ export default function Home() {
       {setupDialog === 'folders' && <FillerFoldersDialog roles={filler.roles} onClose={() => setSetupDialog(null)} onChanged={() => { filler.reload(); if (slotEditor.open || catalog) loadCatalog(); }} />}
       {setupDialog === 'transcode' && <TranscodeProfilesDialog onClose={() => setSetupDialog(null)} />}
       {setupDialog === 'server' && <ServerSettingsDialog onClose={() => setSetupDialog(null)} />}
+      {live && connection.status === 'setup_required' && <SetupWizard onDemo={switchToDemo} />}
       {newChannel && <NewChannelDialog
         channels={channels}
         copyFrom={newChannel.copyFrom}

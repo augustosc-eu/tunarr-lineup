@@ -8,6 +8,17 @@ were renamed 2026.10.1 and 2026.10.2.
 
 ## [Unreleased]
 
+### Added
+
+- **Setup wizard.** A fresh Lineup needs no environment variables: open it, type the setup code from the server's log (`docker logs tunarr-lineup`), and the wizard finds Tunarr (or you type its address and test it), asks for a user name and password, and optionally sets up AI, the upload folder and scheduled changes. Everything is kept by the server in `config.json` in its data folder. The desktop app opens the wizard with its code already filled in.
+- **Server Settings covers everything.** Tunarr's address, the AI provider, key, model and address, the upload folder and the sign-in can now be changed from **Setup → Server Settings…** while the server runs. Keys and passwords are never shown again.
+
+### Changed
+
+- **Sign-in is always on.** Lineup asks for the user name and password from setup on every device. The password is stored only as a salted hash. The desktop app's own window signs in by itself.
+- **Environment variables are read once.** On the first start with this version, `TUNARR_URL`, `LINEUP_PASSWORD`, the `LINEUP_AI_*` and `LINEUP_MEDIA_*` variables and the other settings are copied into `config.json` and ignored after that; the log lists any still set. An install with `TUNARR_URL` and `LINEUP_PASSWORD` keeps working without the wizard; one without a password opens the wizard with Tunarr's address filled in. `HOST`, `PORT` and `LINEUP_DATA_DIR` still come from the environment.
+- The AI model moved from the tuning settings to the AI section of Server Settings (a model saved there is moved).
+
 ## [2026.10.16] - 2026-10-24
 
 ### Changed

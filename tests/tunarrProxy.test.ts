@@ -57,12 +57,12 @@ describe('Tunarr proxy routes', () => {
     expect(calls[0].url).toBe('https://media.example.com/tunarr/api/channels');
   });
 
-  it('explains when TUNARR_URL is missing', async () => {
+  it('explains when Tunarr’s address is missing', async () => {
     const config = createProxyConfig({});
     const health = await handleTunarrApi(get('/api/tunarr/health'), config);
     expect(health.status).toBe(503);
     expect(body(health)).toMatchObject({ status: 'not_configured', error: { code: 'not_configured' } });
-    expect(body(health).error.message).toContain('TUNARR_URL');
+    expect(body(health).error.message).toContain('Tunarr’s address');
     const list = await handleTunarrApi(get('/api/tunarr/channels'), config);
     expect(list.status).toBe(503);
     expect(body(list).error.code).toBe('not_configured');

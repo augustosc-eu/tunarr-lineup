@@ -4,35 +4,39 @@
 import tailwindcss from '@tailwindcss/postcss';
 import react from '@vitejs/plugin-react';
 import { defineConfig, loadEnv, type Plugin } from 'vite';
-import { AUTH_CHALLENGE, createAuthConfig, isAuthorized } from './server/auth.js';
-import { createHostPolicy, hostRefusal, isAllowedHost } from './server/hosts.js';
+import { AUTH_CHALLENGE, authorize } from './server/auth.js';
+import { bootCompanion, setupBanner } from './server/boot.js';
+import { hostRefusal, isAllowedHost } from './server/hosts.js';
 import { handleNodeApiRequest, isTunarrApiPath } from './server/nodeAdapter.js';
-import { createProxyConfig } from './server/tunarrProxy.js';
 
 function tunarrApi(env: Record<string, string>): Plugin {
-  const config = createProxyConfig(env);
-  const auth = createAuthConfig(env);
-  const hosts = createHostPolicy(env);
   return {
     name: 'tunarr-lineup-api',
-    configureServer(server) {
-      // Dated changes run in the dev server too when LINEUP_SCHEDULER=on.
+    // The same start as the companion (server/boot.ts): config.json, setup and sign-in.
+    async configureServer(server) {
+      const { config, setup, hosts, notes } = await bootCompanion(env);
+      for (const note of notes) console.log(note);
+      if (setup.needed()) console.log(setupBanner(setup.code));
+      // Dated changes run in the dev server too when the scheduler is on.
       config.scheduler?.start();
       server.httpServer?.once('close', () => config.scheduler?.stop());
       // Runs before Vite's own host check, so it repeats the companion's.
       server.middlewares.use((req, res, next) => {
-        if (!auth && !isAllowedHost(req.headers.host, hosts)) {
+        const auth = setup.auth();
+        if (!auth && !setup.needed() && !isAllowedHost(req.headers.host, hosts)) {
           res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' });
           res.end(hostRefusal(req.headers.host ?? ''));
           return;
         }
-        if (!isAuthorized(req.headers.authorization, auth)) {
-          res.writeHead(401, AUTH_CHALLENGE);
-          res.end('Sign in to Tunarr Lineup.');
-          return;
-        }
-        if (!isTunarrApiPath(req.url)) return next();
-        handleNodeApiRequest(req, res, config).catch(next);
+        authorize(req.headers.authorization, auth).then((ok) => {
+          if (!ok) {
+            res.writeHead(401, AUTH_CHALLENGE);
+            res.end('Sign in to Tunarr Lineup.');
+            return;
+          }
+          if (!isTunarrApiPath(req.url)) return next();
+          return handleNodeApiRequest(req, res, config);
+        }).catch(next);
       });
     },
   };
@@ -40,17 +44,16 @@ function tunarrApi(env: Record<string, string>): Plugin {
 
 export default defineConfig(({ mode }) => {
   const env = { ...loadEnv(mode, process.cwd(), ''), ...process.env } as Record<string, string>;
-  const hosts = createHostPolicy(env);
   return {
     root: 'local',
     publicDir: '../public',
-    // TUNARR_URL is read by the server only; nothing from the environment is
-    // exposed to the client bundle.
+    // Server settings are read by the server only; nothing from the environment
+    // is exposed to the client bundle.
     envPrefix: 'LINEUP_PUBLIC_',
     css: { postcss: { plugins: [tailwindcss()] } },
     plugins: [react(), tunarrApi(env)],
-    // Same host rule as the companion: any name with sign-in on, otherwise IPs, localhost and LINEUP_ALLOWED_HOSTS.
-    server: { port: 3000, allowedHosts: hosts.any || createAuthConfig(env) ? true : hosts.names },
+    // The middleware above applies the companion's host rule (sign-in, or the setup code, otherwise LINEUP_ALLOWED_HOSTS).
+    server: { port: 3000, allowedHosts: true },
     build: { outDir: '../dist-local', emptyOutDir: true },
   };
 });

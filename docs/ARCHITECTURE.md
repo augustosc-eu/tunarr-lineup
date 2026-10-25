@@ -9,10 +9,10 @@ repository, it says so.
 
 ```
                           ┌──────────────────────── Local companion (real use) ───────────────────────┐
- Browser (React SPA) ───▶ │ server/main.ts → server/app.ts  (node:http, port 3000)                     │
+ Browser (React SPA) ───▶ │ server/main.ts → server/boot.ts → server/app.ts  (node:http, port 3000)    │
   app/page.tsx            │   ├─ /healthz (always open)                                                │
-  lib/tunarrClient.ts     │   ├─ optional Basic sign-in (server/auth.ts, LINEUP_PASSWORD)              │
-  (same-origin fetch,     │   ├─ /api/tunarr/*  → server/nodeAdapter.ts → server/tunarrProxy.ts ──────┼──▶ Tunarr (TUNARR_URL)
+  lib/tunarrClient.ts     │   ├─ Basic sign-in (server/auth.ts; account from setup, config.json)       │
+  (same-origin fetch,     │   ├─ /api/tunarr/*  → server/nodeAdapter.ts → server/tunarrProxy.ts ──────┼──▶ Tunarr (address from setup)
    <img> artwork)         │   └─ static files from dist-local/ (Vite build of local/ + app/page.tsx)   │     /api/channels
                           └────────────────────────────────────────────────────────────────────────────┘     /api/channels/:id/programming
                                                                                                              /api/channels/:id/lineup
@@ -100,7 +100,7 @@ server implements those paths.
 | `server/templateSchema.ts` | Template types and `validateTemplate` (ids, names, roles and suggestions, day plans, ad style, pad/lateness, role defaults reduced to plain source fields). Pure; the browser imports it. |
 | `server/templateStore.ts` | Saved templates in `LINEUP_DATA_DIR/templates.json`: serialized, atomic writes; unreadable files are reported, never overwritten. |
 | `server/lineupRoutes.ts` | Lineup's own routes: `/templates`, `/filler-roles`, `/station-ids`, `/server-settings`, `/media-folder` and `/ai` (`matchLineupRoute`, `handleLineupRoute`). |
-| `server/settings.ts` | Server settings the desk may change (`EDITABLE_SETTINGS`), their store `LINEUP_DATA_DIR/settings.json`, `settingsView` and `applySettings`. `server/main.ts` applies saved values at startup (`loadSavedSettings`). |
+| `server/settings.ts` | Tuning settings the desk may change (`EDITABLE_SETTINGS`), their store `LINEUP_DATA_DIR/settings.json` over the setup values (`setEnv`), `settingsView` and `applySettings`. `bootCompanion` applies saved values at startup (`loadSavedSettings`). |
 | `server/stationIdStore.ts` | Station IDs picked for each channel, `LINEUP_DATA_DIR/station-ids.json`. |
 | `server/mediaFolder.ts` | The media folder (`LINEUP_MEDIA_DIR`): role subfolders, safe file names (`mediaFileName`), streamed uploads that never overwrite, move and delete. Node built-ins. |
 | `server/jsonFile.ts` | One JSON file in `LINEUP_DATA_DIR`: serialized, atomic writes; a file that can't be parsed is reported, never overwritten. Used by both stores. |
@@ -123,10 +123,13 @@ server implements those paths.
 | `server/lineupItems.ts` | `lineupItemsError` (shared item validation), `slimPrograms`. |
 | `server/upstream.ts` | Shared upstream plumbing: `fetchUpstream`, `callTunarr` (GET/POST/PUT/DELETE), `UpstreamError`, `json`, `fail`. |
 | `server/lineupVersion.ts` | `programmingVersion(lineup, schedule)`: a non-cryptographic fingerprint (two cyrb53 hashes plus length), shared by the browser and the proxy for `If-Match`. |
-| `server/auth.ts` | Optional HTTP Basic sign-in: `createAuthConfig`, `isAuthorized`, `AUTH_CHALLENGE`. |
+| `server/auth.ts` | HTTP Basic sign-in: scrypt `hashPassword`/`verifyPassword`, `authorize` (hashed account, remembered matches, the desktop app key), `isAuthorized` (plain text, tests), `validateAccount`, `AUTH_CHALLENGE`. |
+| `server/configStore.ts` | `config.json` (D62): `CONFIG_KEYS`, `createConfigStore` (owner-only file), `importEnv` (the one-time import, password hashed), `configEnv` (the env the rest of the server reads), `isComplete`, `ignoredEnv`, `savedAiModel`. |
+| `server/setup.ts` | The setup wizard and `/server-config`: `createSetup` (state, setup code and its lockout, `auth()`), `applyConfig` (points the running server at the saved values), `applyConnectionFields` (validation), `detectCandidates`/`probeTunarr`, `matchSetupRoute`, `handleSetupRoute`, `setupRequired`. |
+| `server/boot.ts` | `bootCompanion`: reads or imports `config.json`, makes the setup state and the proxy config; shared by `server/main.ts` and the dev server. `setupBanner` prints the code. |
 | `server/app.ts` | `createLineupServer({ config, auth, staticRoot, hosts })`: request routing, static files, SPA fallback, security headers. |
 | `server/hosts.ts` | Host-name check against DNS rebinding: `createHostPolicy` (`LINEUP_ALLOWED_HOSTS`), `isAllowedHost`, `hostRefusal`. |
-| `server/main.ts` | Process entry: reads env, creates the server, listens, logs, handles SIGTERM/SIGINT. |
+| `server/main.ts` | Process entry: `bootCompanion`, creates the server, listens, logs (the setup code until setup is done), handles SIGTERM/SIGINT. |
 | `server/tsconfig.json` | Compiles `server/*.ts` (excluding tests) to `dist-server/` (NodeNext ESM). |
 | `vite.config.ts` | Hosted build/dev: `vinext()` and `cloudflare()` plugins. |
 | `vite.local.config.ts` | Companion build/dev: React plugin, Tailwind PostCSS, and dev middleware for sign-in and `/api/tunarr`. |
@@ -160,12 +163,12 @@ From `package.json` (Node `>=22.13.0`, `"type": "module"`):
 
 | Target | Command | Entry |
 | --- | --- | --- |
-| Companion dev | `npm run dev:local` | `vite.local.config.ts` (root `local/`), with plugin `tunarrApi()` for sign-in and the proxy |
+| Companion dev | `npm run dev:local` | `vite.local.config.ts` (root `local/`), with plugin `tunarrApi()` that runs `bootCompanion` for setup, sign-in and the proxy |
 | Companion build | `npm run build:local` | `vite build` → `dist-local/`; `tsc -p server/tsconfig.json` → `dist-server/` |
 | Companion run | `npm run start:local` / Docker `CMD` | `node dist-server/main.js` |
 | Hosted | `npm run dev` / `build` / `start` | `vinext dev` / `vinext build` / `vinext start` |
 | Unit/UI tests | `npm test` | `vitest run` |
-| End-to-end | `npm run test:e2e` | `playwright test`. Starts `e2e/fake-tunarr.mjs` (port 18000) and `dist-server/main.js` (port 13000) |
+| End-to-end | `npm run test:e2e` | `playwright test`. Starts `e2e/fake-tunarr.mjs` (port 18000), `dist-server/main.js` set up from its environment (port 13000, signed in with `httpCredentials`) and a second one with nothing set up (port 13001, `e2e/setup.spec.ts`) |
 
 ## 5. Routing
 
@@ -179,8 +182,8 @@ a deployed Worker was not verified.
 **Companion server** (`createLineupServer` in `server/app.ts`) evaluates each request in this order:
 
 1. **`/healthz`** → `200 {"status":"ok"}`. Liveness only; it doesn't check Tunarr. Always unauthenticated, for the Docker `HEALTHCHECK`.
-2. **Without sign-in, `isAllowedHost(req.headers.host, hosts)`** fails → `403` (plain text naming `LINEUP_ALLOWED_HOSTS`). IP addresses, `localhost` and `*.localhost` always pass. See §10.
-3. **`isAuthorized(req.headers.authorization, auth)`** fails → `401` with `WWW-Authenticate: Basic`. This applies only when `LINEUP_PASSWORD` is set.
+2. **Without sign-in and outside setup, `isAllowedHost(req.headers.host, hosts)`** fails → `403` (plain text naming `LINEUP_ALLOWED_HOSTS`). IP addresses, `localhost` and `*.localhost` always pass. See §10.
+3. **`authorize(req.headers.authorization, auth())`** fails → `401` with `WWW-Authenticate: Basic`. `auth()` is the account from setup (none until setup is done).
 4. **`isTunarrApiPath`** → `handleNodeApiRequest`.
 5. **Methods other than GET/HEAD** → `405`.
 6. **An existing file** under `staticRoot` → served. `resolveStatic` rejects path traversal. `/assets/*` is cached `immutable`; everything else is `no-cache`.
@@ -205,7 +208,11 @@ which is set to the same rule for the page itself).
 
 ### Configuration
 
-`createProxyConfig(env)` builds a `ProxyConfig`:
+`bootCompanion` (`server/boot.ts`) reads `config.json` and calls
+`createProxyConfig(configEnv(process.env, values))`, so the keys below come from
+setup, not the process environment (D62). `config.setup` holds the setup state;
+`applyConfig` re-applies everything when setup or Server Settings saves. Tests
+call `createProxyConfig(env)` directly, without `setup`.
 
 - **`TUNARR_URL`** is parsed by `parseTunarrUrl` into `origin`, `basePath`, `host` and an optional `authorization`. Userinfo becomes a Basic header and never appears in `host`. Missing → `target: null`; invalid → `configError` (fixed text, never echoing the value).
 - **`TUNARR_TIMEOUT_MS`** defaults to 10000 and **`TUNARR_SAVE_TIMEOUT_MS`** to 30000.
@@ -228,6 +235,7 @@ which is set to the same rule for the page itself).
 
 ### Request pipeline (`handleTunarrApi`)
 
+0. **Setup:** `matchSetupRoute` routes go to `handleSetupRoute` (below). While `config.setup.needed()`, every other path answers `503 setup_required` (health: `{status:'setup_required', error}`); `nodeAdapter` repeats this for uploads and playback, which skip the proxy.
 1. **Path:** parsed with `new URL(...)`, which normalizes `..`. No route match → `404 route_not_allowed`.
 2. **Parameters:**
    - Channel `:id` must match `CHANNEL_ID`, or the response is `400 invalid_channel_id`.
@@ -244,6 +252,25 @@ which is set to the same rule for the page itself).
    - **`recreate`:** the body is exactly `{ lineup: 'keep' | 'empty' }` (`validateRecreate`) and needs `If-Match`, else `428`.
 7. **No target:** `503` (`not_configured` or `invalid_config`). Health uses `{status:'not_configured', error}`.
 8. **Upstream call:** `fetchUpstream`, shared by `callTunarr` (JSON) and `fetchArtwork` (images).
+
+### Setup and server configuration (`server/setup.ts`, D62)
+
+Same pipeline as Lineup's own routes (method allowlist, Origin check, no query, JSON bodies).
+
+| Route | Methods | Notes |
+| --- | --- | --- |
+| `/setup` | GET | `{ needed }` only |
+| `/setup/unlock` | POST | `{ code }` → the config view (prefill from an import) |
+| `/setup/detect` | POST | `{ code }` → `{ found, tried }`: `GET /api/channels` at `detectCandidates()` (localhost, `tunarr`, `host.docker.internal`, the default gateway from `/proc/net/route`; port 8000; no scanning), 3 s each, through `callTunarr` |
+| `/setup/test` | POST | `{ code, tunarrUrl }` → a `Probe`. `http://` is added when no scheme is typed |
+| `/setup/finish` | POST | `{ code, tunarrUrl, account: { username, password }, ai?, media?, options? }`: `validateAccount`, `applyConnectionFields`, scrypt hash, `setup.save` (write `config.json`, then `applyConfig`) |
+| `/server-config` | GET, PUT | After setup only. PUT takes the same fields plus `account: { currentPassword, username?, newPassword? }` (verified first, `403 wrong_password`) |
+| `/server-config/detect`, `/server-config/test` | POST | As above, without the code |
+
+- **Setup code:** 10 characters from an unambiguous alphabet, printed in the log (`setupBanner`), or `LINEUP_SETUP_CODE` (the desktop app). Case and dashes are ignored. Five wrong codes lock all code routes for 60 s (`429 setup_locked`). The code routes answer `409 already_set_up` afterwards.
+- **Write-only values:** the config view returns Tunarr's address without userinfo (`credentials: true` says there was some), `keySet` instead of the AI key, and never the hash. Sending the shown address back keeps the saved one; leaving `apiKey` out keeps the key.
+- **Validation:** Tunarr's address through `parseTunarrUrl`; AI provider `anthropic`/`openai`/none, a key for Anthropic, a model for OpenAI-compatible, an http(s) address, then `createAiConfig`; the media folder must be an absolute path to an existing directory that neither is nor contains, nor sits inside, the data or static folder; the Tunarr-side path must be a full path.
+- **Applying:** `applyConfig` rebuilds `target` (clearing the programming cache when it moves), the media folder, the settings baseline (`setEnv`) and, through `applySettings`, the timeouts, logos, AI and scheduler.
 
 ### Conditional writes and slot schedules
 
@@ -453,7 +480,7 @@ Further Lineup routes (owner decision 2026-10-19, D50–D52):
 | `/ai/review` | POST | `{ channelName, summary (≤ 40,000 chars), issues (≤ 100) }` → `callModel` with `REVIEW_PROMPT` and the `review_schedule` tool → `resolveReview` |
 | `/station-ids` | GET | `{ [channelId]: programId[] }` from `station-ids.json` (`server/stationIdStore.ts`, D54) |
 | `/station-ids/:channelId` | PUT | `{ programIds }` (UUIDs, deduplicated, up to 200; up to 500 channels) checked by `validatePicks`; an empty list drops the channel. Picks follow a recreated channel to its new id. |
-| `/server-settings` | GET, PUT | `settingsView`: `{ editable: [{ key, label, group, help, kind, min?, max?, value, envValue, defaultValue, source }], fixed: [{ label, set }], restartNote }`. PUT `{ values: { KEY: value or null } }`: only keys in `EDITABLE_SETTINGS` (`server/settings.ts`), each checked by `validateSetting`; `null` drops the saved value. Saved values go to `settings.json` and `applySettings` puts them into the running config (timeouts, external logos, the scheduler on or off, the AI config rebuilt, the upload limit). Fixed settings are reported as set or not, never by value. Works without `TUNARR_URL`. |
+| `/server-settings` | GET, PUT | `settingsView`: `{ editable: [{ key, label, group, help, kind, min?, max?, value, envValue, defaultValue, source }], fixed: [{ label, set }], restartNote }`. PUT `{ values: { KEY: value or null } }`: only keys in `EDITABLE_SETTINGS` (`server/settings.ts`), each checked by `validateSetting`; `null` drops the saved value. Saved values go to `settings.json` and `applySettings` puts them into the running config (timeouts, external logos, the scheduler on or off, the AI config rebuilt, the upload limit). Fixed settings (where the server starts: data folder, allowed hosts, listen address and port) are reported as set or not, never by value. `LINEUP_AI_MODEL` moved to `/server-config` (D62). Works without `TUNARR_URL`. |
 
 Every programming POST (manual and schedule) takes a snapshot of Tunarr's current
 programming after the version check and before the write; the recreate route takes one
@@ -538,7 +565,7 @@ Derived values:
 
 Unchanged in shape from the original live flow:
 
-- The mount effect calls `checkHealth()`, which maps the response to `connected`, `not_configured`, `unreachable` or `unavailable`.
+- The mount effect calls `checkHealth()`, which maps the response to `connected`, `setup_required`, `not_configured`, `unreachable` or `unavailable`. `setup_required` shows `SetupWizard` over the live desk (no connection dialog); it can switch to demo data, and **Sign in** reloads the page once setup is done. The wizard reads a `#setup=CODE` the desktop app opens it with and removes it from the address.
 - If connected, it loads channels (sorted by number), picks one with `pickChannel` (an open channel, then `?channel=<id>` if it exists, then the last one opened, then the first; an unknown id gets a notice), then `loadProgramming`, then `loadGuide` for the local day. Opening a channel remembers it and, when the address has a `channel` parameter, updates it with `history.replaceState` (path and other parameters kept).
 - `loadProgramming` clears `history` and `grab` (`resetEditing`).
 - Once the on-air row renders, the "now" effect scrolls it into view (`scrollIntoView?.()`, which is guarded because some environments lack it).
@@ -675,7 +702,7 @@ position) and downloads it via a `Blob` object URL. The filename gets an
 
 ## 9. Persistence
 
-- **Tunarr** holds all channel data. The companion stores, in `LINEUP_DATA_DIR`: saved templates (`templates.json`), filler-list roles and folder links (`filler-roles.json`), picked station IDs (`station-ids.json`), server settings changed from the desk (`settings.json`), snapshots (`snapshots/<channel>.json`), shared drafts (`drafts/`) and scheduled changes (`scheduled.json`); plus the video files users upload to the media folder (`LINEUP_MEDIA_DIR`, when set). In memory it keeps channel locks and the logo cache.
+- **Tunarr** holds all channel data. The companion stores, in `LINEUP_DATA_DIR`: its configuration from setup (`config.json`, mode 0600: Tunarr's address, the account's scrypt hash, AI, the media folder, tuning values; D62), saved templates (`templates.json`), filler-list roles and folder links (`filler-roles.json`), picked station IDs (`station-ids.json`), server settings changed from the desk (`settings.json`), snapshots (`snapshots/<channel>.json`), shared drafts (`drafts/`) and scheduled changes (`scheduled.json`); plus the video files users upload to the media folder (`LINEUP_MEDIA_DIR`, when set). In memory it keeps channel locks and the logo cache.
 - **The browser** keeps per-channel drafts (unsaved order and edit list) in IndexedDB (database `tunarr-lineup`, store `drafts`, key `channelId`). Each draft is tied to the programming version it was made against and is dropped once that version is gone.
   - If IndexedDB is unavailable, fails or doesn't answer within 4 s, an in-memory store is used for the rest of the visit and `draftStore().persistent` is false unless the companion keeps the drafts.
   - Drafts are also written to the companion (`sharedDraftStore` over `companionDrafts`), and a load takes the newer copy, so they follow the user between devices. Without the companion's draft routes (hosted preview) they stay per browser.
@@ -684,11 +711,17 @@ position) and downloads it via a `Blob` object URL. The filename gets an
 
 ## 10. Authentication
 
-**Optional.** `server/auth.ts` implements HTTP Basic, enabled when
-`LINEUP_PASSWORD` is set (user `LINEUP_USERNAME`, default `lineup`). It
-compares SHA-256 digests with `timingSafeEqual`. `/healthz` stays open on the
-production server. Without a password, `server/main.ts` logs a warning when
-listening on a non-loopback host.
+**Always on after setup (D62).** `server/auth.ts` implements HTTP Basic against
+the account in `config.json`: the password is kept as a salted scrypt hash
+(N=2^15, r=8, p=1) and checked with `timingSafeEqual`. Basic sends the password
+with every request, so a successful check is remembered by a SHA-256 digest of
+hash, user and password (at most 64), not re-derived each time. `createLineupServer`
+takes `auth` as a function (`setup.auth()`), so finishing setup or changing the
+password applies at once. Before setup there is no account; the setup code
+guards the wizard instead, and every other route answers `503`. The desktop app
+also passes `LINEUP_APP_KEY`, accepted as user `lineup-desktop` so its window
+signs in by itself (Electron's `login` event, own origin only). `/healthz`
+stays open.
 
 Cross-site writes are refused independently of sign-in: by the Origin check,
 and by the JSON content type, which forces a CORS preflight the server never
@@ -696,19 +729,29 @@ approves.
 
 **DNS rebinding.** The Origin check alone can't stop a page whose own host name
 was re-pointed at the companion: Origin and Host then both carry the attacker's
-name. Without sign-in, `server/hosts.ts` therefore answers only to IP
+name. With sign-in (always, after setup) the check isn't needed: the browser has
+no credentials for the rebound name, so it gets `401`. During setup it is
+skipped too, since only the code-checked routes answer. Only a server built
+without setup (tests) and without a password uses `server/hosts.ts`: IP
 addresses, `localhost` and the names in `LINEUP_ALLOWED_HOSTS` (`.domain`
-matches subdomains, `*` turns the check off). With sign-in the check is
-skipped: the browser has no credentials for the rebound name, so it gets `401`.
+matches subdomains, `*` turns the check off).
 `x-forwarded-host` is never used for this check, since a same-origin page can
-set it. Optional basic auth to Tunarr itself comes from `TUNARR_URL`
-userinfo.
+set it. Optional basic auth to Tunarr itself comes from userinfo in Tunarr's
+address.
 
 ## 11. Environment configuration
 
+Since D62 the keys in `CONFIG_KEYS` (`TUNARR_URL`, the timeouts, logos, the
+scheduler, `LINEUP_AI_*`, `LINEUP_MEDIA_*`) and the account come from
+`config.json`, set in the setup wizard. The environment supplies them only once,
+on the first start without a `config.json` (`importEnv`; `LINEUP_PASSWORD` and
+`LINEUP_USERNAME` become the account, `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` become
+`LINEUP_AI_API_KEY`), and is ignored for them afterwards (the log lists any
+still set). The table names them by the keys the modules read.
+
 | Variable | Read by | Purpose |
 | --- | --- | --- |
-| `TUNARR_URL` | `createProxyConfig` (via `server/main.ts`, `vite.local.config.ts`) | Upstream Tunarr base URL (server-side only) |
+| `TUNARR_URL` | `createProxyConfig` (via `bootCompanion`) | Upstream Tunarr base URL (server-side only) |
 | `TUNARR_TIMEOUT_MS`, `TUNARR_SAVE_TIMEOUT_MS` | `createProxyConfig` | Upstream timeouts |
 | `LINEUP_EXTERNAL_LOGOS` | `createProxyConfig` | `false` stops fetching channel logos from public sites |
 | `LINEUP_COMPRESSION` | `createProxyConfig` → `nodeAdapter`, `server/app.ts` | `off` stops compressing JSON and static files (default on) |
@@ -717,16 +760,17 @@ userinfo.
 | `LINEUP_SCHEDULER` | `createProxyConfig` → `createScheduler` | `on` saves scheduled changes when due (default off) |
 | `LINEUP_MEDIA_DIR`, `LINEUP_MEDIA_TUNARR_DIR`, `LINEUP_MEDIA_MAX_MB` | `createMediaFolder` | The media folder as Lineup sees it (uploads off when unset), as Tunarr sees it (default: the same), and the upload size limit (default 4096 MB) |
 | `LINEUP_AI_PROVIDER`, `LINEUP_AI_API_KEY` (or `ANTHROPIC_API_KEY`/`OPENAI_API_KEY`), `LINEUP_AI_MODEL`, `LINEUP_AI_BASE_URL`, `LINEUP_AI_TIMEOUT_MS` | `createAiConfig` | AI assistant provider (off when unset) |
-| `LINEUP_PASSWORD`, `LINEUP_USERNAME` | `createAuthConfig` | Optional sign-in |
-| `LINEUP_ALLOWED_HOSTS` | `createHostPolicy` | Host names answered without sign-in, besides IPs and `localhost` |
+| `LINEUP_PASSWORD`, `LINEUP_USERNAME` | `importEnv` (`createAuthConfig`) | Imported once as the account |
+| `LINEUP_ALLOWED_HOSTS` | `createHostPolicy` | Host names answered without sign-in (servers without setup), besides IPs and `localhost` |
+| `LINEUP_SETUP_CODE`, `LINEUP_APP_KEY` | `bootCompanion` | A fixed setup code instead of a printed one, and the desktop window's key (both set by the desktop app) |
 | `PORT` (3000), `HOST` (`0.0.0.0`), `STATIC_DIR` | `server/main.ts` | Listen address and UI directory |
 | `NEXT_PUBLIC_SITE_URL` | `app/layout.tsx` | Hosted `metadataBase` (default `http://localhost:3000`) |
 | `WRANGLER_*`, `MINIFLARE_REGISTRY_PATH` | `vite.config.ts` | Hosted dev tooling |
 | `PLAYWRIGHT_CHANNEL`, `CI` | `playwright.config.ts` | Browser choice and retries/reporting for e2e |
 
-The variables in `EDITABLE_SETTINGS` (`server/settings.ts`) can be overridden from
-Setup → Server Settings…; saved values in `settings.json` win over the environment
-and are applied at startup and on every save (`applySettings`).
+The keys in `EDITABLE_SETTINGS` (`server/settings.ts`) can be overridden from
+Setup → Server Settings…; saved values in `settings.json` win over the setup
+values and are applied at startup and on every save (`applySettings`).
 
 Only `LINEUP_PUBLIC_`-prefixed variables can reach the companion client
 bundle (`envPrefix`); none are used.
@@ -738,13 +782,13 @@ bundle (`envPrefix`); none are used.
   2. The runtime stage copies only `dist-server/` and `dist-local/` and runs as `USER node`.
   3. It has a `HEALTHCHECK` on `/healthz` and starts with `CMD node dist-server/main.js`.
 
-  No `TUNARR_URL` or password is baked in.
-- **`docker-compose.example.yml`:** Tunarr plus Lineup (the published `ghcr.io/augustosc-eu/tunarr-lineup` image, or `build: .`) on a shared network, with `TUNARR_URL=http://tunarr:8000`. Commented options cover `LINEUP_PASSWORD` and timeouts, the amd64-only Tunarr image, and binding to `127.0.0.1`.
+  Nothing is baked in: settings come from the setup wizard into `/data/config.json`.
+- **`docker-compose.example.yml`:** Tunarr plus Lineup (the published `ghcr.io/augustosc-eu/tunarr-lineup` image, or `build: .`) on a shared network, with no settings: the wizard finds Tunarr at `http://tunarr:8000`. Comments cover the setup code (`docker logs`), importing old variables, the shared `/media/lineup` upload volume, the amd64-only Tunarr image, and binding to `127.0.0.1`.
 - **Hosted:** `vinext build` with the `cloudflare()` plugin → `dist/`.
 - **Desktop** (`desktop/`, D58): `npm run build:desktop` runs `build:local`, then electron-builder in `desktop/`. The app holds `main.mjs` and `lineupEnv.mjs`; `dist-server/`, `dist-local/` and a `{"type":"module"}` `package.json` go to `resources/companion/` (`extraResources`), outside the asar. At launch `main.mjs`:
   1. reads `<userData>/lineup.env` (written commented-out on first run) and picks the port: `PORT` from the file, else the last one used (default 47300) if free, else any free port, kept in `desktop.json` because drafts and the skin are stored per origin;
-  2. forks the companion with `utilityProcess` (Electron's Node, no separate runtime) with `HOST=127.0.0.1` unless the file sets `HOST`, `LINEUP_DATA_DIR=<userData>/data` unless set, and `STATIC_DIR`; output goes to `<userData>/logs/lineup.log`;
-  3. waits for `/healthz`, then loads `http://127.0.0.1:<port>` in a `BrowserWindow` with `contextIsolation`, `sandbox`, no Node integration and no preload. Navigation off that origin is refused and `http(s)` links open in the system browser; permission requests other than fullscreen and clipboard writes are denied. With `LINEUP_PASSWORD` in the file, the `login` event answers the companion's own Basic challenge only.
+  2. forks the companion with `utilityProcess` (Electron's Node, no separate runtime) with `HOST=127.0.0.1` unless the file sets `HOST`, `LINEUP_DATA_DIR=<userData>/data` unless set, `STATIC_DIR`, and this launch's `LINEUP_APP_KEY` and `LINEUP_SETUP_CODE` (D62); output goes to `<userData>/logs/lineup.log`. Other variables in an older `lineup.env` reach the companion only for its one-time import;
+  3. waits for `/healthz`, then loads `http://127.0.0.1:<port>/#setup=<code>` in a `BrowserWindow` with `contextIsolation`, `sandbox`, no Node integration and no preload. Navigation off that origin is refused and `http(s)` links open in the system browser; permission requests other than fullscreen and clipboard writes are denied. The `login` event answers the companion's own Basic challenge only, as `lineup-desktop` with the app key.
 
   Its menu (File → Open Settings File…, Restart Lineup Server, Show Data Folder, Show Server Log; Edit; View) is hidden on Windows and Linux until Alt. A single-instance lock focuses the open window. On macOS closing the window leaves the server (and scheduler) running; quitting stops it with SIGTERM.
 - **Android app** (`android/`, D60): one APK, `minSdk` 24, `targetSdk` 36, launcher and Android TV (leanback, banner, no touchscreen needed). Only the `INTERNET` permission; cleartext allowed for LAN `http`; `allowBackup` off.

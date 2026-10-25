@@ -1,6 +1,7 @@
 # Tunarr Lineup companion: the Lineup interface plus a narrow same-origin
-# proxy to Tunarr. TUNARR_URL is read at runtime by the server only; it is
-# never baked into the image or the browser bundle.
+# proxy to Tunarr. Tunarr's address and the other settings are set in the
+# setup wizard on first start and kept in /data/config.json; nothing is baked
+# into the image or the browser bundle.
 
 FROM node:22-alpine AS build
 WORKDIR /app
@@ -21,9 +22,9 @@ COPY --from=build /app/dist-server ./dist-server
 COPY --from=build /app/dist-local ./dist-local
 RUN printf '{"type":"module","private":true}\n' > package.json \
  && mkdir -p /data /media/lineup && chown node:node /data /media/lineup
-# Saved programming templates live in /data; mount a volume to keep them.
-# /media/lineup is the filler upload folder (LINEUP_MEDIA_DIR in the compose
-# example); owning it here lets a fresh named volume start out writable by node.
+# Settings (config.json) and saved templates live in /data; mount a volume to
+# keep them. /media/lineup is the filler upload folder (chosen in setup in the
+# compose example); owning it here lets a fresh named volume start out writable by node.
 VOLUME ["/data"]
 USER node
 EXPOSE 3000

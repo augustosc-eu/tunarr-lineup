@@ -7,10 +7,14 @@ import { defineConfig, devices } from '@playwright/test';
 // locally installed Chrome instead of Playwright's bundled Chromium.
 const FAKE_TUNARR_PORT = 18000;
 const APP_PORT = 13000;
+// A second companion with nothing set up, for the setup wizard (e2e/setup.spec.ts).
+const SETUP_PORT = 13001;
+export const E2E_PASSWORD = 'e2e-password';
 // Saved templates go to a fresh folder each run.
 const DATA_DIR = path.join(tmpdir(), `lineup-e2e-${process.pid}-${Date.now()}`);
 // The media folder (uploads); the fake Tunarr reads the same path.
 const MEDIA_DIR = path.join(tmpdir(), `lineup-e2e-media-${process.pid}-${Date.now()}`);
+const SETUP_DATA_DIR = path.join(tmpdir(), `lineup-e2e-setup-${process.pid}-${Date.now()}`);
 
 export default defineConfig({
   testDir: 'e2e',
@@ -20,6 +24,8 @@ export default defineConfig({
   reporter: process.env.CI ? [['list'], ['html', { open: 'never' }]] : 'list',
   use: {
     baseURL: `http://127.0.0.1:${APP_PORT}`,
+    // The main companion is set up from its environment on first start, password included.
+    httpCredentials: { username: 'lineup', password: E2E_PASSWORD, origin: `http://127.0.0.1:${APP_PORT}` },
     viewport: { width: 1920, height: 1080 },
     trace: 'retain-on-failure',
   },
@@ -36,11 +42,19 @@ export default defineConfig({
       url: `http://127.0.0.1:${APP_PORT}/healthz`,
       env: {
         PORT: String(APP_PORT), HOST: '127.0.0.1', TUNARR_URL: `http://127.0.0.1:${FAKE_TUNARR_PORT}`, LINEUP_DATA_DIR: DATA_DIR, LINEUP_MEDIA_DIR: MEDIA_DIR,
+        LINEUP_PASSWORD: E2E_PASSWORD,
         // The fake Tunarr also answers as an OpenAI-compatible AI endpoint.
         LINEUP_AI_PROVIDER: 'openai', LINEUP_AI_BASE_URL: `http://127.0.0.1:${FAKE_TUNARR_PORT}/v1`, LINEUP_AI_MODEL: 'fake-model',
         // Dated changes are planned in the suite; none comes due while it runs.
         LINEUP_SCHEDULER: 'on',
       },
+      reuseExistingServer: false,
+    },
+    {
+      command: 'node dist-server/main.js',
+      url: `http://127.0.0.1:${SETUP_PORT}/healthz`,
+      // A fixed code, as the desktop app passes one.
+      env: { PORT: String(SETUP_PORT), HOST: '127.0.0.1', LINEUP_DATA_DIR: SETUP_DATA_DIR, LINEUP_SETUP_CODE: 'SETUP-E2E22' },
       reuseExistingServer: false,
     },
   ],

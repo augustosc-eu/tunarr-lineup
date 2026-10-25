@@ -134,7 +134,7 @@ describe('media folder over HTTP', () => {
 
     const listed = (await (await fetch(base)).json()) as { enabled: boolean; tunarrError?: string; folders: Array<{ role: string; files: Array<{ name: string }> }> };
     expect(listed.enabled).toBe(true);
-    expect(listed.tunarrError).toMatch(/TUNARR_URL/);
+    expect(listed.tunarrError).toMatch(/Tunarr’s address/);
     expect(listed.folders.find((folder) => folder.role === 'station-id')?.files[0].name).toBe('Top of hour.mp4');
 
     const moved = await fetch(`${base}/station-id/Top%20of%20hour.mp4/move`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ role: 'bumpers' }) });

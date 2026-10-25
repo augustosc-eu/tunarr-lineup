@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FillerFoldersDialog, MEDIA_COMPOSE_SNIPPET } from '../app/components/FillerFoldersDialog';
 
-const OFF = 'Uploads are off: LINEUP_MEDIA_DIR is not set on the Lineup server.';
+const OFF = 'Uploads are off: no media folder is set up. Choose one under Setup → Server Settings.';
 
 /** A companion with uploads off and nothing else set up. */
 function companion(url: string) {
@@ -31,7 +31,8 @@ describe('FillerFoldersDialog with uploads off', () => {
     const lines = await screen.findByLabelText('docker-compose.yml lines for the upload folder');
     expect(screen.getByText(/Uploads are off/)).toBeTruthy();
     expect(lines.textContent).toBe(MEDIA_COMPOSE_SNIPPET);
-    expect(MEDIA_COMPOSE_SNIPPET).toContain('LINEUP_MEDIA_DIR=/media/lineup');
+    // The folder itself is chosen under Server Settings, not in the environment.
+    expect(MEDIA_COMPOSE_SNIPPET).not.toContain('LINEUP_MEDIA_DIR');
     expect(MEDIA_COMPOSE_SNIPPET.match(/- lineup-media:\/media\/lineup/g)).toHaveLength(2);
   });
 

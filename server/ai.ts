@@ -33,18 +33,18 @@ export function createAiConfig(env: Record<string, string | undefined>): AiConfi
   const provider = explicit === 'anthropic' || explicit === 'openai'
     ? explicit
     : env.ANTHROPIC_API_KEY ? 'anthropic' : (env.OPENAI_API_KEY || env.LINEUP_AI_BASE_URL) ? 'openai' : null;
-  if (!provider) return { off: 'AI is not set up. Set LINEUP_AI_PROVIDER and an API key (or LINEUP_AI_BASE_URL for a local model) on the Lineup server.' };
+  if (!provider) return { off: 'AI is not set up. Choose a provider under Setup → Server Settings.' };
   const apiKey = key || (provider === 'anthropic' ? env.ANTHROPIC_API_KEY : env.OPENAI_API_KEY)?.trim() || undefined;
   const baseUrl = (env.LINEUP_AI_BASE_URL?.trim() || (provider === 'anthropic' ? 'https://api.anthropic.com' : 'https://api.openai.com/v1')).replace(/\/+$/, '');
   try {
     const url = new URL(baseUrl);
     if (url.protocol !== 'https:' && url.protocol !== 'http:') throw new Error();
   } catch {
-    return { off: 'LINEUP_AI_BASE_URL is not a valid http(s) URL.' };
+    return { off: 'The AI address is not a valid http(s) URL.' };
   }
-  if (provider === 'anthropic' && !apiKey) return { off: 'Set LINEUP_AI_API_KEY (or ANTHROPIC_API_KEY) on the Lineup server.' };
+  if (provider === 'anthropic' && !apiKey) return { off: 'Anthropic needs an API key (Setup → Server Settings).' };
   const model = env.LINEUP_AI_MODEL?.trim() || (provider === 'anthropic' ? DEFAULT_ANTHROPIC_MODEL : '');
-  if (!model) return { off: 'Set LINEUP_AI_MODEL to the model to use (for example the Ollama model name).' };
+  if (!model) return { off: 'Set the AI model to use (for example the Ollama model name) under Setup → Server Settings.' };
   const timeout = Number(env.LINEUP_AI_TIMEOUT_MS);
   return { provider, model, baseUrl, apiKey, timeoutMs: Number.isInteger(timeout) && timeout > 0 ? timeout : 180_000 };
 }
@@ -278,7 +278,7 @@ export async function callModel(ai: AiConfig, system: string, user: string, mode
     throw new AiError(502, 'ai_unreachable', 'Could not reach the AI provider.');
   }
   const text = await response.text();
-  if (response.status === 401 || response.status === 403) throw new AiError(502, 'ai_auth', 'The AI provider refused the API key. Check LINEUP_AI_API_KEY on the Lineup server.');
+  if (response.status === 401 || response.status === 403) throw new AiError(502, 'ai_auth', 'The AI provider refused the API key. Check it under Setup → Server Settings.');
   if (response.status === 429) throw new AiError(429, 'ai_rate_limited', 'The AI provider is rate-limiting requests. Wait a moment and try again.');
   if (!response.ok) {
     let detail = '';

@@ -63,7 +63,7 @@ export function createMediaFolder(env: Record<string, string | undefined>): Medi
   const dir = env.LINEUP_MEDIA_DIR?.trim();
   if (!dir) return undefined;
   const tunarrDir = env.LINEUP_MEDIA_TUNARR_DIR?.trim() || path.resolve(dir);
-  if (!tunarrDir.startsWith('/') && !isWindowsPath(tunarrDir)) return { off: 'LINEUP_MEDIA_TUNARR_DIR must be a full path, like /media/lineup.' };
+  if (!tunarrDir.startsWith('/') && !isWindowsPath(tunarrDir)) return { off: 'The media folder as Tunarr sees it must be a full path, like /media/lineup (Setup → Server Settings).' };
   const megabytes = Number(env.LINEUP_MEDIA_MAX_MB);
   const maxBytes = (Number.isInteger(megabytes) && megabytes > 0 ? megabytes : DEFAULT_MAX_UPLOAD_MB) * 1024 * 1024;
   return createMediaFolderAt(path.resolve(dir), tunarrDir, maxBytes);
@@ -97,7 +97,7 @@ export function createMediaFolderAt(root: string, tunarrRoot: string, maxBytes: 
       entries = await readdir(folder(role), { withFileTypes: true });
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
-      throw new StoreError(500, 'media_unreadable', `The ${ROLE_FOLDERS[role]} folder could not be read. Check LINEUP_MEDIA_DIR.`);
+      throw new StoreError(500, 'media_unreadable', `The ${ROLE_FOLDERS[role]} folder could not be read. Check the media folder under Setup → Server Settings.`);
     }
     const files = await Promise.all(entries
       .filter((entry) => entry.isFile() && mediaFileName(entry.name) === entry.name)
@@ -115,7 +115,7 @@ export function createMediaFolderAt(root: string, tunarrRoot: string, maxBytes: 
       try {
         await Promise.all(FILLER_ROLES.map((role) => mkdir(folder(role), { recursive: true })));
       } catch {
-        throw new StoreError(500, 'media_unwritable', 'The media folder could not be created. Check that LINEUP_MEDIA_DIR is writable.');
+        throw new StoreError(500, 'media_unwritable', 'The media folder could not be created. Check that the Lineup server can write to it.');
       }
     },
     async list() {
@@ -129,7 +129,7 @@ export function createMediaFolderAt(root: string, tunarrRoot: string, maxBytes: 
       try {
         await mkdir(dir, { recursive: true });
       } catch {
-        throw new StoreError(500, 'media_unwritable', 'The media folder could not be created. Check that LINEUP_MEDIA_DIR is writable.');
+        throw new StoreError(500, 'media_unwritable', 'The media folder could not be created. Check that the Lineup server can write to it.');
       }
       if (await exists(target)) throw new StoreError(409, 'file_exists', `${name} is already there. Rename the file and try again.`);
       // A dot name, so listings and Tunarr's scanner skip it until it is complete.
@@ -151,7 +151,7 @@ export function createMediaFolderAt(root: string, tunarrRoot: string, maxBytes: 
         await placeNew(temp, target);
       } catch (error) {
         if (error instanceof StoreError) throw error;
-        throw new StoreError(500, 'media_unwritable', 'The file could not be saved. Check that LINEUP_MEDIA_DIR is writable and has space.');
+        throw new StoreError(500, 'media_unwritable', 'The file could not be saved. Check that the Lineup server can write to the media folder and that it has space.');
       } finally {
         await rm(temp, { force: true }).catch(() => undefined);
       }
@@ -163,7 +163,7 @@ export function createMediaFolderAt(root: string, tunarrRoot: string, maxBytes: 
       try {
         await mkdir(folder(to), { recursive: true });
       } catch {
-        throw new StoreError(500, 'media_unwritable', 'The media folder could not be created. Check that LINEUP_MEDIA_DIR is writable.');
+        throw new StoreError(500, 'media_unwritable', 'The media folder could not be created. Check that the Lineup server can write to it.');
       }
       await placeNew(path.join(folder(role), name), path.join(folder(to), name));
     },

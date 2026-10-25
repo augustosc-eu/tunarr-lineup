@@ -137,15 +137,16 @@ test('plans a dated save, lists it, and cancels it', async ({ page }) => {
   expect((await fakeState(page)).lineups[NEWS][0].id).not.toBeUndefined();
 });
 
-test('changes a server setting from the desk with the keyboard, then goes back to .env', async ({ page }) => {
+test('changes a server setting from the desk with the keyboard, then resets it', async ({ page }) => {
   await page.getByRole('menuitem', { name: 'Setup' }).click();
   await page.getByRole('menuitem', { name: /Server Settings/ }).press('Enter');
   const dialog = page.getByRole('dialog', { name: 'Server settings' });
   const timeout = dialog.getByLabel('AI timeout (seconds)');
   await expect(timeout).toHaveValue('180');
-  // Secrets and addresses are only reported as set.
-  await expect(dialog.getByLabel('Settings kept in .env')).toContainText('Tunarr addressSet');
-  await expect(dialog).not.toContainText('127.0.0.1');
+  // Tunarr's address is shown to the signed-in user; the password never is.
+  await expect(dialog.getByLabel('Tunarr address')).toHaveValue('http://127.0.0.1:18000');
+  await expect(dialog.getByLabel('Settings set where the server starts')).toContainText('Data folderSet');
+  await expect(dialog).not.toContainText('e2e-password');
   await timeout.fill('240');
   await dialog.getByRole('button', { name: 'Save settings' }).focus();
   await page.keyboard.press('Enter');
@@ -153,7 +154,7 @@ test('changes a server setting from the desk with the keyboard, then goes back t
   await expect(dialog.locator('.server-setting', { hasText: 'AI timeout' })).toContainText('Saved here');
   await noOverflow(page);
   await page.screenshot({ path: test.info().outputPath('server-settings.png') });
-  await dialog.getByRole('button', { name: 'Use the .env value for AI timeout' }).press('Enter');
+  await dialog.getByRole('button', { name: 'Reset AI timeout' }).press('Enter');
   await expect(dialog.getByRole('status')).toContainText('AI timeout is back to its default.');
   await expect(timeout).toHaveValue('180');
   await page.keyboard.press('Escape');

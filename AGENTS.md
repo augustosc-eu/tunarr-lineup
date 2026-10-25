@@ -22,10 +22,11 @@ profiles. It ships as two targets built from one React page (`app/page.tsx`):
 
 - **Local companion** (supported for real use): `server/` (dependency-free Node HTTP
   server plus a narrow `/api/tunarr/*` proxy) serving a Vite build of the page.
-  Configured by `TUNARR_URL`. Docker: `Dockerfile`, `docker-compose.example.yml`.
+  Configured in its setup wizard (`config.json`, D62), not by environment
+  variables. Docker: `Dockerfile`, `docker-compose.example.yml`.
 - **Desktop app** (`desktop/`, D58): Electron running the same companion on
-  `127.0.0.1` in a sandboxed window, configured by `lineup.env` in the app's data
-  folder. Its own npm package; `npm run build:desktop` packages it.
+  `127.0.0.1` in a sandboxed window; it opens the setup wizard with its code and
+  signs its window in with a per-launch key (`lineup.env` only sets where it listens). Its own npm package; `npm run build:desktop` packages it.
 - **Installable web app** (D59): `public/manifest.webmanifest` and icons let iPad,
   Android and TV browsers add the companion's page to the home screen.
 - **Android app** (`android/`, D60): a native WebView window onto a Lineup server
@@ -44,8 +45,8 @@ npm test              # vitest run (tests/)
 npm run test:e2e      # Playwright (e2e/) against dist-server + fake Tunarr; run build:local first
 npm run build         # hosted preview build (vinext) -> dist/
 npm run build:local   # companion build -> dist-local/ (UI) + dist-server/ (server)
-TUNARR_URL=http://localhost:8000 npm run dev:local    # companion dev server on :3000
-TUNARR_URL=http://localhost:8000 npm run start:local  # run the built companion
+npm run dev:local     # companion dev server on :3000 (prints the setup code on first run)
+npm run start:local   # run the built companion
 npm --prefix desktop install && npm run start:desktop  # desktop app from the repo
 npm run build:desktop # desktop installers for this OS -> desktop/release/
 node scripts/make-icons.mjs   # re-render app icons from public/favicon.svg
@@ -63,8 +64,13 @@ Chromium with `npx playwright install chromium`. CI runs all of them
 1. **The browser never contacts Tunarr (or any other server).** It calls only
    same-origin `/api/tunarr/*`. Never put `TUNARR_URL` or any Tunarr address in client
    code. Only the `LINEUP_PUBLIC_` env prefix is exposed to the client
-   (`vite.local.config.ts`). Never add a user-entered URL workflow for reaching Tunarr,
-   wildcard CORS, or a generic proxy. The one address a user types is the Lineup
+   (`vite.local.config.ts`). Never add wildcard CORS or a generic proxy. The one
+   way to enter Tunarr's address (owner decision 2026-10-25, D62) is the setup
+   wizard and Setup → Server Settings: the address goes to the companion through
+   the code-checked `/setup/*` routes or the signed-in `/server-config`, is
+   validated by `parseTunarrUrl`, kept in `config.json`, and used only as the
+   companion's fixed upstream; the browser never fetches it, and its credentials
+   are never sent back. The one address a user types is the Lineup
    server's own, in the Android app (owner decision 2026-10-24, D60): it is opened
    as the top-level page, nothing is fetched cross-origin, and the window never
    leaves that origin or exposes a JavaScript bridge. Channel logos come through
@@ -77,7 +83,10 @@ Chromium with `npx playwright install chromium`. CI runs all of them
    - Channel routes live in `server/tunarrProxy.ts` (`matchRoute`). Library, list and
      channel-settings routes live in `server/content.ts` (`matchContentRoute`). Setup
      routes (channels, transcode profiles, media sources, smart collections) live in
-     `server/admin.ts` (`matchAdminRoute`). Lineup's own routes (saved templates, filler-list roles, the media folder, AI)
+     `server/admin.ts` (`matchAdminRoute`). The setup wizard and server configuration
+     live in `server/setup.ts` (`matchSetupRoute`): before setup only they answer
+     (everything else is `503 setup_required`), and the wizard's need the setup code.
+     Lineup's own routes (saved templates, filler-list roles, the media folder, AI)
      live in `server/lineupRoutes.ts` (`matchLineupRoute`); templates are always checked
      with `validateTemplate` (`server/templateSchema.ts`). Every route is explicit, IDs are validated,
      and no raw Tunarr request is accepted: search filters and smart-collection filters
@@ -135,17 +144,22 @@ Chromium with `npx playwright install chromium`. CI runs all of them
    and `dist-local/`, with no `node_modules`. Use Node built-ins in `server/`, or update
    the Dockerfile deliberately (client-only packages such as `hls.js` are bundled into
    `dist-local/`). Its stored state, all through `server/jsonFile.ts` (atomic writes; a
-   file it can't parse is never overwritten): saved templates (`templates.json`,
+   file it can't parse is never overwritten): its configuration from the setup
+   wizard (`config.json`, `server/configStore.ts`, owner decision 2026-10-25, D62:
+   owner-only, the password only as a scrypt hash, keys never sent back), saved templates (`templates.json`,
    `server/templateStore.ts`), filler-list roles (`filler-roles.json`,
    `server/fillerRoleStore.ts`, owner decision 2026-10-07), and since the owner decision
    of 2026-10-19 snapshots (`snapshots/<channel>.json`, `server/snapshotStore.ts`),
    shared drafts (`drafts/`, `server/sharedDraftStore.ts`) and scheduled changes
    (`scheduled.json`, `server/scheduler.ts`); since the owner decision of 2026-10-19
    (D54, D55) also picked station IDs (`station-ids.json`, `server/stationIdStore.ts`) and
-   the server settings changed from the desk (`settings.json`, `server/settings.ts`; only
-   the allowlist in `EDITABLE_SETTINGS`, never addresses, keys, the password, hosts or paths). When `LINEUP_MEDIA_DIR` is set, it also
+   the tuning settings changed from the desk (`settings.json`, `server/settings.ts`; only
+   the allowlist in `EDITABLE_SETTINGS`; addresses, keys, the account and the media
+   folder are changed only through `server/setup.ts`). When `LINEUP_MEDIA_DIR` is set, it also
    holds the filler videos users upload there.
-   - **The scheduler** (`LINEUP_SCHEDULER=on`, off by default) is the only thing that
+   - **Sign-in is required after setup** (D62). Don't add a way to turn it off or to
+     reach the wizard's routes without the setup code.
+   - **The scheduler** (scheduled changes on, off by default) is the only thing that
      writes to Tunarr without someone at the desk. It uses the same conditional save
      under `withChannelLock` (`server/channelLock.ts`), takes a snapshot first, and skips
      (never forces) a change whose channel no longer matches what was planned.
@@ -184,13 +198,13 @@ Chromium with `npx playwright install chromium`. CI runs all of them
   artwork and logo URLs.
 - **Put HTTP and validation logic in `server/`:** `tunarrProxy.ts` (framework-free),
   `content.ts`, `admin.ts`, `logos.ts`, `smartCollection.ts`, `templateSchema.ts`,
-  `templateStore.ts`, `fillerRoles.ts`, `fillerRoleStore.ts`, `mediaFolder.ts`, `jsonFile.ts`, `lineupRoutes.ts`, `ai.ts`, `upstream.ts`,
+  `templateStore.ts`, `fillerRoles.ts`, `fillerRoleStore.ts`, `configStore.ts`, `setup.ts`, `boot.ts`, `mediaFolder.ts`, `jsonFile.ts`, `lineupRoutes.ts`, `ai.ts`, `upstream.ts`,
   `watch.ts`, `programmingCache.ts`, `compression.ts`, `settings.ts`, `stationIdStore.ts`, `snapshotStore.ts`, `sharedDraftStore.ts`, `scheduler.ts`, `channelLock.ts`, `lineupItems.ts`,
   `slotSchedule.ts`, `recreateChannel.ts`, `lineupVersion.ts`, `auth.ts`, `hosts.ts` and `app.ts`. `lib/` and
   `app/` may import pure modules from `server/` (`lineupVersion`, `slotSchedule`,
   `smartCollection`, `templateSchema`, `fillerRoles`; types from any module) but never Node
-  APIs (`logos.ts`, `jsonFile.ts`, `mediaFolder.ts`, the stores and the scheduler use Node
-  built-ins).
+  APIs (`logos.ts`, `jsonFile.ts`, `mediaFolder.ts`, the stores, `setup.ts`, `boot.ts` and
+  the scheduler use Node built-ins; `app/` imports only types from `setup.ts`).
 - **Keep `app/page.tsx` for UI state and rendering,** and `app/components/` for larger
   UI pieces: `MenuBar`, `MoveDialog`, `ScheduleEditor`, `InsertDialog`,
   `LibraryBrowser`, `ProgramBin` (the poster bin docked beside the lineup), `ListsManager`, `ChannelSettingsDialog`, `NewChannelDialog`,
@@ -198,7 +212,8 @@ Chromium with `npx playwright install chromium`. CI runs all of them
   `TemplatesDialog` (gallery, AI panel), `TemplateEditor`, `EventDialog`, `DayStrip`,
   `GuideGrid`, `WeekView`, `LineupCheckDialog`, `AlignDialog`, `MarathonDialog`,
   `NetworkDialog` (copy, simulcast, shared commercials), `WatchDialog` (with `TvRemote` and `CableGuide`), `SnapshotsDialog`,
-  `PlanDialog` (Save Later, seasonal overlays), `ScheduledDialog`, `AppearanceDialog` (skins).
+  `PlanDialog` (Save Later, seasonal overlays), `ScheduledDialog`, `AppearanceDialog` (skins),
+  `SetupWizard` (first start; also the Tunarr, AI and media fields `ServerSettingsDialog` reuses).
   `app/useSkin.ts` applies and remembers the skin (`public/skin-init.js` applies it before React);
   `app/useFillerSpots.ts` loads filler lists, their roles and spots for the day view;
   `app/useLiveStream.ts` plays and retries a channel's live stream;
