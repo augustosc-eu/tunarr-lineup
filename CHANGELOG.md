@@ -8,6 +8,8 @@ were renamed 2026.10.1 and 2026.10.2.
 
 ## [Unreleased]
 
+## [2026.10.21] - 2026-10-26
+
 ### Changed
 
 - **Tunarr 2026.10.4:** Tunarr's dated releases (2026.9 and 2026.10) now count as validated; Compatibility used to call every current Tunarr "not validated" because it only knew 1.x.
@@ -298,7 +300,8 @@ First public release.
   reaches Tunarr through a narrow allowlisted proxy. Optional HTTP Basic
   sign-in and host-name checks against DNS rebinding.
 
-[Unreleased]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.20...HEAD
+[Unreleased]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.21...HEAD
+[2026.10.21]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.20...v2026.10.21
 [2026.10.20]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.19...v2026.10.20
 [2026.10.19]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.18...v2026.10.19
 [2026.10.18]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.17...v2026.10.18
