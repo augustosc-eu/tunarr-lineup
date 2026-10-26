@@ -174,7 +174,8 @@ describe('setup wizard routes', () => {
     expect(detected.found).toEqual([{ url: 'http://tunarr:8000', host: 'tunarr:8000', ok: true, channelCount: 2 }]);
     expect(detected.tried).toEqual(expect.arrayContaining(['localhost:8000', 'tunarr:8000', 'host.docker.internal:8000']));
     // No scheme typed: http:// is assumed.
-    expect(json(await handleTunarrApi(request('POST', '/api/tunarr/setup/test', { code: CODE, tunarrUrl: '192.168.1.20:8000' }), config))).toMatchObject({ ok: true, channelCount: 2 });
+    // A working address also says what that Tunarr can do (read-only checks; this one has no version route).
+    expect(json(await handleTunarrApi(request('POST', '/api/tunarr/setup/test', { code: CODE, tunarrUrl: '192.168.1.20:8000' }), config))).toMatchObject({ ok: true, channelCount: 2, compatibility: { version: null, versionStatus: 'unknown' } });
     expect(json(await handleTunarrApi(request('POST', '/api/tunarr/setup/test', { code: CODE, tunarrUrl: 'http://nowhere:8000' }), config))).toMatchObject({ ok: false, message: expect.stringMatching(/Could not reach Tunarr at nowhere:8000/) });
     expect((await handleTunarrApi(request('POST', '/api/tunarr/setup/test', { code: CODE, tunarrUrl: 'ftp://x' }), config)).status).toBe(400);
   });
@@ -260,6 +261,26 @@ describe('server-config (after setup)', () => {
     expect((await handleTunarrApi(request('PUT', '/api/tunarr/server-config', { tunarrUrl: '' }), config)).status).toBe(400);
     expect((await handleTunarrApi(request('PUT', '/api/tunarr/server-config', { ai: { provider: '' } }), config)).status).toBe(200);
     expect(config.ai).toHaveProperty('off');
+  });
+
+  it('keeps the webhook address write-only, re-checks it, and sends a test only once one is saved', async () => {
+    const { config, store } = await ready();
+    expect((await handleTunarrApi(request('POST', '/api/tunarr/server-config/notify-test', {}), config)).status).toBe(409);
+    const refused = await handleTunarrApi(request('PUT', '/api/tunarr/server-config', { notifications: { url: 'http://192.168.1.50:8080/notify' } }), config);
+    expect(refused.status).toBe(400);
+    expect(json(refused).error.message).toContain('Webhook:');
+    const saved = await handleTunarrApi(request('PUT', '/api/tunarr/server-config', { notifications: { url: 'https://hooks.example.com/secret-path?token=abc', events: ['scheduled.skipped', 'batch.partial'], includeNames: false } }), config);
+    expect(saved.status).toBe(200);
+    expect(json(saved).notifications).toMatchObject({ set: true, host: 'hooks.example.com', events: ['scheduled.skipped', 'batch.partial'], includeNames: false, allowPrivate: false });
+    expect(JSON.stringify(json(saved))).not.toContain('secret-path');
+    expect(config.notifier?.settings?.url.href).toBe('https://hooks.example.com/secret-path?token=abc');
+    expect((await store.read())?.values.LINEUP_NOTIFY_URL).toBe('https://hooks.example.com/secret-path?token=abc');
+    // Leaving the address out keeps it; turning the private exception off re-checks it.
+    await handleTunarrApi(request('PUT', '/api/tunarr/server-config', { notifications: { url: 'http://192.168.1.50:8080/notify', allowPrivate: true } }), config);
+    expect((await handleTunarrApi(request('PUT', '/api/tunarr/server-config', { notifications: { allowPrivate: false } }), config)).status).toBe(400);
+    // Empty turns notifications off.
+    await handleTunarrApi(request('PUT', '/api/tunarr/server-config', { notifications: { url: '' } }), config);
+    expect(config.notifier?.settings).toBeNull();
   });
 
   it('changes the sign-in only with the current password', async () => {

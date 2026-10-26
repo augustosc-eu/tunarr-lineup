@@ -6,6 +6,7 @@
 // the server listens, its data folder and allowed host names are set where it
 // starts, and the browser only learns whether each is set.
 import { createAiConfig } from './ai.js';
+import { createNotifier } from './notify.js';
 import { createJsonFile, StoreError } from './jsonFile.js';
 import type { ProxyConfig } from './tunarrProxy.js';
 
@@ -158,4 +159,5 @@ export function applySettings(config: ProxyConfig, env: Record<string, string | 
   if (config.mediaFolder && !('off' in config.mediaFolder)) config.mediaFolder.maxBytes = number('LINEUP_MEDIA_MAX_MB', config.mediaFolder.maxBytes / 1024 / 1024) * 1024 * 1024;
   const scheduler = effective.LINEUP_SCHEDULER?.trim().toLowerCase();
   config.scheduler?.setEnabled(scheduler === 'on' || scheduler === 'true' || scheduler === '1');
+  config.notifier = createNotifier(effective, config.notifyHooks);
 }

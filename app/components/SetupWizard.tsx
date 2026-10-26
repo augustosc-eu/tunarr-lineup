@@ -2,12 +2,21 @@
 
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { tunarrApi, type AiFields, type ConfigView, type Probe } from '../../lib/tunarrClient';
+import { versionLine } from '../../lib/compatibility';
 
 const errorText = (error: unknown) => (error instanceof Error ? error.message : 'Something went wrong.');
 
 // ------------------------------------------------- fields shared with Server Settings
 
 type Found = { found: Probe[]; tried: string[] };
+
+/** "Tunarr 1.3.1 · everything Lineup uses answers", or what's missing (server/compatibility.ts). */
+function compatibilityNote(summary: NonNullable<Extract<Probe, { ok: true }>['compatibility']>) {
+  const missing = summary.unavailable ? `${summary.unavailable} feature${summary.unavailable === 1 ? '' : 's'} not available` : '';
+  const odd = summary.degraded ? `${summary.degraded} answering unexpectedly` : '';
+  const problems = [missing, odd].filter(Boolean).join(', ');
+  return `${versionLine(summary.version, summary.versionStatus)} · ${problems ? `${problems} (see Server Settings → Compatibility after setup)` : 'everything Lineup uses answers'}.`;
+}
 
 /** Tunarr's address: places Lineup found it, or typed, and a test through the Lineup server. */
 export function TunarrAddressField({ value, onChange, detect, test, autoDetect, onTested }: {
@@ -85,7 +94,7 @@ export function TunarrAddressField({ value, onChange, detect, test, autoDetect, 
       <div className="setup-row">
         <button type="button" disabled={!value.trim() || testing} onClick={() => void runTest()}>{testing ? 'Testing…' : 'Test connection'}</button>
         {result && (result.ok
-          ? <span className="setup-ok" role="status">✓ Tunarr answered with {result.channelCount} channel{result.channelCount === 1 ? '' : 's'}.</span>
+          ? <span className="setup-ok" role="status">✓ Tunarr answered with {result.channelCount} channel{result.channelCount === 1 ? '' : 's'}.{result.compatibility && <> {compatibilityNote(result.compatibility)}</>}</span>
           : <span className="setup-bad" role="status">{result.message}</span>)}
       </div>
       {error && <div className="warning" role="alert"><b>Couldn’t check</b><span>{error}</span></div>}

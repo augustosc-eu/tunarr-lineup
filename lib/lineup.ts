@@ -75,6 +75,8 @@ export type ManualProgrammingRequest = {
   append: false;
   /** Ask the companion to move the start time so the pass on air keeps its times (keptStartTime). */
   keepOnAir?: boolean;
+  /** A planned lineup (the advanced planner): set the channel's start time so its first item airs then. */
+  startTime?: number;
 };
 
 export function dayRange(date: string) {

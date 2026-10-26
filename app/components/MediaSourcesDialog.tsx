@@ -1,10 +1,15 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import { refusedParts, type PartBlocker } from '../../lib/compatibility';
 import type { ManagedSource, NewMediaSource } from '../../lib/library';
 import { tunarrApi } from '../../lib/tunarrClient';
 
-type Props = { onClose: () => void };
+type Props = {
+  onClose: () => void;
+  /** Why this Tunarr refuses one of the dialog's actions, from the compatibility report. */
+  blocked?: PartBlocker;
+};
 type Kind = NewMediaSource['type'];
 
 const errorText = (error: unknown) => (error instanceof Error ? error.message : 'Something went wrong.');
@@ -12,7 +17,7 @@ const KIND_LABELS: Record<string, string> = { plex: 'Plex', jellyfin: 'Jellyfin'
 const MEDIA_TYPES: Array<[string, string]> = [['movies', 'Movies'], ['shows', 'TV shows'], ['music_videos', 'Music videos'], ['other_videos', 'Other videos'], ['tracks', 'Music']];
 const scanned = (ms?: number) => (ms ? `scanned ${new Date(ms).toLocaleDateString('en', { month: 'short', day: 'numeric' })}` : 'not scanned yet');
 
-function AddSourceForm({ onAdded, onCancel }: { onAdded: () => void; onCancel: () => void }) {
+function AddSourceForm({ onAdded, onCancel, blocked }: { onAdded: () => void; onCancel: () => void; blocked?: PartBlocker }) {
   const [kind, setKind] = useState<Kind>('plex');
   const [name, setName] = useState('');
   const [uri, setUri] = useState('');
@@ -44,6 +49,8 @@ function AddSourceForm({ onAdded, onCancel }: { onAdded: () => void; onCancel: (
     }
   };
   const ready = name.trim() && (kind === 'local' ? paths.trim() : uri.trim() && (kind === 'plex' ? token.trim() : username.trim() && password));
+  // Jellyfin and Emby are added by signing in, which has a route of its own.
+  const signIn = kind === 'jellyfin' ? blocked?.('media-sources', 'sign-in-jellyfin') : kind === 'emby' ? blocked?.('media-sources', 'sign-in-emby') : null;
 
   return (
     <div className="add-source">
@@ -67,13 +74,17 @@ function AddSourceForm({ onAdded, onCancel }: { onAdded: () => void; onCancel: (
         {(kind === 'jellyfin' || kind === 'emby') && 'Tunarr signs in once and keeps an access token. Lineup doesn’t store the password. '}
         Tunarr connects to the server; Lineup never shows its address or token again.
       </p>
+      {signIn && <div className="warning" role="note"><b>Not on this Tunarr</b><span>{signIn}</span></div>}
       {error && <div className="warning" role="alert"><b>Not added</b><span>{error}</span></div>}
-      <div className="dialog-actions"><button onClick={onCancel}>Cancel</button><button className="primary" disabled={!ready || busy} onClick={() => void add()}>{busy ? 'Adding…' : 'Add source'}</button></div>
+      <div className="dialog-actions"><button onClick={onCancel}>Cancel</button><button className="primary" disabled={!ready || busy || !!signIn} onClick={() => void add()}>{busy ? 'Adding…' : 'Add source'}</button></div>
     </div>
   );
 }
 
-export function MediaSourcesDialog({ onClose }: Props) {
+export function MediaSourcesDialog({ onClose, blocked }: Props) {
+  // Actions this Tunarr's API doesn't offer are turned off, and the note says why.
+  const refused = (part: 'create' | 'delete' | 'refresh' | 'enable' | 'scan') => !!blocked?.('media-sources', part);
+  const refusals = refusedParts(blocked, (['create', 'delete', 'refresh', 'enable', 'scan'] as const).map((part) => ['media-sources', part]));
   const [sources, setSources] = useState<ManagedSource[] | null>(null);
   const [adding, setAdding] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState('');
@@ -108,6 +119,7 @@ export function MediaSourcesDialog({ onClose }: Props) {
         <p className="eyebrow">SETUP</p>
         <h2 id="sources-title">Media sources</h2>
         <p className="subtle">Where Tunarr finds programs. Turn on the libraries channels should draw from; Tunarr scans them so they appear in Insert, filler lists and slot sources.</p>
+        {refusals.length > 0 && <div className="warning" role="note"><b>Not on this Tunarr</b>{refusals.map((reason) => <span key={reason}>{reason}</span>)}</div>}
         <div className="candidate-list sources-list">
           {sources === null && !error && <p className="subtle candidate-empty">Loading…</p>}
           {sources?.length === 0 && <p className="subtle candidate-empty">No media sources yet.</p>}
@@ -116,15 +128,15 @@ export function MediaSourcesDialog({ onClose }: Props) {
               <div className="source-head">
                 <b>{source.name}</b><small>{KIND_LABELS[source.type ?? ''] ?? source.type}</small>
                 <span className="spacer" />
-                {source.type !== 'local' && <button disabled={!!working} onClick={() => void run(`refresh-${source.id}`, () => tunarrApi.refreshMediaSource(source.id), `Re-read ${source.name}’s libraries.`)}>{working === `refresh-${source.id}` ? 'Refreshing…' : 'Refresh libraries'}</button>}
+                {source.type !== 'local' && <button disabled={!!working || refused('refresh')} onClick={() => void run(`refresh-${source.id}`, () => tunarrApi.refreshMediaSource(source.id), `Re-read ${source.name}’s libraries.`)}>{working === `refresh-${source.id}` ? 'Refreshing…' : 'Refresh libraries'}</button>}
                 {confirmDelete === source.id
                   ? <><span className="subtle">Remove {source.name} and its programs from Tunarr?</span><button onClick={() => setConfirmDelete('')}>Keep</button><button className="primary" disabled={!!working} onClick={() => void run(`delete-${source.id}`, async () => { await tunarrApi.deleteMediaSource(source.id); setConfirmDelete(''); }, `Removed ${source.name}.`)}>Remove</button></>
-                  : <button disabled={!!working} onClick={() => setConfirmDelete(source.id)}>Remove…</button>}
+                  : <button disabled={!!working || refused('delete')} onClick={() => setConfirmDelete(source.id)}>Remove…</button>}
               </div>
               {source.libraries.length === 0 && <p className="subtle">{source.type === 'local' ? 'Folders are scanned automatically.' : 'No libraries yet. Refresh to read them from the server.'}</p>}
               {source.libraries.map((library) => (
                 <div className="candidate library-row" key={library.id}>
-                  <label><input type="checkbox" checked={pending[library.id] ?? library.enabled} disabled={!!working} aria-label={`Use library ${library.name}`}
+                  <label><input type="checkbox" checked={pending[library.id] ?? library.enabled} disabled={!!working || refused('enable')} aria-label={`Use library ${library.name}`}
                     onChange={(event) => {
                       const enabled = event.target.checked;
                       setPending((current) => ({ ...current, [library.id]: enabled }));
@@ -132,7 +144,7 @@ export function MediaSourcesDialog({ onClose }: Props) {
                         .finally(() => setPending((current) => { const next = { ...current }; delete next[library.id]; return next; }));
                     }} /> <b>{library.name}</b></label>
                   <small>{library.mediaType ?? ''} · {library.enabled ? scanned(library.lastScannedAt) : 'off'}{library.isLocked ? ' · scanning…' : ''}</small>
-                  {library.enabled && <button disabled={!!working} onClick={() => void run(`scan-${library.id}`, () => tunarrApi.scanLibrary(source.id, library.id), `Scanning ${library.name}.`)}>Scan now</button>}
+                  {library.enabled && <button disabled={!!working || refused('scan')} onClick={() => void run(`scan-${library.id}`, () => tunarrApi.scanLibrary(source.id, library.id), `Scanning ${library.name}.`)}>Scan now</button>}
                 </div>
               ))}
             </div>
@@ -140,8 +152,8 @@ export function MediaSourcesDialog({ onClose }: Props) {
         </div>
         {message && <p className="subtle" role="status">{message}</p>}
         {error && <div className="warning" role="alert"><b>Something went wrong</b><span>{error}</span></div>}
-        {adding ? <AddSourceForm onCancel={() => setAdding(false)} onAdded={() => { setAdding(false); setMessage('Media source added. Turn on the libraries you want.'); void load(); }} />
-          : <div className="dialog-actions"><button className="primary" onClick={() => setAdding(true)}>Add media source…</button><span className="spacer" /><button onClick={onClose}>Done</button></div>}
+        {adding ? <AddSourceForm blocked={blocked} onCancel={() => setAdding(false)} onAdded={() => { setAdding(false); setMessage('Media source added. Turn on the libraries you want.'); void load(); }} />
+          : <div className="dialog-actions"><button className="primary" disabled={refused('create')} onClick={() => setAdding(true)}>Add media source…</button><span className="spacer" /><button onClick={onClose}>Done</button></div>}
       </section>
     </div>
   );

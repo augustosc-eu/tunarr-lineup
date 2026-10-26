@@ -1,7 +1,8 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Channel } from '../../lib/lineup';
+import type { PartBlocker } from '../../lib/compatibility';
 import type { TranscodeProfile } from '../../lib/library';
 import { tunarrApi } from '../../lib/tunarrClient';
 
@@ -9,13 +10,15 @@ type Props = {
   channels: Channel[];
   /** Pre-selects "copy of" this channel (Channel → Duplicate). */
   copyFrom?: string;
+  /** Why creating (an empty channel) or duplicating is refused on this Tunarr; asked again whenever "Start from" changes. */
+  blocked?: PartBlocker;
   onClose: () => void;
   onCreated: (channelId: string) => void;
 };
 
 const errorText = (error: unknown) => (error instanceof Error ? error.message : 'Something went wrong.');
 
-export function NewChannelDialog({ channels, copyFrom = '', onClose, onCreated }: Props) {
+export function NewChannelDialog({ channels, copyFrom = '', blocked, onClose, onCreated }: Props) {
   const nextNumber = channels.reduce((max, channel) => Math.max(max, channel.number), 0) + 1;
   const source = channels.find((channel) => channel.id === copyFrom);
   const [name, setName] = useState(source ? `${source.name} (copy)` : `Channel ${nextNumber}`);
@@ -27,22 +30,35 @@ export function NewChannelDialog({ channels, copyFrom = '', onClose, onCreated }
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
+  // A copy needs more of Tunarr than an empty channel (it's read back and renamed), so each mode has its own gate.
+  const refusal = blocked?.('channel-admin', start ? 'copy' : 'create') ?? null;
+  // Profiles are only for an empty channel: read once that mode is chosen and allowed, and kept after that,
+  // so a Tunarr that can copy but not list profiles is never asked for them.
+  const wantsProfiles = !start && !refusal;
+  const asked = useRef(false);
+  const mounted = useRef(true);
   useEffect(() => {
-    let cancelled = false;
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+  useEffect(() => {
+    if (!wantsProfiles || asked.current) return;
+    asked.current = true;
     tunarrApi.transcodeProfiles()
       .then((items) => {
-        if (cancelled) return;
+        if (!mounted.current) return;
         setProfiles(items);
         setProfileId((items.find((item) => item.isDefault) ?? items[0])?.id ?? '');
       })
-      .catch(() => { /* Tunarr picks its default profile. */ });
-    return () => { cancelled = true; };
-  }, []);
+      // Tunarr picks its default profile; choosing an empty channel again asks again.
+      .catch(() => { asked.current = false; });
+  }, [wantsProfiles]);
 
   const taken = channels.some((channel) => channel.number === number);
-  const valid = name.trim().length > 0 && Number.isInteger(number) && number >= 1 && !taken;
+  const valid = name.trim().length > 0 && Number.isInteger(number) && number >= 1 && !taken && !refusal;
 
   const create = async () => {
+    if (!valid) return;
     setBusy(true);
     setError('');
     try {
@@ -73,6 +89,7 @@ export function NewChannelDialog({ channels, copyFrom = '', onClose, onCreated }
             {profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}{profile.isDefault ? ' (default)' : ''}</option>)}
           </select></label>}
         </div>
+        {refusal && <div className="warning" role="note"><b>Not on this Tunarr</b><span>{refusal}</span></div>}
         {taken && <p className="slot-problem">Channel {number} already exists.</p>}
         <p className="subtle">{start ? 'The copy gets the same programming, schedule, filler and streaming settings.' : 'The channel starts empty. Insert programs or create a slot schedule next.'}</p>
         {error && <div className="warning" role="alert"><b>Not created</b><span>{error}</span></div>}

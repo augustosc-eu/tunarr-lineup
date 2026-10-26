@@ -10,6 +10,8 @@ import { randomInt } from 'node:crypto';
 import { readFile, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { createAiConfig } from './ai.js';
+import { compatibilitySummary, detectCompatibility } from './compatibility.js';
+import { DEFAULT_EVENTS, EVENT_LABELS, NOTIFY_EVENTS, shownWebhook, validateWebhookUrl } from './notify.js';
 import { validateAccount, verifyPassword, hashPassword, type AuthConfig } from './auth.js';
 import { configEnv, isComplete, type ConfigKey, type ConfigStore, type StoredConfig } from './configStore.js';
 import { createMediaFolder } from './mediaFolder.js';
@@ -17,7 +19,7 @@ import { applySettings } from './settings.js';
 import { parseTunarrUrl, type ProxyConfig, type ProxyResponse, type TunarrTarget } from './tunarrProxy.js';
 import { callTunarr, fail, json, UpstreamError } from './upstream.js';
 
-export type SetupRoute = { name: 'status' | 'unlock' | 'detect' | 'test' | 'finish' | 'config' | 'config-detect' | 'config-test'; methods: string[] };
+export type SetupRoute = { name: 'status' | 'unlock' | 'detect' | 'test' | 'finish' | 'config' | 'config-detect' | 'config-test' | 'config-notify-test'; methods: string[] };
 
 export function matchSetupRoute(path: string): SetupRoute | null {
   switch (path) {
@@ -29,6 +31,7 @@ export function matchSetupRoute(path: string): SetupRoute | null {
     case '/server-config': return { name: 'config', methods: ['GET', 'PUT'] };
     case '/server-config/detect': return { name: 'config-detect', methods: ['POST'] };
     case '/server-config/test': return { name: 'config-test', methods: ['POST'] };
+    case '/server-config/notify-test': return { name: 'config-notify-test', methods: ['POST'] };
     default: return null;
   }
 }
@@ -225,6 +228,28 @@ export async function applyConnectionFields(values: StoredConfig['values'], body
     }
   }
 
+  if ('notifications' in body) {
+    const notifications = body.notifications;
+    if (!isObject(notifications)) return { error: 'Send notifications as { url?, events?, includeNames?, allowPrivate? }.' };
+    const allowPrivate = 'allowPrivate' in notifications ? notifications.allowPrivate === true : next.LINEUP_NOTIFY_PRIVATE === 'on';
+    if ('allowPrivate' in notifications) next.LINEUP_NOTIFY_PRIVATE = allowPrivate ? 'on' : 'off';
+    // The address is write-only: left out keeps the saved one (checked again against the private-network choice); empty turns notifications off.
+    const raw = 'url' in notifications ? text(notifications.url ?? '', 2048) : next.LINEUP_NOTIFY_URL ?? '';
+    if (raw === null) return { error: 'The webhook address is up to 2048 characters, on one line.' };
+    if (!raw) delete next.LINEUP_NOTIFY_URL;
+    else {
+      const checked = validateWebhookUrl(raw, allowPrivate);
+      if ('error' in checked) return { error: `Webhook: ${checked.error}` };
+      next.LINEUP_NOTIFY_URL = checked.url.href;
+    }
+    if ('events' in notifications) {
+      const events = notifications.events;
+      if (!Array.isArray(events) || events.some((event) => !(NOTIFY_EVENTS as readonly unknown[]).includes(event))) return { error: 'Choose events from the list.' };
+      next.LINEUP_NOTIFY_EVENTS = [...new Set(events as string[])].join(',');
+    }
+    if ('includeNames' in notifications) next.LINEUP_NOTIFY_NAMES = notifications.includeNames === true ? 'on' : 'off';
+  }
+
   if ('options' in body) {
     const options = body.options;
     if (!isObject(options)) return { error: 'Send options as { scheduler?, externalLogos? }.' };
@@ -266,7 +291,9 @@ export async function detectCandidates() {
   return places;
 }
 
-export type Probe = { url: string; host: string; ok: true; channelCount: number } | { url: string; host: string; ok: false; message: string };
+export type Probe =
+  | { url: string; host: string; ok: true; channelCount: number; compatibility?: CompatibilitySummary }
+  | { url: string; host: string; ok: false; message: string };
 
 /** Asks one address for its channel list, the same way the health check does. */
 export async function probeTunarr(config: ProxyConfig, url: string, target: TunarrTarget, timeoutMs = 3000): Promise<Probe> {
@@ -292,10 +319,20 @@ async function detect(config: ProxyConfig) {
 
 // ------------------------------------------------------------------ routes
 
-/** What the wizard and Server Settings show: never a key, a password or Tunarr's credentials. */
-function configView(setup: Setup) {
+/** What the wizard and Server Settings show: never a key, a password, Tunarr's credentials or the webhook's path. */
+function configView(setup: Setup, config?: ProxyConfig) {
   const { values, account } = setup.stored();
   return {
+    notifications: {
+      set: !!values.LINEUP_NOTIFY_URL,
+      host: shownWebhook(values.LINEUP_NOTIFY_URL),
+      events: values.LINEUP_NOTIFY_EVENTS === undefined ? DEFAULT_EVENTS : values.LINEUP_NOTIFY_EVENTS.split(',').filter(Boolean),
+      includeNames: values.LINEUP_NOTIFY_NAMES === 'on',
+      allowPrivate: values.LINEUP_NOTIFY_PRIVATE === 'on',
+      problem: config?.notifier?.problem ?? null,
+      recent: config?.notifier?.recent() ?? [],
+      catalog: NOTIFY_EVENTS.map((id) => ({ id, label: EVENT_LABELS[id] })),
+    },
     tunarr: { url: shownUrl(values.TUNARR_URL), credentials: /^[a-z]+:\/\/[^/]*@/i.test(values.TUNARR_URL ?? '') },
     account: { username: account?.username ?? '' },
     ai: { provider: values.LINEUP_AI_PROVIDER ?? '', model: values.LINEUP_AI_MODEL ?? '', baseUrl: values.LINEUP_AI_BASE_URL ?? '', keySet: !!values.LINEUP_AI_API_KEY },
@@ -306,6 +343,7 @@ function configView(setup: Setup) {
 }
 
 export type ConfigView = ReturnType<typeof configView>;
+export type CompatibilitySummary = ReturnType<typeof compatibilitySummary>;
 
 const CODE_HELP = 'The setup code is printed in the Lineup server’s log (docker logs tunarr-lineup, or the terminal it runs in).';
 
@@ -330,13 +368,20 @@ export async function handleSetupRoute(route: SetupRoute, { config, method, body
     case 'unlock': return json(200, configView(setup));
     case 'detect':
     case 'config-detect': return json(200, await detect(config));
+    case 'config-notify-test': {
+      if (!config.notifier?.settings) return fail(409, 'notifications_off', config.notifier?.problem ?? 'Set a webhook address and save it first.');
+      return json(200, await config.notifier.test());
+    }
     case 'test':
     case 'config-test': {
       // The shown address (no credentials) tests the saved one.
       const saved = setup.stored().values.TUNARR_URL;
       const checked = saved && input.tunarrUrl === shownUrl(saved) ? checkTunarrUrl(saved) : checkTunarrUrl(input.tunarrUrl);
       if ('error' in checked) return fail(400, 'invalid_tunarr_url', checked.error);
-      return json(200, await probeTunarr(config, checked.url, checked.target, config.timeoutMs));
+      const probe = await probeTunarr(config, checked.url, checked.target, config.timeoutMs);
+      // What that Tunarr can do, from the same read-only checks Server Settings shows (not cached: it may not be the saved address).
+      if (probe.ok) probe.compatibility = compatibilitySummary(await detectCompatibility(config, checked.target));
+      return json(200, probe);
     }
     case 'finish': {
       const account = validateAccount(isObject(input.account) ? input.account.username : undefined, isObject(input.account) ? input.account.password : undefined);
@@ -351,7 +396,7 @@ export async function handleSetupRoute(route: SetupRoute, { config, method, body
       return json(200, { done: true, username: account.username });
     }
     case 'config': {
-      if (method === 'GET') return json(200, configView(setup));
+      if (method === 'GET') return json(200, configView(setup, config));
       const fields = await applyConnectionFields(setup.stored().values, input, where);
       if ('error' in fields) return fail(400, 'invalid_setting', fields.error);
       const stored = setup.stored();
@@ -366,7 +411,7 @@ export async function handleSetupRoute(route: SetupRoute, { config, method, body
       }
       if (isObject(input.options)) await config.settings?.update({ ...('scheduler' in input.options ? { LINEUP_SCHEDULER: null } : {}), ...('externalLogos' in input.options ? { LINEUP_EXTERNAL_LOGOS: null } : {}) });
       await setup.save(config, { ...stored, values: fields.values, account, setupComplete: isComplete(fields.values, account) || stored.setupComplete });
-      return json(200, configView(setup));
+      return json(200, configView(setup, config));
     }
   }
 }

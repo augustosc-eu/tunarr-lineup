@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Home from '../app/page';
 import { draftStore } from '../lib/draftStore';
@@ -47,7 +47,7 @@ const today = () => {
 };
 
 /** A stateful fake of the companion's /api/tunarr routes. */
-function fakeCompanion(options: { schedule?: { type: string; slots: unknown[]; [key: string]: unknown }; health?: Reply; programming?: Reply; lineupStatus?: number; lineup?: LineupItem[]; startTime?: number; stationIds?: boolean; ownStationIds?: boolean; namedIds?: boolean; scheduler?: boolean } = {}) {
+function fakeCompanion(options: { schedule?: { type: string; slots: unknown[]; [key: string]: unknown }; health?: Reply; programming?: Reply; lineupStatus?: number; lineup?: LineupItem[]; startTime?: number; stationIds?: boolean; ownStationIds?: boolean; namedIds?: boolean; scheduler?: boolean; compatibility?: unknown } = {}) {
   const startTime = options.startTime ?? dayRange(today()).from.getTime() - 60 * 60_000;
   const state = {
     lineup: options.lineup ?? (mixedLineup() as LineupItem[]),
@@ -139,6 +139,10 @@ function fakeCompanion(options: { schedule?: { type: string; slots: unknown[]; [
       return reply({ status: 200, body: { from: url.searchParams.get('from'), to: url.searchParams.get('to'), channels: channels.map((channel) => ({ id: channel.id, number: channel.number, name: channel.name, programs: guideFor(state.lineup, channel.startTime, from, to).map((entry) => ({ start: entry.start, stop: entry.stop, type: entry.type, title: String(entry.title ?? (entry.type === 'content' ? 'Alpha Movie' : 'Flex time')), detail: '', id: entry.id })) })) } });
     }
     if (url.pathname === '/api/tunarr/redirects') return reply({ status: 200, body: { edges: [] } });
+    if (url.pathname === '/api/tunarr/compatibility' && options.compatibility) return reply({ status: 200, body: options.compatibility });
+    if (url.pathname === '/api/tunarr/control-room') {
+      return reply({ status: 200, body: { at: Date.now(), guide: { status: 'ok' }, sessions: { status: 'ok' }, scheduler: { enabled: false }, programming: { status: 'ok' }, channels: channels.map((channel) => ({ id: channel.id, number: channel.number, name: channel.name, group: '', viewers: 0, streams: 0, now: null, next: null, guide: 'ok', pendingChanges: 0, nextChangeAt: null, diagnostic: null })).sort((a, b) => a.number - b.number) } });
+    }
     if (url.pathname === '/api/tunarr/ai/review') return reply({ status: 200, body: { summary: 'A tidy evening.', suggestions: [{ title: 'Fix the dead redirect', detail: 'Channel Two is gone.', priority: 'high' }] } });
     if (url.pathname === '/api/tunarr/scheduled' && method === 'GET') return reply({ status: 200, body: options.scheduler ? { enabled: true, changes: [] } : { enabled: false, message: 'Scheduled changes are off.', changes: [] } });
     if (url.pathname === '/api/tunarr/scheduled' && method === 'POST') {
@@ -1579,6 +1583,145 @@ describe('guide, checks and planning', () => {
     // Back closes it.
     fireEvent.keyDown(grid, { key: 'Escape' });
     await waitFor(() => expect(screen.queryByRole('grid', { name: 'Program guide' })).toBeNull());
+  });
+
+  it('refuses only what this Tunarr lacks, saying why, and keeps the rest working', async () => {
+    const capability = (id: string, label: string, status: string) => ({ id, label, uses: '', status, reason: status === 'unavailable' ? 'This Tunarr doesn’t have the route Lineup uses for it.' : 'Checked with a read-only request.' });
+    const { requests } = fakeCompanion({ compatibility: {
+      checkedAt: Date.now(), configured: true, connected: true, apiDescription: 'read', version: { tunarr: '1.3.0', source: 'api', status: 'validated', note: '' },
+      capabilities: [capability('guide', 'Guide', 'unavailable'), capability('sessions', 'Viewer counts', 'unavailable'), capability('manual-saves', 'Saving lineups', 'available'), capability('programming', 'Programming', 'degraded')],
+    } });
+    render(<Home />);
+    await screen.findAllByText('Alpha Movie');
+    await waitFor(() => expect(count(requests, 'GET', '/api/tunarr/compatibility')).toBe(1));
+    fireEvent.keyDown(document.body, { key: 'g' });
+    expect(await screen.findByText(/Guide isn’t available on this Tunarr/)).toBeTruthy();
+    expect(screen.queryByRole('grid', { name: 'Program guide' })).toBeNull();
+    expect(requests.some((r) => r.path === '/api/tunarr/guide')).toBe(false);
+    // Viewer counts aren't polled once Tunarr is known not to have them.
+    const sessionReads = count(requests, 'GET', '/api/tunarr/sessions');
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+    expect(count(requests, 'GET', '/api/tunarr/sessions')).toBe(sessionReads);
+    // A degraded capability and an available one still work: the week view opens.
+    fireEvent.keyDown(document.body, { key: 'w' });
+    expect(await screen.findByRole('grid', { name: 'Week' })).toBeTruthy();
+  });
+
+  it('gates Duplicate Channel on copying and the New Channel dialog on its “Start from” choice', async () => {
+    const { requests } = fakeCompanion({ compatibility: {
+      checkedAt: Date.now(), configured: true, connected: true, apiDescription: 'read', version: { tunarr: '1.3.0', source: 'api', status: 'validated', note: '' },
+      capabilities: [{ id: 'channel-admin', label: 'Creating and deleting channels', uses: '', status: 'degraded', reason: 'Listed.', parts: [
+        { id: 'create', label: 'creating empty channels', status: 'available' }, { id: 'copy', label: 'duplicating channels', status: 'unavailable' }, { id: 'delete', label: 'deleting channels', status: 'available' },
+      ] }],
+    } });
+    render(<Home />);
+    await screen.findAllByText('Alpha Movie');
+    await waitFor(() => expect(count(requests, 'GET', '/api/tunarr/compatibility')).toBe(1));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Channel' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /Duplicate Channel/ }));
+    expect(await screen.findByText(/doesn’t offer duplicating channels/)).toBeTruthy();
+    expect(screen.queryByRole('dialog', { name: /Duplicate channel/ })).toBeNull();
+    // New Channel opens; choosing a copy inside it turns the final button off and says why.
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Channel' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /New Channel/ }));
+    const dialog = await screen.findByRole('dialog', { name: 'New channel' });
+    expect((within(dialog).getByRole('button', { name: 'Create channel' }) as HTMLButtonElement).disabled).toBe(false);
+    const start = within(dialog).getByLabelText('Start from');
+    fireEvent.change(start, { target: { value: within(start).getAllByRole('option')[1].getAttribute('value') } });
+    const duplicate = within(dialog).getByRole('button', { name: 'Duplicate channel' }) as HTMLButtonElement;
+    expect(duplicate.disabled).toBe(true);
+    expect(within(dialog).getByRole('note').textContent).toContain('duplicating channels');
+    fireEvent.click(duplicate);
+    fireEvent.change(start, { target: { value: '' } });
+    expect((within(dialog).getByRole('button', { name: 'Create channel' }) as HTMLButtonElement).disabled).toBe(false);
+    expect(within(dialog).queryByRole('note')).toBeNull();
+    expect(count(requests, 'POST', '/api/tunarr/channels/create')).toBe(0);
+  });
+
+  const channelAdminReport = (create: string, copy: string) => ({
+    checkedAt: Date.now(), configured: true, connected: true, apiDescription: 'read', version: { tunarr: '1.3.0', source: 'api', status: 'validated', note: '' },
+    capabilities: [{ id: 'channel-admin', label: 'Creating and deleting channels', uses: '', status: 'degraded', reason: 'Listed.', parts: [
+      { id: 'create', label: 'creating empty channels', status: create }, { id: 'copy', label: 'duplicating channels', status: copy }, { id: 'delete', label: 'deleting channels', status: 'available' },
+    ] }],
+  });
+  const openDuplicate = async (requests: ReturnType<typeof fakeCompanion>['requests']) => {
+    render(<Home />);
+    await screen.findAllByText('Alpha Movie');
+    await waitFor(() => expect(count(requests, 'GET', '/api/tunarr/compatibility')).toBe(1));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Channel' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /Duplicate Channel/ }));
+    return screen.findByRole('dialog', { name: 'Duplicate channel' });
+  };
+
+  it('never reads transcode profiles for a copy, nor for an empty channel this Tunarr can’t create', async () => {
+    const { requests } = fakeCompanion({ compatibility: channelAdminReport('unavailable', 'available') });
+    const dialog = await openDuplicate(requests);
+    const profiles = () => count(requests, 'GET', '/api/tunarr/transcode-configs');
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+    expect(profiles()).toBe(0);
+    expect((within(dialog).getByRole('button', { name: 'Duplicate channel' }) as HTMLButtonElement).disabled).toBe(false);
+    // Choosing an empty channel says why it can't be made, keeps the button off, and still reads nothing.
+    fireEvent.change(within(dialog).getByLabelText('Start from'), { target: { value: '' } });
+    const create = within(dialog).getByRole('button', { name: 'Create channel' }) as HTMLButtonElement;
+    expect(create.disabled).toBe(true);
+    expect(within(dialog).getByRole('note').textContent).toContain('creating empty channels');
+    fireEvent.click(create);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+    expect(profiles()).toBe(0);
+    expect(count(requests, 'POST', '/api/tunarr/channels/create')).toBe(0);
+  });
+
+  it('reads transcode profiles once, when an empty channel is first chosen in Duplicate Channel', async () => {
+    const { requests } = fakeCompanion({ compatibility: channelAdminReport('available', 'available') });
+    const dialog = await openDuplicate(requests);
+    const profiles = () => count(requests, 'GET', '/api/tunarr/transcode-configs');
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+    expect(profiles()).toBe(0);
+    const start = within(dialog).getByLabelText('Start from') as unknown as HTMLSelectElement;
+    const copy = start.value;
+    fireEvent.change(start, { target: { value: '' } });
+    expect(((await within(dialog).findByLabelText('Transcode profile')) as unknown as HTMLSelectElement).value).toBe(PROFILE_ID);
+    expect(profiles()).toBe(1);
+    fireEvent.change(start, { target: { value: copy } });
+    fireEvent.change(start, { target: { value: '' } });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+    expect(profiles()).toBe(1);
+    expect((within(dialog).getByLabelText('Transcode profile') as unknown as HTMLSelectElement).value).toBe(PROFILE_ID);
+  });
+
+  it('turns saving off before an edit when Tunarr’s API lacks the save route, saying which route', async () => {
+    const reason = 'This Tunarr’s API doesn’t list POST /api/channels/:id/programming, which saving lineups needs, so it’s turned off instead of failing when used.';
+    const { requests } = fakeCompanion({ compatibility: {
+      checkedAt: Date.now(), configured: true, connected: true, apiDescription: 'read', version: { tunarr: '1.3.0', source: 'api', status: 'validated', note: '' },
+      capabilities: [{ id: 'manual-saves', label: 'Saving lineups', uses: '', status: 'unavailable', reason }],
+    } });
+    render(<Home />);
+    await screen.findAllByText('Alpha Movie');
+    const button = await screen.findByRole('button', { name: 'Saving unavailable' }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expect(button.title).toContain('POST /api/channels/:id/programming');
+    expect((await screen.findByText('Saving is off for this Tunarr')).parentElement!.textContent).toContain('POST /api/channels/:id/programming');
+    expect(JSON.stringify(screen.getByText('Saving is off for this Tunarr').parentElement!.textContent)).not.toMatch(/tunarr:8000|https?:\/\//);
+    // The keyboard save is refused too: nothing is sent.
+    fireEvent.keyDown(document.body, { key: 's', ctrlKey: true });
+    expect(requests.some((r) => r.method === 'POST' && r.path.endsWith('/programming'))).toBe(false);
+  });
+
+  it('opens the Control Room with O and acts on another channel once it has loaded', async () => {
+    const { requests } = fakeCompanion();
+    render(<Home />);
+    await screen.findAllByText('Alpha Movie');
+    fireEvent.keyDown(document.body, { key: 'o' });
+    const room = await screen.findByRole('dialog', { name: 'Control Room' });
+    await waitFor(() => expect(document.activeElement?.getAttribute('aria-label')).toMatch(/^CH 3 Newsroom/));
+    fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' });
+    await waitFor(() => expect(document.activeElement?.getAttribute('aria-label')).toMatch(/^CH 7 Movie Night/));
+    fireEvent.keyDown(document.activeElement!, { key: 'Enter' });
+    fireEvent.click(within(room).getByRole('button', { name: 'Check lineup' }));
+    // The desk switches to Movie Night, then opens its lineup check.
+    expect(await screen.findByRole('dialog', { name: /Check lineup/i })).toBeTruthy();
+    expect(requests.some((r) => r.method === 'GET' && r.path === '/api/tunarr/channels/chan-movies/programming')).toBe(true);
+    expect(screen.queryByRole('dialog', { name: 'Control Room' })).toBeNull();
   });
 
   it('watches like a cable box: tunes by number, goes back with LAST, and opens the classic guide', async () => {

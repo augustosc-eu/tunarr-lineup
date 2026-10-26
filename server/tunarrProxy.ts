@@ -13,6 +13,12 @@ import { applySettings, createSettingsStore, type SettingsStore } from './settin
 import { createStationIdStore, type StationIdStore } from './stationIdStore.js';
 import { handleSetupRoute, matchSetupRoute, setupRequired, type Setup, type SetupRoute } from './setup.js';
 import { handleWatchRoute, matchWatchRoute } from './watch.js';
+import { handleControlRoomRoute, matchControlRoomRoute, type ControlRoomRoute } from './controlRoom.js';
+import { createBatchStore, handleBatchRoute, matchBatchRoute, runningBatches, type BatchRoute } from './batch.js';
+import type { BatchStore } from './batchStore.js';
+import { createCalendarStore, createScheduleLibrary, type CalendarStore, type ScheduleLibrary } from './calendarStore.js';
+import { armCalendar, calendarGuard } from './calendarArm.js';
+import { createNotifier, type Notifier, type NotifierHooks } from './notify.js';
 import { handleContentRoute, matchContentRoute, setChannelStartTime, type ContentRoute } from './content.js';
 import { channelLogo, type ExternalImageFetcher } from './logos.js';
 import { withChannelLock } from './channelLock.js';
@@ -76,6 +82,16 @@ export type ProxyConfig = {
   compression?: boolean;
   /** The setup wizard and config.json (server/setup.ts); unset when configured only from the environment (tests). */
   setup?: Setup;
+  /** Batch operations and their record (LINEUP_DATA_DIR/batches.json). */
+  batches?: BatchStore;
+  /** Lineups saved apart from any channel (LINEUP_DATA_DIR/schedule-library.json). */
+  scheduleLibrary?: ScheduleLibrary;
+  /** When saved schedules go on which channels (LINEUP_DATA_DIR/calendar.json), armed by the scheduler. */
+  calendar?: CalendarStore;
+  /** Operational notifications to the owner's webhook (LINEUP_NOTIFY_*; off unless an address is set). */
+  notifier?: Notifier;
+  /** Test hooks for the notifier's delivery (like fetchImpl). */
+  notifyHooks?: NotifierHooks;
 };
 
 export type ProxyRequest = {
@@ -163,12 +179,16 @@ export function createProxyConfig(env: Record<string, string | undefined>): Prox
     snapshots: createSnapshotStore(dataDir),
     drafts: createSharedDraftStore(dataDir),
     stationIds: createStationIdStore(dataDir),
+    batches: createBatchStore(dataDir, runningBatches),
+    scheduleLibrary: createScheduleLibrary(dataDir),
+    calendar: createCalendarStore(dataDir),
+    notifier: createNotifier(env),
     settings: createSettingsStore(dataDir, env),
     programmingCache: createProgrammingCache(nonNegativeInt(env.LINEUP_PROGRAMMING_CACHE_MS, DEFAULT_PROGRAMMING_CACHE_MS)),
     compression: compressionEnabled(env.LINEUP_COMPRESSION),
   };
   const scheduler = env.LINEUP_SCHEDULER?.trim().toLowerCase();
-  config.scheduler = createScheduler(config, { enabled: scheduler === 'on' || scheduler === 'true' || scheduler === '1', dataDir, snapshots: config.snapshots });
+  config.scheduler = createScheduler(config, { enabled: scheduler === 'on' || scheduler === 'true' || scheduler === '1', dataDir, snapshots: config.snapshots, arm: (now) => armCalendar(config, now), calendarGuard: calendarGuard(config) });
   return config;
 }
 
@@ -222,7 +242,7 @@ function parseIfMatch(value: string | undefined) {
 type CurrentProgramming = { lineup?: unknown; programs?: unknown; schedule?: unknown };
 
 type Write =
-  | { kind: 'manual'; lineup: unknown[]; keepOnAir: boolean }
+  | { kind: 'manual'; lineup: unknown[]; keepOnAir: boolean; startTime?: number }
   | { kind: 'schedule'; type: 'time' | 'random'; edit: unknown; seed?: number[]; discardCount?: number; extra: string[] };
 
 function header(headers: ProxyRequest['headers'], name: string) {
@@ -265,15 +285,23 @@ export function validateLineupRange(params: URLSearchParams): { from: string; to
   return { from: from.toISOString(), to: to.toISOString() };
 }
 
-export function validateManualProgramming(body: unknown): { lineup: unknown[]; keepOnAir: boolean } | { error: string } {
+/** How far ahead a planned lineup may say it starts (the planner's month, with room). */
+const MAX_START_AHEAD_MS = 400 * 86_400_000;
+
+export function validateManualProgramming(body: unknown, now = Date.now()): { lineup: unknown[]; keepOnAir: boolean; startTime?: number } | { error: string } {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return { error: 'Request body must be a JSON object.' };
   const request = body as Record<string, unknown>;
   if (request.type !== 'manual') return { error: 'Only manual programming ("type": "manual") can be saved here.' };
   if (request.append !== undefined && request.append !== false) return { error: '"append" must be false.' };
   if (request.keepOnAir !== undefined && typeof request.keepOnAir !== 'boolean') return { error: '"keepOnAir" must be true or false.' };
+  // A planned lineup (the advanced planner) says when its first item airs: the channel's start time.
+  if (request.startTime !== undefined) {
+    if (typeof request.startTime !== 'number' || !Number.isFinite(request.startTime) || request.startTime < 0 || request.startTime > now + MAX_START_AHEAD_MS) return { error: '"startTime" must be a time, at most a year ahead.' };
+    if (request.keepOnAir === true) return { error: 'Send "keepOnAir" or "startTime", not both.' };
+  }
   const problem = lineupItemsError(request.lineup);
   if (problem) return { error: problem };
-  return { lineup: request.lineup as unknown[], keepOnAir: request.keepOnAir === true };
+  return { lineup: request.lineup as unknown[], keepOnAir: request.keepOnAir === true, ...(typeof request.startTime === 'number' ? { startTime: Math.round(request.startTime) } : {}) };
 }
 
 /** Fetches program artwork through Tunarr. Only image bytes are passed on. */
@@ -306,7 +334,7 @@ function notConfigured(config: ProxyConfig) {
 }
 
 /** Library, list and channel-settings routes (content.ts) and Tunarr setup routes (admin.ts). */
-async function handleContent(request: ProxyRequest, config: ProxyConfig, url: URL, method: string, route: ContentRoute | AdminRoute | LineupRoute | SetupRoute, kind: 'content' | 'admin' | 'lineup' | 'setup'): Promise<ProxyResponse> {
+async function handleContent(request: ProxyRequest, config: ProxyConfig, url: URL, method: string, route: ContentRoute | AdminRoute | LineupRoute | SetupRoute | ControlRoomRoute | BatchRoute, kind: 'content' | 'admin' | 'lineup' | 'setup' | 'control' | 'batch'): Promise<ProxyResponse> {
   if (!route.methods.includes(method)) {
     return fail(405, 'method_not_allowed', `${method.slice(0, 10)} is not allowed on this route.`, {}, { allow: route.methods.join(', ') });
   }
@@ -331,6 +359,8 @@ async function handleContent(request: ProxyRequest, config: ProxyConfig, url: UR
   }
   try {
     if (kind === 'lineup') return await handleLineupRoute(route as LineupRoute, { config, target, method, body });
+    if (kind === 'control') return await handleControlRoomRoute(route as ControlRoomRoute, { config, target: target!, body });
+    if (kind === 'batch') return await handleBatchRoute(route as BatchRoute, { config, target: target!, body });
     const context = { config, target: target!, method, body, withChannelLock };
     return kind === 'admin' ? await handleAdminRoute(route as AdminRoute, context) : await handleContentRoute(route as ContentRoute, context);
   } catch (error) {
@@ -349,6 +379,11 @@ export async function handleTunarrApi(request: ProxyRequest, config: ProxyConfig
       if (setupRoute) return await handleContent(request, config, url, method, setupRoute, 'setup');
       // Nothing else answers until setup is done (server/setup.ts).
       if (config.setup?.needed()) return setupRequired(subpath === '/health');
+      const batch = matchBatchRoute(subpath);
+      if (batch && 'invalid' in batch) return fail(400, 'invalid_parameter', batch.invalid);
+      if (batch) return await handleContent(request, config, url, method, batch, 'batch');
+      const control = matchControlRoomRoute(subpath);
+      if (control) return await handleContent(request, config, url, method, control, 'control');
       const lineup = matchLineupRoute(subpath);
       if (lineup && 'invalid' in lineup) return fail(400, 'invalid_parameter', lineup.invalid);
       if (lineup) return await handleContent(request, config, url, method, lineup, 'lineup');
@@ -434,7 +469,7 @@ export async function handleTunarrApi(request: ProxyRequest, config: ProxyConfig
         } else {
           const checked = validateManualProgramming(parsed);
           if ('error' in checked) return fail(400, 'invalid_programming', checked.error);
-          write = { kind: 'manual', lineup: checked.lineup, keepOnAir: checked.keepOnAir };
+          write = { kind: 'manual', lineup: checked.lineup, keepOnAir: checked.keepOnAir, ...(checked.startTime !== undefined ? { startTime: checked.startTime } : {}) };
         }
         expectedVersion = parseIfMatch(header(request.headers, 'if-match'));
         if (!expectedVersion) return fail(428, 'precondition_required', 'Saves must say which version of the channel they replace (If-Match).');
@@ -483,8 +518,8 @@ export async function handleTunarrApi(request: ProxyRequest, config: ProxyConfig
             let body: unknown;
             if (pending.kind === 'manual') {
               // A start-time change regenerates a slot schedule, which would discard this lineup.
-              if (pending.keepOnAir && current?.schedule != null) {
-                throw new UpstreamError(400, 'invalid_programming', 'This channel is generated from a slot schedule, so its start time can’t move. Save without keeping what’s on air in place.');
+              if ((pending.keepOnAir || pending.startTime !== undefined) && current?.schedule != null) {
+                throw new UpstreamError(400, 'invalid_programming', pending.keepOnAir ? 'This channel is generated from a slot schedule, so its start time can’t move. Save without keeping what’s on air in place.' : 'This channel is generated from a slot schedule, so a planned lineup can’t set its start time.');
               }
               body = { type: 'manual', lineup: pending.lineup, append: false };
             } else {
@@ -496,6 +531,15 @@ export async function handleTunarrApi(request: ProxyRequest, config: ProxyConfig
               body = { type: pending.type, schedule: built.schedule, programs, seed: pending.seed, discardCount: pending.discardCount };
             }
             const saved = await callTunarr(config, target, 'POST', path, JSON.stringify(body));
+            if (pending.kind === 'manual' && pending.startTime !== undefined) {
+              // Saved first: if the start can't move, it's an ordinary save and the reply says so.
+              const startAt = pending.startTime;
+              try {
+                return json(200, { ...(saved as object), startTime: await setChannelStartTime(config, target, route.channelId, () => startAt) });
+              } catch (error) {
+                return json(200, { ...(saved as object), startTimeError: `The lineup was saved, but its start time didn’t move: ${error instanceof UpstreamError ? error.message : 'Tunarr did not accept it.'}` });
+              }
+            }
             if (pending.kind !== 'manual' || !pending.keepOnAir) return json(200, saved);
             // Keep the pass on air in place: move the start time by what every
             // earlier pass gained or lost. The lineup is saved first, so a failure
@@ -552,6 +596,9 @@ export async function handleTunarrApi(request: ProxyRequest, config: ProxyConfig
       }
     } catch (error) {
       if (!(error instanceof UpstreamError)) throw error;
+      if (error.code === 'lineup_changed' && route.name === 'programming') {
+        config.notifier?.notify({ event: 'save.conflict', severity: 'warning', channel: { id: route.channelId }, summary: 'A save was refused: the channel changed in Tunarr after it was loaded. Nothing was overwritten.' });
+      }
       if (route.name === 'health') {
         return json(error.status, { status: 'unreachable', tunarrHost: target.host, error: { code: error.code, message: error.message } });
       }

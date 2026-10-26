@@ -854,6 +854,28 @@ input[type=checkbox] { width:1.25rem; height:1.25rem; margin:0; accent-color:var
 .guide-head { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:0.5rem 1rem; }
 .guide-head h2 { margin:0.25rem 0; }
 .guide-controls { display:flex; flex-wrap:wrap; align-items:center; gap:0.375rem; }
+/* View → Control Room: channels on the left, the focused one's details and actions on the right. */
+.room-overlay { padding:0.75rem; }
+.control-room-modal { width:100%; max-width:120rem; height:calc(var(--vh) - var(--bar) - 1.5rem); max-height:none; display:flex; flex-direction:column; outline:1px solid var(--window-outline); }
+.control-room-modal:focus { outline:1px solid var(--window-outline); }
+.control-room-modal:before { content:'Control Room'; }
+.room-head { display:flex; flex-wrap:wrap; align-items:center; gap:0.5rem 1rem; }
+.room-head h2 { margin:0.25rem 0; }
+.room-controls { margin-left:auto; display:flex; flex-wrap:wrap; gap:0.375rem; }
+.room-filters { margin:0.375rem 0; display:flex; flex-wrap:wrap; gap:0.375rem; }
+.room-body { flex:1; min-height:0; display:grid; grid-template-columns:minmax(0,1.6fr) minmax(18rem,1fr); gap:0.75rem; }
+.room-list { min-height:0; margin:0; padding:0; overflow:auto; list-style:none; background:var(--surface); border:1px solid var(--line); box-shadow:var(--well); }
+.issue.room-row { grid-template-columns:7.5rem minmax(0,1fr) minmax(0,1.4fr) 6rem; }
+.room-row b,.room-row small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.room-row.focused { box-shadow:inset 0.25rem 0 0 var(--focus); }
+.room-stats { display:flex; flex-direction:column; align-items:flex-end; gap:0.125rem; }
+.room-detail { min-height:0; overflow:auto; padding:0 0.25rem; }
+.room-findings { margin:0.5rem 0; padding:0; list-style:none; }
+.room-findings li { padding:0.375rem 0; display:grid; grid-template-columns:auto minmax(0,1fr); gap:0.5rem; align-items:start; border-bottom:1px solid var(--line-faint); font-size:0.875rem; }
+.room-findings li>span:only-child { grid-column:1 / -1; }
+.room-findings b,.room-findings small { display:block; }
+.room-findings small { color:var(--text-muted); }
+.room-actions { display:grid; grid-template-columns:repeat(auto-fit,minmax(11rem,1fr)); gap:0.375rem; }
 .guide-grid { flex:1; min-height:0; overflow:auto; margin-top:0.5rem; background:var(--surface); border:1px solid var(--line); box-shadow:var(--well); }
 .guide-row { display:grid; grid-template-columns:minmax(10rem,15rem) minmax(0,1fr); min-height:3.5rem; border-bottom:1px solid var(--line-faint-2); }
 .guide-row.current { background:var(--guide-current); }
@@ -907,6 +929,14 @@ input[type=checkbox] { width:1.25rem; height:1.25rem; margin:0; accent-color:var
 .issue:focus-visible { color:var(--selection-text); background:var(--selection); outline-offset:-0.125rem; }
 .issue:focus-visible small,.issue:focus-visible time { color:var(--selection-muted); }
 .issue-empty { padding:0.75rem; color:var(--text-muted); font-size:0.875rem; }
+/* Compatibility (Server Settings) and the Control Room share the issue rows' states. */
+.issue.capability { grid-template-columns:9.5rem minmax(0,1fr); }
+.status-available .issue-badge,.health-healthy .issue-badge { color:var(--on-color); background:var(--success); }
+.status-degraded .issue-badge,.health-warning .issue-badge { color:var(--warn-text); background:var(--warn-bg); }
+.status-unavailable .issue-badge,.health-error .issue-badge { color:var(--on-color); background:var(--danger-strong); }
+.status-untested .issue-badge,.health-unsupported .issue-badge { color:var(--text); background:var(--info-bg); }
+.status-unknown .issue-badge,.health-unknown .issue-badge { color:var(--text); background:var(--surface-alt); }
+.compatibility .warning { margin:0.375rem 0; }
 .check-settings { margin:0.5rem 0; }
 .check-settings summary { cursor:pointer; font-size:0.875rem; font-weight:700; }
 .ai-review { margin-top:0.5rem; padding:0.375rem 0.5rem; background:var(--tint-bg); border:1px solid var(--tint-border); }
@@ -922,6 +952,48 @@ input[type=checkbox] { width:1.25rem; height:1.25rem; margin:0; accent-color:var
 .network-list { display:grid; max-height:min(22rem,40vh); overflow:auto; }
 .network-modal { width:min(52rem,100%); }
 .network-modal:before { content:'Network'; }
+/* Channel → Batch Operations…: tasks, channels and options, then the per-channel preview and report. */
+.batch-modal { width:min(68rem,100%); }
+.batch-modal:before { content:'Batch Operations'; }
+.batch-tasks { display:grid; gap:0.25rem; }
+.batch-tasks small { color:var(--text-muted); }
+.batch-channels { display:block; }
+.batch-quick { margin-bottom:0.375rem; display:flex; flex-wrap:wrap; gap:0.375rem; }
+.batch-channel-list { max-height:min(18rem,32vh); overflow:auto; display:grid; grid-template-columns:repeat(auto-fill,minmax(16rem,1fr)); gap:0.125rem 1rem; }
+.batch-params { margin:0.5rem 0; }
+.batch-numbers,.batch-options { display:grid; grid-template-columns:repeat(auto-fill,minmax(18rem,1fr)); gap:0.375rem 1rem; }
+.batch-missing { margin:0.5rem 0; }
+.batch-missing-row { padding:0.375rem 0; display:grid; grid-template-columns:minmax(0,1fr) auto auto; gap:0.5rem; align-items:center; border-bottom:1px solid var(--line-faint); }
+.batch-missing-row b,.batch-missing-row small { display:block; }
+.batch-missing-row small { color:var(--text-muted); font-size:0.8125rem; overflow-wrap:anywhere; }
+.issue-list.batch-preview,.issue-list.batch-report { max-height:min(24rem,40vh); }
+.batch-preview .issue,.batch-report .issue { grid-template-columns:7.5rem minmax(0,1fr) auto; }
+.batch-report .check-toggle { white-space:nowrap; }
+/* File → Schedule Library & Calendar. */
+.calendar-modal { width:min(68rem,100%); }
+.calendar-modal:before { content:'Schedule Library'; }
+.calendar-row { padding:0.375rem 0.5rem; display:grid; grid-template-columns:minmax(0,1fr) auto; gap:0.5rem; align-items:start; border-bottom:1px solid var(--line-faint); }
+.calendar-row b,.calendar-row small { display:block; }
+.calendar-row small { color:var(--text-muted); font-size:0.8125rem; }
+.calendar-actions { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:0.375rem; }
+.calendar-save { display:grid; gap:0.25rem; }
+.calendar-check { margin:0.5rem 0; padding:0.375rem 0.5rem; background:var(--surface); border:1px solid var(--line-soft); }
+.calendar-form .setup-row { flex-wrap:wrap; }
+/* Edit → Advanced Planner. */
+.planner-modal { width:min(72rem,100%); }
+.planner-modal:before { content:'Advanced Planner'; }
+.planner-source { align-items:flex-end; }
+.planner-source .field { min-width:9rem; flex:1 1 9rem; }
+.planner-preview { margin-top:0.5rem; }
+.planner-summary { width:100%; border-collapse:collapse; background:var(--surface); font-size:0.875rem; }
+.planner-summary th,.planner-summary td { padding:0.25rem 0.5rem; text-align:left; border-bottom:1px solid var(--line-faint); }
+.planner-airings { max-height:min(20rem,36vh); overflow:auto; margin:0.5rem 0; padding:0.25rem 0.5rem 0.25rem 2rem; background:var(--surface); border:1px solid var(--line); box-shadow:var(--well); font-size:0.875rem; }
+.planner-airings time { color:var(--text-muted); }
+.planner-airings small { color:var(--text-muted); }
+/* View → Guide Preview. */
+.epg-modal { width:min(68rem,100%); }
+.epg-modal:before { content:'Guide Preview'; }
+.epg-listing { max-height:min(22rem,40vh); overflow:auto; border:1px solid var(--line-soft); }
 .network-results li { padding:0.375rem 0.5rem; border-bottom:1px solid var(--line-faint); font-size:0.875rem; }
 .network-results li.failed b { color:var(--danger-text); }
 .marathon-modal:before { content:'Marathon'; }
@@ -1137,6 +1209,9 @@ input[type=checkbox] { width:1.25rem; height:1.25rem; margin:0; accent-color:var
 }
 
 @media (max-width:760px) {
+  .room-body { grid-template-columns:1fr; grid-template-rows:minmax(12rem,1fr) auto; overflow:auto; }
+  .issue.room-row { grid-template-columns:6rem minmax(0,1fr); }
+  .room-now,.room-stats { grid-column:2; align-items:flex-start; }
   .watch-body { grid-template-columns:1fr; }
   .tv-screen { width:100%; }
   .tv-screen.guide-on video { width:45%; }
@@ -1177,6 +1252,9 @@ input[type=checkbox] { width:1.25rem; height:1.25rem; margin:0; accent-color:var
   .guide-track { min-width:28rem; }
   .week-grid { grid-template-columns:repeat(7,minmax(10rem,1fr)); }
   .issue { grid-template-columns:1fr; }
+  .issue.capability,.batch-preview .issue,.batch-report .issue,.batch-missing-row { grid-template-columns:1fr; }
+  .calendar-row { grid-template-columns:1fr; }
+  .calendar-actions { justify-content:flex-start; }
   .menu.full { display:none; }
   .menu.compact { display:block; }
   .menu-sheet { position:fixed; top:var(--bar); left:0; right:0; min-width:0; max-height:calc(var(--vh) - var(--bar)); overflow-y:auto; overscroll-behavior:contain; padding:0.25rem 0 calc(0.5rem + env(safe-area-inset-bottom)); border-inline:0; box-shadow:var(--menu-sheet-shadow); }

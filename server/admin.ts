@@ -4,6 +4,7 @@
 // route is explicit, ids are validated, request bodies are rebuilt from an
 // allowlist, and media-server addresses and tokens are write-only (they go to
 // Tunarr but are never sent back to the browser).
+import { cachedCompatibility, unavailableReason } from './compatibility.js';
 import { describeRules, filterToRules, rulesToFilter } from './smartCollection.js';
 import type { ProxyConfig, ProxyResponse, TunarrTarget } from './tunarrProxy.js';
 import { callTunarr, fail, json, UpstreamError } from './upstream.js';
@@ -289,6 +290,11 @@ export async function handleAdminRoute(route: AdminRoute, { config, target, meth
     case 'channel-create': {
       const checked = validateChannelCreate(body);
       if ('error' in checked) return invalid(checked.error);
+      // Refused before any write when the last check shows this Tunarr lacks a route it needs: a copy is made by
+      // POST and then renamed by GET and PUT, so one missing half way would leave an unexpected channel behind.
+      // No report (or an unchecked part) means it's tried, as before.
+      const refused = unavailableReason(cachedCompatibility(config), 'channel-admin', checked.copyFrom ? 'copy' : 'create');
+      if (refused) return fail(501, 'tunarr_unsupported', refused);
       const channels = await call('GET', '/api/channels');
       const list = (Array.isArray(channels) ? channels : []).filter(isObject);
       const number = checked.number ?? list.reduce((max, channel) => Math.max(max, Number(channel.number) || 0), 0) + 1;

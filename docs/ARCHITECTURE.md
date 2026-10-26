@@ -43,10 +43,10 @@ server implements those paths.
 | `app/components/InsertDialog.tsx` | Insert programs (via the browser), commercial break, flex or redirect, before or after the selection or at a date and time; shows when the items will start. |
 | `app/components/ListsManager.tsx` | Filler-list and custom-show manager (create, rename, delete, edit contents through `LibraryBrowser`). |
 | `app/components/ChannelSettingsDialog.tsx` | Channel settings in tabs: General (name, number, group, guide flex title, guide minimum, start time, hidden, on demand), Logo & watermark (logo address and corner, watermark, offline screen), Streaming (stream mode, transcode profile, subtitles), Commercials (filler collections, cooldown, overlay). |
-| `app/components/NewChannelDialog.tsx` | New or duplicated channel: name, number (next free by default), group, transcode profile or channel to copy. |
+| `app/components/NewChannelDialog.tsx` | New or duplicated channel: name, number (next free by default), group, transcode profile or channel to copy. Profiles are read only once an empty channel is chosen and allowed (`create`), then kept; a copy never reads them. |
 | `app/components/SmartCollectionsManager.tsx` | Smart collections: rule rows (`RULE_FIELDS`), match all/any, keywords, preview count and sample, create, edit, delete. |
 | `app/components/MediaSourcesDialog.tsx` | Media sources: libraries with on/off switches, refresh, scan, remove; add Plex, Jellyfin, Emby or local folders. |
-| `app/components/FillerFoldersDialog.tsx` | Filler folders: upload, move and delete files in the media folder's role folders; shows what Lineup follows in Tunarr, adds folders with a role, and runs the automatic pickup every 8 s while open. `app/useFillerSpots.ts` runs it once when the desk loads. |
+| `app/components/FillerFoldersDialog.tsx` | Filler folders: upload, move and delete files in the media folder's role folders; shows what Lineup follows in Tunarr, adds folders with a role, and runs the automatic pickup every 8 s while open (not at all when adding the upload folder and making and refreshing lists are all refused; steps the server left out are listed). `app/useFillerSpots.ts` runs it once when the desk loads. |
 | `app/components/TranscodeProfilesDialog.tsx` | Transcode profiles: edit the allowlisted fields, duplicate, delete. |
 | `app/components/TemplatesDialog.tsx` | Programming templates: gallery (groups by country, search, My templates), the AI panel, day plan (`DayGrid`), role sources (defaults, suggested smart collections with match counts, library shows), commercials/promos lists, target channel, save/edit/delete/duplicate. |
 | `app/components/TemplateEditor.tsx` | Template editor: details, day plan mode, blocks (start, role, ad level), roles (label, hint, order, suggestion kind and genres), start-time grid, lateness, commercial style. |
@@ -116,12 +116,36 @@ server implements those paths.
 | `server/snapshotStore.ts` | Snapshots per channel (`LINEUP_DATA_DIR/snapshots/<id>.json`): `take` (skips repeats), `list`, `get`, `remove`, `moveChannel`. |
 | `server/sharedDraftStore.ts` | Shared drafts (`LINEUP_DATA_DIR/drafts/`, with `index.json`): `validateDraft`, `createSharedDraftStore`. |
 | `server/premiere.ts` | `premierePlacement`: where a premiere goes in the lineup when the scheduler runs it, its flex gap, and the channel start that keeps what's on air in place (pure). |
-| `server/scheduler.ts` | Scheduled changes (`scheduled.json`): `validatePlan` (groups `save`, `event`, `overlay`, `premiere`; a premiere is a plan of one change, going in at most `MAX_PREMIERE_LEAD_MS` before `startsAt`), `findPatch`, `applyChange`, `createSchedulerStore`, `createScheduler` (`runDue`, `start`, `stop`), `summarize`. |
+| `server/scheduler.ts` | Scheduled changes (`scheduled.json`): `validatePlan` (groups `save`, `event`, `overlay`, `premiere`; a premiere is a plan of one change, going in at most `MAX_PREMIERE_LEAD_MS` before `startsAt`), `findPatch`, `applyChange` (a lineup change a restore will undo goes in only after a snapshot that is written and read back, `keptSnapshot`, else it fails with nothing written; other changes keep D50's best-effort snapshot; a restore whose snapshot is missing fails visibly), `createSchedulerStore` (`cancel` with a reason), `createScheduler` (`runDue`, `start`, `stop`; each due change is read again under the channel's lock and skipped if it's no longer pending; a `calendar` change goes in only through its `calendarGuard`, and a `CalendarCheckError` from it leaves the change pending with `held`, along with later changes on that channel), `summarize`. |
 | `server/channelLock.ts` | `withChannelLock`, shared by the proxy, the recreate route and the scheduler; `channelGeneration` / `channelBusy`, bumped by every write, invalidate cached programming. |
 | `server/programmingCache.ts` | The desk's view of a channel's programming: `slimProgramming` (lineup and schedule untouched, programs via `slimPrograms`, no `startTimeOffsets`), `bodyEtag`, `etagMatches`, `createProgrammingCache` (in-flight sharing, optional TTL, dropped by writes). |
 | `server/compression.ts` | `pickEncoding` (Brotli, else gzip, from Accept-Encoding), `isCompressible`, `compress` (async zlib), `compressionEnabled` (`LINEUP_COMPRESSION`). |
 | `server/lineupItems.ts` | `lineupItemsError` (shared item validation), `slimPrograms`. |
-| `server/upstream.ts` | Shared upstream plumbing: `fetchUpstream`, `callTunarr` (GET/POST/PUT/DELETE), `UpstreamError`, `json`, `fail`. |
+| `server/upstream.ts` | Shared upstream plumbing: `fetchUpstream`, `callTunarr` (GET/POST/PUT/DELETE), `UpstreamError`, `json`, `fail`, `routeMissing` (Tunarr's own "Route … not found" 404, answered as `501 tunarr_unsupported`). |
+| `server/compatibility.ts` | What this Tunarr can do (D63): `CAPABILITY_MATRIX` (each capability's label, what uses it, the operations it needs from Tunarr's API description, its `parts` (a manager's create, edit, delete and the like, each with its own operations) and its read-only probe), `detectCompatibility` (version, `/openapi.json`, probes, four at a time), `decide` (one capability from the evidence, with each part's state from `decideParts`; pure), `checkVersion` (`VALIDATED_VERSIONS` 1.x), `describedOperations`, `failureReason` (Lineup's own words, never upstream messages), `compatibility` (per-config cache, `COMPATIBILITY_TTL_MS` 5 min, shared runs, keyed by Tunarr's address), `unavailableReason` (a capability, or one of its parts), `compatibilitySummary`. |
+| `server/channelHealth.ts` | A channel's health (pure): `channelFindings` (programs Tunarr no longer has, zero lengths, redirects to itself or to a channel that's gone, breaks from deleted filler lists, flex with no filler when the channel's lists are known to be empty, guide drift on manual lineups only when both sides name different programs), `loopFindings`/`findLoop` (loops across channels, or a note that the check is partial), `positionAt`, `healthStatus`, `sortFindings`. |
+| `server/controlRoom.ts` | The Control Room routes: `controlRoomSummary` (channels, a three-hour guide, sessions, pending scheduled changes, last diagnostics; each part `ok`, `error` or `unsupported`), `checkChannels` (programming and channel document per channel, `CHECK_CONCURRENCY` 3, `MAX_CHECK_CHANNELS` 25 per request, findings computed as each reply arrives, loops from every channel's known redirects; results kept in memory, at most 2,000), `validateCheck`. |
+| `lib/controlRoom.ts` | `channelStatus` (the last check made worse, never better, by an empty guide or a failed stream check; never healthy without a check), `summaryNotes`, filters (`ROOM_FILTERS`, `matchesFilter`, `filterCounts`, `nextFilter`), `stepRow` (arrows, pages, ends), `checkBatches`, `checkStream` (the playlist only, `STREAM_CHECK_MS` 15 s, cancellable), `ROOM_REFRESH_MS` 60 s. |
+| `app/components/ControlRoomDialog.tsx` | View → Control Room (`O`): filters with counts, the channel list (at most 120 rows mounted, `rowWindow`), the focused channel's details, findings and actions, Check all/Cancel, the stream check; refreshes the summary every minute while the page is visible. Keys: ↑ ↓ PgUp PgDn Home End, OK or → into the actions (↑ ↓ there, ← or Back out), F filter, R refresh, C check, A check shown, S stream, Back closes. |
+| `lib/epg.ts` | The guide preview (pure, D69): `epgEntries` (a channel's slim guide entries with titles, sub-titles and categories), `epgIssues` (holes, overlaps, entries under the channel's minimum guide entry or a minute, entries over six hours, untitled ones, flex listed under a generic title), `toXmltv` / `xmltvTime` (an escaped XMLTV document marked as a preview). |
+| `app/components/GuidePreviewDialog.tsx` | View → Guide Preview (XMLTV)…: a channel and 3–24 hours from the guide grid's loader (`/guide`, or the demo projection), the checks, the listing, and a download of the XMLTV preview. No route of its own. |
+| `server/notify.ts` | Operational notifications (D68): `NOTIFY_EVENTS`, `addressAllowed` (public; RFC 1918, CGNAT and unique-local only with `allowPrivate`; never loopback, link-local or multicast), `addressKind`, `destinationAllowed` (all public on HTTPS 443, or all private with `allowPrivate`, which alone may use http or other ports; mixed answers refused), `validateWebhookUrl` (https, or http with the private exception; no userinfo or fragment; a public literal or any address without the exception on HTTPS 443; names checked at send time), `shownWebhook` (host only), `buildPayload` (schema `tunarr-lineup.notification`, version 1; names only when opted in), `postWebhook` (node:http(s), every resolved address checked and the lookup pinned, no redirects, 8 s, reply read up to 4 KB), `createNotifier` (chosen events, dedupe keys, a queue of at most 50, two retries on 429/5xx/network errors after 2 s and 10 s, the last 20 deliveries without the address), `readNotifySettings`. |
+| `app/components/NotificationsPanel.tsx` | Server Settings → Notifications: status (host only), a new address, events, names opt-in, the private-network exception, Save, Send a test, Turn off, recent deliveries. |
+| `lib/planner.ts` | The advanced planner (pure, D67): `planSchedule` (virtual-time fair queueing over sources: each source's clock advances by airtime ÷ weight, or one unit ÷ weight when balancing counts, and the earliest goes next; sources joining a daypart start level; season blocks keep a source until its season ends; repeat limits and cooldowns skip programs, flex fills when nothing may air), `seededRandom` (mulberry32 from the seed; ties and shuffles only), `episodeOrder`, `daypartAt` (in an IANA zone via `wallClock`), `daypartBoundaries` (every instant a daypart can change: each daypart's start and end and each local midnight on every local date, both instants of a repeated time, and the clock changes), `nextDaypartChange` (the first of those where the daypart really changes; flex, including cooldown flex, ends there even when that's under `MIN_FLEX_MS`), `MAX_PLAN_AIRINGS` (50,000; a plan that reaches it before its end is returned with `truncated` `{ requestedEnd, reachedAt, limit }`, `end` where it stopped, and a first warning), `planSaveBlocked`, `plannerProgram` (a library entry's season, episode and genres), `newSeed`. Output: airings, `{type:'content', id, duration}` / flex items, per-source shares against weight shares, genres, types, flex total, warnings. |
+| `app/components/PlannerDialog.tsx` | Edit → Advanced Planner…: sources (a show via LibraryBrowser and its descendants, picked programs, a custom show), each with weight, order, start, repeat limit and cooldown; balance; dayparts with per-source weights; start, days, zone and seed; the preview (distribution table, genres, types, warnings, the first 300 airings); saving exactly the previewed items with `startTime` and `If-Match` (refused with unsaved desk edits or a slot schedule, and for a `truncated` plan, which shows why and disables both saves), or to the schedule library. |
+| `server/calendar.ts` | The calendar's rules (pure; the browser imports it): `Recurrence` (`once`, `yearly`, `weekly`), `StartMode` (`as-is`, `restart`, `position`), `EndBehavior` (`restore`, `resume`, `keep`), `zonedTime` (a local time in an IANA zone: skipped times move forward, repeated ones take the first), `wallClock`, `localDate`, `isTimeZone`, `occurrences` (29 February on the 28th in other years; exceptions by local start date; weekly days walked on the local calendar), `calendarConflicts` (same priority refused; otherwise the higher wins), `outranks` (higher priority; on a tie the older entry, then the lower id), `outranked`, `zonedInstants` (every instant a local time happens at, both in a repeated hour), `offsetAt`, `validateCalendarEntry` (`CONTINUE_UNSUPPORTED` for continuing progress), `startingLineup`, `resumedStartTime`, `occurrenceKey`. |
+| `server/calendarStore.ts` | `schedule-library.json` (`createScheduleLibrary`: up to 100 lineups of up to 20,000 items, titles via `slimPrograms`, `validateLibraryEntry`, `validateDetails`, `librarySummary`) and `calendar.json` (`createCalendarStore`: up to 100 entries, each with the last 100 occurrence records), through `jsonFile`. |
+| `server/calendarArm.ts` | `withCalendarLock` (one in-process lock: calendar edits, arming commits and applying a calendar change take turns), `calendarGuard` (the scheduler's: reconcile, then apply, under the lock; a failed reconcile throws `CalendarCheckError`), `reconcileAfterEdit` (`{ reconciled }`, and `CALENDAR_UNRECONCILED` when it failed), `reconcileCalendar` (on every tick, before each calendar change goes in, and from the calendar routes right after an edit: cancels plans of occurrences not yet started that are no longer right, because their entry was edited (`calendarRevision`: name, schedule, dates, zone, exceptions, start, end and lead time), disabled or removed, the channel left it, the occurrence is gone, or an entry that `outranks` it now overlaps, and forgets their records so they're armed again; forgets outranked records whose winner no longer outranks them; never touches an occurrence on air; idempotent), `armCalendar` (on the scheduler's tick, after reconciling; an occurrence already planned is noted, never planned twice: each occurrence starting within its entry's `armLeadMinutes` becomes a `calendar` plan, `lineup` (with `startAt` for restart/position) then `restore` (`mode: 'resume'` when resuming), against the version read then; outranked, deleted-schedule and slot-scheduled cases are recorded, Tunarr unreachable retries next tick; a plan is committed under the lock only if the entry still has the revision it was read with), `endOccurrences` (brings restores forward; cancels armed plans when an entry is removed; `runEnding` runs them after the lock is let go), `checkCalendar` (validation, next occurrences, conflicts, warnings), `entryView`. |
+| `lib/calendar.ts` | Labels, `COMMON_ZONES`, `browserZone`, `inZone`, `recurrenceLabel`, `conflictLine`, and the dialog's flat `CalendarForm` (`blankForm`, `formToInput`, `inputToForm`). |
+| `app/components/ScheduleCalendarDialog.tsx` | File → Save to Schedule Library… / Schedule Library & Calendar…: save a lineup with name, description and tags; the library (add to calendar, delete); calendar entries (next occurrence in their zone, ON NOW, history, edit, End now, remove); the entry form (repeat, zone, channels, start, end, priority, lead, skipped dates) with **Check** (next occurrences, conflicts, warnings) required before saving and again after any change. |
+| `app/dpad.ts` | `dpadKey` (↑ ↓ between a dialog's controls, OK ticks checkboxes and radios) and `keepFocusIn` (focus back inside the dialog after a button disabled during work), shared by `BatchDialog` and `ScheduleCalendarDialog`. |
+| `server/batch.ts` | Batch operations (D65): `validateBatch` (operations `filler`, `group`, `transcode`, `renumber`, `settings`, `repair`, `import`; settings through `validateChannelSettings` and a per-operation field allowlist, `BATCH_SETTING_FIELDS` for options; at most `MAX_BATCH_CHANNELS` 50), `previewBatch` (per-channel diff with `shown` values and the `expect` fingerprint: `settingsVersion` of the touched fields, or `programmingVersion`), `validateApply` (a valid fingerprint for every channel named, none for others, and an import's channels matching its mapping, or the whole apply is refused), `startBatch`/`runBatch` (background, one at a time, each channel under `withChannelLock`, stops the rest when Tunarr stops answering), `spareNumber` (a free number in 1..`MAX_CHANNEL_NUMBER` that no channel has or is moving to), `planRenumber` (the whole order worked out before the first write; refused when a cycle needs a spare and none is free), `moveNumbers` (renumbering without a transient duplicate: waits for a number to free up, parks one channel of a cycle on a spare number; re-reads the channel list under the lock before every PUT and stops with `RenumberConflict` on an outside change), `startRollback`/`runRollback`, media repair (`missingPositions`, `nextAirings`, `resolveReplacements` and `canonicalProgram` (each replacement looked up in Tunarr; its length is Tunarr's), `repairExpect`, `repairLineup`), `exportPackage`, `matchBatchRoute`, `handleBatchRoute`. |
+| `server/batchStore.ts` | `LINEUP_DATA_DIR/batches.json` through `jsonFile` (last `MAX_BATCHES_KEPT` 30): each batch's label, fields, and per channel its outcome, message, old values or snapshot id, the fingerprint it left, and its rollback. A batch without a finish time that this process isn't running is reported as cut short. `summarizeBatch`. |
+| `server/programmingPackage.ts` | The programming package (pure): `PACKAGE_FORMAT` `tunarr-lineup-package`, `PACKAGE_VERSION` 1, `packageChannel` (lineup untouched, `slimPrograms` titles only), `buildPackage`, `validatePackage` (format, version, ≤ 50 channels, ≤ 200,000 items, every item through `lineupItemsError`; anything but titles dropped from `programs`), `importSummary`. The browser imports it to read a file before sending it. |
+| `lib/batch.ts` | `TASKS` (the dialog's operations plus export), outcome and preview labels, `outcomeTone`, `readyChannels`, `expectations`, `sequentialNumbers`, `defaultMapping` (same id, else same number), `rollbackable`, `inProgress`, `outcomeLine`, `defaultDecisions`. |
+| `app/components/BatchDialog.tsx` | Channel → Batch Operations… / Repair Missing Media…, File → Export/Import Programming Package…: task, channels (all, none, by network), options, preview per channel (missing programs with their decisions and a LibraryBrowser for replacements), confirmation, the report polled every 700 ms with rollback checkboxes, and Recent batches. Apply is enabled only while the request equals the one previewed. Arrows move between controls, OK ticks checkboxes and radios, Back leaves the library or the confirmation first, then closes. |
+| `lib/compatibility.ts` | The desk's side: `blockedReason` (only `unavailable` refuses), `blockedCapabilities`, `STATUS_LABELS`, `versionLine`, `diagnosticsFile` (the report, no address). |
+| `app/components/CompatibilityPanel.tsx` | Server Settings → Compatibility: version, connection, API description, each capability's state and reason, what the desk turns off, **Check again** and **Export diagnostics**. |
 | `server/lineupVersion.ts` | `programmingVersion(lineup, schedule)`: a non-cryptographic fingerprint (two cyrb53 hashes plus length), shared by the browser and the proxy for `If-Match`. |
 | `server/auth.ts` | HTTP Basic sign-in: scrypt `hashPassword`/`verifyPassword`, `authorize` (hashed account, remembered matches, the desktop app key), `isAuthorized` (plain text, tests), `validateAccount`, `AUTH_CHALLENGE`. |
 | `server/configStore.ts` | `config.json` (D62): `CONFIG_KEYS`, `createConfigStore` (owner-only file), `importEnv` (the one-time import, password hashed), `configEnv` (the env the rest of the server reads), `isComplete`, `ignoredEnv`, `savedAiModel`. |
@@ -262,13 +286,14 @@ Same pipeline as Lineup's own routes (method allowlist, Origin check, no query, 
 | `/setup` | GET | `{ needed }` only |
 | `/setup/unlock` | POST | `{ code }` → the config view (prefill from an import) |
 | `/setup/detect` | POST | `{ code }` → `{ found, tried }`: `GET /api/channels` at `detectCandidates()` (localhost, `tunarr`, `host.docker.internal`, the default gateway from `/proc/net/route`; port 8000; no scanning), 3 s each, through `callTunarr` |
-| `/setup/test` | POST | `{ code, tunarrUrl }` → a `Probe`. `http://` is added when no scheme is typed |
+| `/setup/test` | POST | `{ code, tunarrUrl }` → a `Probe`. `http://` is added when no scheme is typed. A working address also gets `compatibility` (`compatibilitySummary` of `detectCompatibility` against that address, not cached: version, its status, and how many capabilities are unavailable or degraded) |
 | `/setup/finish` | POST | `{ code, tunarrUrl, account: { username, password }, ai?, media?, options? }`: `validateAccount`, `applyConnectionFields`, scrypt hash, `setup.save` (write `config.json`, then `applyConfig`) |
 | `/server-config` | GET, PUT | After setup only. PUT takes the same fields plus `account: { currentPassword, username?, newPassword? }` (verified first, `403 wrong_password`) |
 | `/server-config/detect`, `/server-config/test` | POST | As above, without the code |
+| `/server-config/notify-test` | POST | `config.notifier.test()` (409 `notifications_off` without a usable address) |
 
 - **Setup code:** 10 characters from an unambiguous alphabet, printed in the log (`setupBanner`), or `LINEUP_SETUP_CODE` (the desktop app). Case and dashes are ignored. Five wrong codes lock all code routes for 60 s (`429 setup_locked`). The code routes answer `409 already_set_up` afterwards.
-- **Write-only values:** the config view returns Tunarr's address without userinfo (`credentials: true` says there was some), `keySet` instead of the AI key, and never the hash. Sending the shown address back keeps the saved one; leaving `apiKey` out keeps the key.
+- **Write-only values:** the config view returns Tunarr's address without userinfo (`credentials: true` says there was some), `keySet` instead of the AI key, the webhook's host only (`notifications: { set, host, events, includeNames, allowPrivate, problem, recent, catalog }`), and never the hash. Sending the shown address back keeps the saved one; leaving `apiKey` out keeps the key.
 - **Validation:** Tunarr's address through `parseTunarrUrl`; AI provider `anthropic`/`openai`/none, a key for Anthropic, a model for OpenAI-compatible, an http(s) address, then `createAiConfig`; the media folder must be an absolute path to an existing directory that neither is nor contains, nor sits inside, the data or static folder; the Tunarr-side path must be a full path.
 - **Applying:** `applyConfig` rebuilds `target` (clearing the programming cache when it moves), the media folder, the settings baseline (`setEnv`) and, through `applySettings`, the timeouts, logos, AI and scheduler.
 
@@ -279,6 +304,7 @@ per channel within this process:
 
 1. **Version check.** `GET` the channel's programming and compute `programmingVersion(lineup, schedule)`. If it differs from `If-Match`, the response is `412 lineup_changed` and nothing is posted.
 2. **Manual saves.** `POST {type:'manual', lineup, append:false}` with the items unchanged.
+   - **`startTime`** (the advanced planner, D67) is Lineup's too and never forwarded: refused with `keepOnAir`, beyond a year ahead, or on a channel with a slot `schedule`. After the save the proxy sets the channel's start time to it (`setChannelStartTime`); a failure there leaves the save and says so in `startTimeError`.
    - **`keepOnAir: true`** ("Keep what's on air in place") is Lineup's flag and is never forwarded. Refused with `400` on a channel with a slot `schedule`, because a start-time change regenerates it. After the lineup is saved, the proxy `GET`s `/api/channels/:id`, computes `keptStartTime(startTime, old length, new length, now)` (`server/lineupVersion.ts`: every pass before now grew or shrank by the same amount, so the start moves the other way by that many times), and `PUT`s Tunarr's copy of the channel with only `startTime` changed (read-only fields removed, as for channel settings). The reply adds `startTime`. If that step fails, the lineup stays saved and the reply carries `startTimeError` instead. The browser shows that message.
 3. **Schedule saves.**
    - The requested type must match the current `schedule.type`, else `409 schedule_type_mismatch`.
@@ -308,7 +334,8 @@ program pool.
 | Timeout | 504 | `tunarr_timeout` |
 | Network failure | 502 | `tunarr_unreachable` (host plus optional `cause.code`) |
 | 3xx | 502 | `tunarr_redirect` |
-| 404 | 404 | `not_found` |
+| 404 with Tunarr's own "Route METHOD:/api/… not found" body (`routeMissing`), on `/api/…` paths | 501 | `tunarr_unsupported` (this Tunarr doesn't have the route) |
+| Other 404 | 404 | `not_found` |
 | 400 | 400 | `tunarr_rejected` (upstream message, at most 300 chars) |
 | 401/403 | 502 | `tunarr_auth` |
 | Other non-2xx | 502 | `tunarr_error` |
@@ -460,7 +487,7 @@ pipeline as the content routes but answer from the companion.
 | `/filler-roles/:id` | PUT, DELETE | Set (`{ role }`, one of `station-id`, `commercials`, `promos`, `bumpers`, `other`) or clear a list's role. `:id` must be a UUID; up to 1,000 entries |
 | `/media-folder` | GET | `{ enabled: false, message }`, or `{ enabled, maxBytes, folders: [{ role, folder, files: [{ name, size, modifiedAt }], tunarr }] }`. `tunarr` is the role folder's library (`roleLibraries` matches a local source library's `externalKey` to `LINEUP_MEDIA_TUNARR_DIR/<folder>`), or null; without Tunarr the files still list, with `tunarrError`. Absolute paths are never returned. |
 | `/filler-folders` | GET | `{ links, pending, ignored }` from `filler-roles.json` |
-| `/filler-folders/sync` | POST | `syncFillerFolders` (one run per server at a time). 1) If no local source reads the media folder's role folders, creates them and adds them as one local source (`Lineup media folder`, `other_videos`); Tunarr scans it on its own. 2) Re-reads every followed list whose library's `lastScannedAt` is newer than the link's `builtAt` and isn't scanning; a list deleted in Tunarr (404) is unfollowed and its library ignored. 3) Makes a list for each enabled, unfollowed, unignored library with a role: an upload role folder (`Station IDs (folder)`), a pending folder (its stored name), or a library whose name passes `folderRole` (whole words of the last path segment). A library found empty is not searched again until its next scan (in memory). Returns `{ connected, created, updated, errors }`. Needs `TUNARR_URL`. |
+| `/filler-folders/sync` | POST | `syncFillerFolders` (one run per server at a time). 1) If no local source reads the media folder's role folders, creates them and adds them as one local source (`Lineup media folder`, `other_videos`); Tunarr scans it on its own. 2) Re-reads every followed list whose library's `lastScannedAt` is newer than the link's `builtAt` and isn't scanning; a list deleted in Tunarr (404) is unfollowed and its library ignored. 3) Makes a list for each enabled, unfollowed, unignored library with a role: an upload role folder (`Station IDs (folder)`), a pending folder (its stored name), or a library whose name passes `folderRole` (whole words of the last path segment). A library found empty is not searched again until its next scan (in memory). Each step checks the compatibility report first and is left out on its own when its part is `unavailable`; with no fresh report the sync awaits `compatibility(config)` (the check already running, or a new one), so the first pickup after a start, or a direct client, never writes ahead of the check: adding the upload folder (`media-sources`/`create`), reading a folder (`library-search`), making a list (`filler-lists`/`create`), refreshing one (`filler-lists`/`edit`); with `media-sources` itself unavailable nothing is read. The rest runs; an `unchecked` part, or a check that fails outright, is tried. Returns `{ connected, created, updated, errors, skipped }` (`skipped`: each left-out step once, with the reason). `POST /filler-lists/from-library` (`buildFromLibrary`) refuses the same way before reading. Needs `TUNARR_URL`. |
 | `/filler-folders/add` | POST | `{ path, role }`: adds a local source for the folder (checked by `validateMediaSourceAdd`) and records its library as pending, so the next sync after Tunarr's scan makes its list. Needs `TUNARR_URL`. |
 | `/media-folder/:role/:file` | DELETE | Deletes the file. Upload (PUT) is handled by `nodeAdapter` (above). `:role` is a filler role; `:file` must pass `mediaFileName` (one segment, video extension, no leading dot or reserved characters) |
 | `/media-folder/:role/:file/move` | POST | `{ role }`: moves the file to another role folder without overwriting |
@@ -480,11 +507,293 @@ Further Lineup routes (owner decision 2026-10-19, D50–D52):
 | `/ai/review` | POST | `{ channelName, summary (≤ 40,000 chars), issues (≤ 100) }` → `callModel` with `REVIEW_PROMPT` and the `review_schedule` tool → `resolveReview` |
 | `/station-ids` | GET | `{ [channelId]: programId[] }` from `station-ids.json` (`server/stationIdStore.ts`, D54) |
 | `/station-ids/:channelId` | PUT | `{ programIds }` (UUIDs, deduplicated, up to 200; up to 500 channels) checked by `validatePicks`; an empty list drops the channel. Picks follow a recreated channel to its new id. |
+| `/control-room` | GET | `controlRoomSummary`. Needs Tunarr's address. See *Control Room* below |
+| `/control-room/check` | POST | `{ channelIds }` (1–25 valid channel ids, deduplicated) → `{ diagnostics }` from `checkChannels` |
+| `/schedule-library` | GET, POST | Summaries; save a lineup (`validateLibraryEntry`) |
+| `/schedule-library/:id` | GET, PUT, DELETE | The lineup; edit name, description and tags; delete (409 `schedule_in_use` while a calendar entry uses it) |
+| `/calendar` | GET, POST | `{ enabled, message?, entries }` (`entryView`); create after `checkCalendar` (409 `calendar_conflict` with the conflicts). The check, the save and the reconcile run under `withCalendarLock`; the reply is `201` with the entry and `reconciled` (with a `warning` when reconciling failed: the entry is saved, so sending it again would make a second one, and the scheduler holds calendar changes until it can reconcile) |
+| `/calendar/preview` | POST | `checkCalendar` without saving (`id` to check an edit against the others) |
+| `/calendar/:id` | PUT, DELETE | Replace (an occurrence on air keeps its plan; armed ones not started are cancelled if no longer right and armed again by the scheduler); remove (`endOccurrences` with `cancelArmed`, then the restores it brought forward run after the lock). Both run under `withCalendarLock` and answer `reconciled` (and `warning`) like a create |
+| `/calendar/:id/end` | POST | `endOccurrences` without cancelling |
+| `/batch/preview` | POST | `validateBatch` → `previewBatch`. See *Batch operations* below |
+| `/batch/apply` | POST | `validateApply` (the batch plus `expect: { channelId: fingerprint }` for exactly its channels; a channel without a valid fingerprint, a fingerprint for another channel, numbers or an import mapping that don't match the channels: `400 invalid_request`, nothing recorded or written) → `202` and the record from `startBatch`. The desk sends only the channels the preview would change (`applyBody`) |
+| `/batch/export` | POST | `{ channelIds }` (≤ 50) → a programming package |
+| `/batches` | GET | `summarizeBatch` of each kept batch |
+| `/batches/:id` | GET | The record, with `running` |
+| `/batches/:id/rollback` | POST | `{ channelIds }` → `202` and the record from `startRollback` |
+| `/compatibility` | GET | `compatibility(config)`: the cached report (5 min) or a fresh check. Without Tunarr's address, `notConfiguredReport` (`configured: false`). See *Compatibility* below |
+| `/compatibility/refresh` | POST | The same, checked again now (`{}` body) |
 | `/server-settings` | GET, PUT | `settingsView`: `{ editable: [{ key, label, group, help, kind, min?, max?, value, envValue, defaultValue, source }], fixed: [{ label, set }], restartNote }`. PUT `{ values: { KEY: value or null } }`: only keys in `EDITABLE_SETTINGS` (`server/settings.ts`), each checked by `validateSetting`; `null` drops the saved value. Saved values go to `settings.json` and `applySettings` puts them into the running config (timeouts, external logos, the scheduler on or off, the AI config rebuilt, the upload limit). Fixed settings (where the server starts: data folder, allowed hosts, listen address and port) are reported as set or not, never by value. `LINEUP_AI_MODEL` moved to `/server-config` (D62). Works without `TUNARR_URL`. |
 
 Every programming POST (manual and schedule) takes a snapshot of Tunarr's current
 programming after the version check and before the write; the recreate route takes one
 first and moves the channel's snapshots to the new id afterwards.
+
+### Compatibility (`server/compatibility.ts`, D63)
+
+The companion decides what the desk may use; components never check Tunarr's
+version themselves.
+
+1. **Connection:** `GET /api/channels`. If it fails, every capability is
+   `unknown` (connection `unavailable` when the route is missing) and nothing
+   else is asked.
+2. **Evidence**, four requests at a time, all reads: `GET /api/version` (only
+   `tunarr` is kept, through `cleanVersion`; ffmpeg and Node versions are
+   dropped), `GET /openapi.json` (`describedOperations`: `method path` with
+   parameters as `{}`), and one probe per capability whose reply must have the
+   shape the desk reads (`SHAPES`): the channel document and programming of the
+   channel with the fewest programs, a 5-minute guide window, sessions, filler
+   lists, custom shows, smart collections, media sources, transcode profiles,
+   and one library search for one result in the first enabled library.
+3. **Decision** (`decide`), per row of `CAPABILITY_MATRIX`:
+   - each row declares its **required** routes (`ops`) and its **parts**
+     (`parts`: one part of the feature with routes of its own, such as a
+     manager's create, edit and delete, each with what won't work without it). A
+     required route the API description (read successfully) doesn't list, and
+     that the probe didn't just read, is definite evidence → `unavailable`,
+     naming the route (for example Channel Settings when `PUT /api/channels/{id}`
+     is missing even though reading works). Parts are decided from the
+     description alone, never from a probe, since a read that worked says
+     nothing about the writes (`decideParts`): listed → `available`, not listed
+     → `unavailable` (that part is refused, the capability is `degraded` and
+     reading stays on), no description → `unchecked` (also `degraded` when the
+     read worked, saying the changes couldn't be checked and are tried when
+     used). A capability with no required routes of its own (creating and
+     deleting channels) is `unavailable` only when every part is. The report
+     carries each capability's `parts` with their states;
+   - a probe that answered → `available` (or `degraded` when a part is missing or unchecked);
+   - a probe that got `tunarr_unsupported` → `unavailable`; a wrong shape or
+     non-JSON → `degraded`; a timeout, refusal or other failure that may pass →
+     `degraded` (still usable, never turned off on that alone); a probe with
+     nothing to read (no channels, no library) → `untested`;
+   - capabilities only proven by writing (manual saves, slot schedules) are
+     decided from the API description: listed → `available`, not listed →
+     `unavailable`, no description (older Tunarr) → `untested`, a description
+     that failed to load → `degraded`;
+   - HLS is never probed (a playlist request starts a stream in Tunarr): it is
+     `available` while Tunarr reports live sessions, otherwise `untested`.
+4. **Version:** `/api/version`, else the API description's `info.version`.
+   Inside `VALIDATED_VERSIONS` (≥ 1.0.0, < 2.0.0) is `validated`; other
+   numbers `unvalidated`; anything else (or none) `unknown`. The version only
+   produces a warning: capabilities are always decided by the checks.
+5. **Reasons** are Lineup's own sentences (`failureReason`), never upstream
+   messages, so the report never names Tunarr's host, credentials, media-server
+   addresses or tokens.
+
+The desk loads the report once connected (`page.tsx` `compat`) and refuses a
+feature only when its capability is `unavailable` (`refuse`/`gate`, which show
+the reason as a toast; menu items stay focusable for the remote). The Save
+button (and the slot editor's Save schedule) is disabled up front when its
+capability is `unavailable`, reading "Saving unavailable", with the missing
+route in the inspector's "Saving is off for this Tunarr" note. Gated:
+saving (`manual-saves`), the slot editor (`slot-schedules`), the guide grid
+(`guide`), viewer polling (`sessions`), Channel Settings, filler lists, custom
+shows, smart collections, media sources, transcode profiles, the program bin
+(`library-search`) and Watch Live (`hls-streaming`). Parts are refused one by
+one (`partBlocked`, passed to the dialogs as `blocked`): the list managers,
+Smart Collections, Media Sources (including signing in to Jellyfin or Emby),
+Filler Folders and Transcode Profiles turn off the buttons of parts Tunarr's
+API doesn't list and show a "Not on this Tunarr" note saying which and why;
+New, Duplicate and Delete Channel (`channel-admin`) explain themselves when
+chosen: New Channel is gated on `create` (an empty channel: `GET
+/api/transcode_configs` for the default profile, then `POST /api/channels`),
+Duplicate Channel on `copy` (`POST /api/channels`, then `GET` and `PUT
+/api/channels/{id}` to give the copy its name and number), and the New
+Channel dialog asks again whenever "Start from" changes, turning its final
+button off with the reason; it reads the transcode profiles only for an
+allowed empty channel, once. `POST /channels/create` refuses (`501
+tunarr_unsupported`) before any Tunarr request when the cached report
+(`cachedCompatibility`) shows the part it needs `unavailable`, so a client
+can't leave a half-made copy; no report, an expired one or an `unchecked` part
+is tried as before. Media repair doesn't offer Replace without `GET /api/programs/{id}`;
+Server Settings → Compatibility lists what is "Partly turned off". A failed
+or missing report refuses nothing.
+
+### Control Room (`server/controlRoom.ts`, D64)
+
+- **Summary** (`GET /control-room`): one `GET /api/channels` (required; its
+  failure is the route's error), then together: one guide read for
+  `[now, now + 3 h)` (`slimGuide`; now and next per channel), one sessions read
+  (`viewerCounts`: counts only), and the scheduler's store (pending changes per
+  channel, the next one's time). A failed guide or sessions read becomes that
+  part's `{ status: 'error', message }` (Lineup's words, `failureReason`) and
+  the channels still show; a capability the compatibility cache says is
+  unavailable isn't read at all (`unsupported`).
+- **Check** (`POST /control-room/check`): the channel list, the filler lists
+  and a one-minute guide window once, then for each channel its programming and
+  channel document, three channels at a time. Each programming reply is turned
+  into findings at once (`channelFindings`) so at most three lineups are held.
+  Loops are computed after the batch from this batch's redirects plus those kept
+  from earlier checks of channels that still exist (`loopFindings`). A channel
+  that fails, or that Tunarr no longer has, is `unknown` with the reason; the
+  rest finish. Results are kept in memory per server (a restart forgets them).
+  With programming unavailable, every channel is `unsupported` without a read.
+- **The desk** polls the summary every 60 s only while the page is visible (and
+  once when it becomes visible if stale), aborts reads on close, runs Check all
+  in batches of 25 that Cancel stops between batches, and never starts a stream
+  except through the opt-in stream check, which fetches the existing
+  `/channels/:id/stream.m3u8` route once (the master playlist, no segments).
+
+### Notifications (`server/notify.ts`, D68)
+
+`config.notifier` is built from `LINEUP_NOTIFY_*` (config.json, set through
+`/server-config` `notifications`) by `createProxyConfig` and again by every
+`applySettings`. Senders call `notify(notice)`, which returns at once:
+
+| Event | Sent from | Says |
+| --- | --- | --- |
+| `scheduled.applied` / `skipped` / `failed` / `missed` | `runOnce` (`scheduledNotice`) | that a scheduled change or calendar occurrence went in, was skipped, failed or was missed; never the reason (it can name Tunarr's host) |
+| `save.conflict` | the programming POST answering 412 | that a save was refused because the channel changed |
+| `channel.unhealthy` | `checkChannels`, when a channel becomes `error` | error and warning counts (dedupe 6 h per channel) |
+| `media.missing` | `checkChannels` | how many programs are missing (dedupe 24 h per channel and count) |
+| `guide.failed` | `controlRoomSummary` | Lineup's reason for the failed guide read (dedupe 1 h) |
+| `batch.partial` | `runBatch` | outcome counts when any channel conflicted, failed, was blocked or skipped |
+
+The payload is `{ schema, version, id, event, severity, at, summary, channel?: { id, number?, name? }, counts? }`; `summary` is the named sentence and `channel.name` is included only with `LINEUP_NOTIFY_NAMES=on`. Delivery runs one at a time from a queue; a stream check (client-side, opt-in) isn't reported.
+
+### Schedule library and calendar (`server/calendar*.ts`, D66)
+
+- **Library:** manual lineups saved apart from any channel (from the desk, a
+  slot preview's materialized lineup, a package or a snapshot), items untouched,
+  titles only. Slot schedules aren't kept: a schedule save must reuse its
+  preview's seed (invariant 4), which can't happen unattended.
+- **Entries:** a saved schedule, channels, a recurrence in an IANA time zone,
+  exceptions (local start dates), a priority (1–9), how it starts, how it ends,
+  and how long before each occurrence it's armed (15 minutes to 7 days; 6 hours
+  by default). Saving needs a check: overlaps with another enabled entry on a
+  shared channel are refused at the same priority; otherwise the lower
+  occurrence is skipped on that channel when armed (`outranked`).
+- **Arming** happens in `runOnce` before due changes, so it only runs while the
+  scheduler is on, and an occurrence that's due runs in the same tick. Each
+  armed occurrence is a normal two-change plan (`group: 'calendar'`,
+  `calendarId`): the lineup change carries `expectVersion` read at arming time
+  (an edit afterwards skips it), `startAt` for restart/position (the lineup is
+  rotated for a position), and `notAfter` before the occurrence's end; the
+  restore runs up to 7 days late (a restore missed while the companion was off
+  is better late than never). `previousStart` (the channel's start time before
+  the overlay) is recorded when the lineup goes in; the restore puts it back
+  (`exact`) or moves it so the old lineup is as far into its cycle as when it
+  was interrupted (`resume`, `resumedStartTime`). The browser can't send a
+  `calendar` plan, `startAt` or a restore `mode` through `/scheduled`.
+- **Occurrence records** (armed, outranked, skipped, with the reason) are kept
+  per entry, so an occurrence is armed once. Each plan also carries its
+  `occurrence` (key, start, end, and `calendarRevision` of the entry it was
+  armed from).
+- **Re-arming** (`reconcileCalendar`) runs first on every tick, and again under
+  the calendar's lock right before each due calendar change goes in
+  (`calendarGuard`). An occurrence that hasn't started
+  (its lineup change is still pending) and is no longer right has its plan
+  cancelled with the reason and its record forgotten, and the arming that
+  follows plans it again or records it as outranked: its entry was edited,
+  turned off or removed, the channel was taken out of it, the occurrence no
+  longer exists, or an entry that outranks it overlaps it (`outranks`: the
+  higher priority; equal priorities, which saving refuses but can still meet,
+  go to the older entry, then the lower id). Outranked occurrences whose winner
+  is gone, off or lower are armed again if they haven't started. Occurrences on
+  air are never touched: an edit applies from the next one. The calendar
+  routes run the same check right after saving, under the same lock.
+- **One calendar lock** (`withCalendarLock`, in-process): calendar edits hold it
+  while they check, save and reconcile; arming holds it while it commits a plan
+  (only if the entry still has the revision it read, isn't outranked and has no
+  record for that occurrence yet, so an edit landing while Tunarr was being read
+  is planned from on the next run instead); the scheduler holds it while it
+  reconciles and applies a due calendar change. An edit therefore lands either
+  before a change goes in (which is then cancelled, if it's no longer right) or
+  after (the occurrence has started and is left alone). Lock order is the
+  calendar's, then the channel's; nothing takes them the other way round.
+- **Failing closed.** If reconciling fails (the calendar or `scheduled.json`
+  can't be read or written), the scheduler applies no calendar change that
+  tick: it stays `pending`, marked `held` with a message, and so does anything
+  due after it on the same channel (so nothing goes in out of order); changes
+  on other channels go on, since reconciling only ever touches calendar plans.
+  It's tried on the next tick, never marked failed for this; one whose
+  `notAfter` passes while held is skipped saying so. A calendar edit whose
+  reconcile fails is still saved and answers success with `reconciled: false`
+  and a `warning`, so nobody saves it twice.
+- **What invalidates an armed plan** (`calendarRevision`): the entry's name
+  (labels and notifications carry it), schedule, recurrence, zone, exceptions,
+  start, end and lead time. Shortening the lead (a day to 15 minutes) cancels
+  what was armed early, and it's armed again only inside the new window.
+  Whether the entry is on, its channels and its priority are checked per
+  channel, so changing them re-plans only the channels they affect.
+- **The snapshot a restore needs** must be on disk (written and read back as
+  the version it replaces) before an occurrence's lineup goes in; otherwise
+  the occurrence fails and nothing is written. A restore whose snapshot went
+  missing fails visibly instead of passing as done.
+- **Existing overlays** made with Save as Seasonal Overlay are unchanged
+  one-time plans in `scheduled.json`; nothing was migrated or lost.
+
+### Batch operations (`server/batch.ts`, D65)
+
+Every batch is: preview → apply → report → optional rollback, per channel.
+
+- **Preview** reads each picked channel (three at a time): the channel
+  document for settings batches, programming (plus the channel document for
+  repair airings) for lineup batches. It answers each channel's status
+  (`ready`, `unchanged`, `blocked` with the reason), the field changes as text
+  (`shown`: list and profile names, seconds, on/off) or a lineup summary, and
+  `expect`: `settingsVersion` (a `programmingVersion` of just the touched
+  fields) or the programming version. Renumbering is checked against every
+  channel's final number (`renumberProblems`); a transcode profile must exist;
+  a channel with a slot schedule is blocked for repair and import, because a
+  manual save would detach it.
+- **Apply** runs in the background (`startBatch`; one batch per server; the
+  client polls `/batches/:id`). It names exactly the channels it changes, each
+  with its preview's fingerprint; one missing or invalid refuses the whole
+  apply before a record is created (it never quietly changes fewer channels). For each channel: `withChannelLock`, a fresh
+  read, the `expect` check (else `conflict`, nothing written), then
+  - settings: `validateChannelSettings` again, merged onto Tunarr's copy minus
+    `NOT_SAVEABLE`, `PUT`, read back; the old values of the touched fields and
+    the new fingerprint go in the record;
+  - lineups: the same plan recomputed from the fresh read (`repairLineup` or the
+    package's lineup, zero-length items dropped), a snapshot that must succeed
+    (a batch doesn't go ahead without it), a manual `POST`, read back; the
+    snapshot id and the new version go in the record.
+  A failure is that channel's; when Tunarr stops answering (`tunarr_unreachable`,
+  `tunarr_timeout`) the rest are `skipped` with the reason instead of each
+  waiting out a timeout. The record is saved after every channel; a batch cut
+  short by a restart reads back as skipped.
+- **Renumbering** (`planRenumber`, `moveNumbers`) never puts two channels on one number: a
+  channel whose new number is still held by another channel in the batch waits;
+  a cycle parks one channel on a spare number first (`spareNumber`: just above
+  the highest number in use or wanted when that is at most 99,999, else the
+  highest free one below; never a number any channel has or is moving to). The
+  whole order is planned before the first write; a cycle with no free number
+  in 1–99,999 blocks every channel with nothing moved. It goes in as a whole: a
+  channel changed or deleted since the preview stops all of it before anything
+  moves (that channel is a `conflict`, the rest `skipped`, with "Preview
+  again"), so with CH 1 ↔ CH 2 previewed and CH 2 deleted, CH 1 stays put.
+  Before every `PUT`, under the channel's lock, it reads the channel list again
+  and compares it with what the batch expects at that step (including its own
+  moves and spare numbers): a batch channel elsewhere, or the target number
+  taken, is an outside change (`RenumberConflict`), and nothing more is moved.
+  Tunarr has no transaction across channels, so moves already done stay done
+  and are reported as such; a channel left on a spare number is `failed` with
+  where it is (rollback is offered, conditionally); the rest are `skipped`.
+  Nothing is moved back blindly. A failure says which channel was left on
+  which number.
+- **Rollback** (`startRollback`) takes chosen channels with a change: under the
+  lock, only if the touched fields still have the fingerprint the batch left
+  (settings) or the programming still has the version the batch saved (lineups);
+  otherwise `conflict`. Settings get their old values; lineups get the snapshot,
+  after a snapshot of the current state, as a manual save. Renumbering rolls
+  back through `moveNumbers`.
+- **Media repair**: `missingPositions` finds content items whose program has no
+  details in Tunarr's programming reply; the preview groups them by program
+  across channels with positions and the next three airings (`nextAirings`).
+  Decisions per program: `ignore`, `remove`, `flex` (same length, so later
+  items keep their times) or `replace` with `{ id, duration }` picked from the
+  library. The browser sends only the program's id: preview and apply both look
+  it up with `GET /api/programs/:id` (`resolveReplacements`, `canonicalProgram`:
+  the id must match, it must be a playable program rather than a show or
+  season, and its length is Tunarr's), and a program Tunarr doesn't have is a
+  `409 replacement_unavailable` in the preview or `blocked` at apply, with
+  nothing written. The replacements' lengths are part of each channel's
+  `expect` (`repairExpect`), so one whose length changed since the preview is
+  a conflict. Every other item is the same object, in order.
+- **Packages** (`server/programmingPackage.ts`): export reads each channel's
+  programming; import validates the file and maps each packaged channel onto a
+  channel here, then follows the lineup path above.
 
 ### Watching routes (`server/watch.ts`)
 
@@ -696,13 +1005,13 @@ position) and downloads it via a `Blob` object URL. The filename gets an
 
 - **Tunarr HTTP API** is the main integration. The proxy uses the channel endpoints, `/api/programs/:id/artwork/:type`, and the content and setup endpoints listed in section 6.
 - **Public image hosts** (for channel logos that link outside Tunarr, such as YouTube or TMDB images) are fetched by the companion only, through `fetchPublicImage`.
-- **An AI provider** (Anthropic, or an OpenAI-compatible API such as OpenAI or Ollama), only when configured, called by `server/ai.ts`. On a real server, the artwork route returned `image/jpeg` for program UUIDs; the raw `artwork[].path` values in programming pointed at Plex on `127.0.0.1:32400`. There is no version negotiation.
+- **An AI provider** (Anthropic, or an OpenAI-compatible API such as OpenAI or Ollama), only when configured, called by `server/ai.ts`. On a real server, the artwork route returned `image/jpeg` for program UUIDs; the raw `artwork[].path` values in programming pointed at Plex on `127.0.0.1:32400`. Versions and capabilities are detected read-only by `server/compatibility.ts` (D63).
 - **Hosting the preview** is up to whoever deploys it (for example `wrangler deploy` on the `dist/` build). No deploy pipeline is in the repo.
 - **Google Fonts** (Geist via `next/font/google`) are used by the hosted build only.
 
 ## 9. Persistence
 
-- **Tunarr** holds all channel data. The companion stores, in `LINEUP_DATA_DIR`: its configuration from setup (`config.json`, mode 0600: Tunarr's address, the account's scrypt hash, AI, the media folder, tuning values; D62), saved templates (`templates.json`), filler-list roles and folder links (`filler-roles.json`), picked station IDs (`station-ids.json`), server settings changed from the desk (`settings.json`), snapshots (`snapshots/<channel>.json`), shared drafts (`drafts/`) and scheduled changes (`scheduled.json`); plus the video files users upload to the media folder (`LINEUP_MEDIA_DIR`, when set). In memory it keeps channel locks and the logo cache.
+- **Tunarr** holds all channel data. The companion stores, in `LINEUP_DATA_DIR`: the batch-operation record (`batches.json`, D65); the schedule library and calendar (`schedule-library.json`, `calendar.json`, D66); its configuration from setup (`config.json`, mode 0600: Tunarr's address, the account's scrypt hash, AI, the media folder, tuning values; D62), saved templates (`templates.json`), filler-list roles and folder links (`filler-roles.json`), picked station IDs (`station-ids.json`), server settings changed from the desk (`settings.json`), snapshots (`snapshots/<channel>.json`), shared drafts (`drafts/`) and scheduled changes (`scheduled.json`); plus the video files users upload to the media folder (`LINEUP_MEDIA_DIR`, when set). In memory it keeps channel locks and the logo cache.
 - **The browser** keeps per-channel drafts (unsaved order and edit list) in IndexedDB (database `tunarr-lineup`, store `drafts`, key `channelId`). Each draft is tied to the programming version it was made against and is dropped once that version is gone.
   - If IndexedDB is unavailable, fails or doesn't answer within 4 s, an in-memory store is used for the rest of the visit and `draftStore().persistent` is false unless the companion keeps the drafts.
   - Drafts are also written to the companion (`sharedDraftStore` over `companionDrafts`), and a load takes the newer copy, so they follow the user between devices. Without the companion's draft routes (hosted preview) they stay per browser.
@@ -759,6 +1068,7 @@ still set). The table names them by the keys the modules read.
 | `LINEUP_DATA_DIR` | `createProxyConfig` → the stores and the scheduler | Lineup's data folder (default `./data`, `/data` in Docker) |
 | `LINEUP_SCHEDULER` | `createProxyConfig` → `createScheduler` | `on` saves scheduled changes when due (default off) |
 | `LINEUP_MEDIA_DIR`, `LINEUP_MEDIA_TUNARR_DIR`, `LINEUP_MEDIA_MAX_MB` | `createMediaFolder` | The media folder as Lineup sees it (uploads off when unset), as Tunarr sees it (default: the same), and the upload size limit (default 4096 MB) |
+| `LINEUP_NOTIFY_URL`, `LINEUP_NOTIFY_EVENTS`, `LINEUP_NOTIFY_NAMES`, `LINEUP_NOTIFY_PRIVATE` | `readNotifySettings` (via `createNotifier`) | The webhook (off when unset), its events (comma-separated; a default set when unset), names opt-in (`on`), the private-network exception (`on`). Set from Server Settings |
 | `LINEUP_AI_PROVIDER`, `LINEUP_AI_API_KEY` (or `ANTHROPIC_API_KEY`/`OPENAI_API_KEY`), `LINEUP_AI_MODEL`, `LINEUP_AI_BASE_URL`, `LINEUP_AI_TIMEOUT_MS` | `createAiConfig` | AI assistant provider (off when unset) |
 | `LINEUP_PASSWORD`, `LINEUP_USERNAME` | `importEnv` (`createAuthConfig`) | Imported once as the account |
 | `LINEUP_ALLOWED_HOSTS` | `createHostPolicy` | Host names answered without sign-in (servers without setup), besides IPs and `localhost` |
@@ -820,7 +1130,14 @@ bundle (`envPrefix`); none are used.
   - `page.test.tsx` (jsdom): `Home` against a stateful `fakeCompanion()`. The fake enforces `If-Match` like the companion. Covers live loading, saves, 412 conflicts, remote slide and cancel, block moves, the Move dialog, menus, the on-air marker, export, drafts kept across channel switches and reloads, undo past a save, stale drafts dropped, the slot editor (catalog sources, adding slots with commercials and mid-roll, creating a time-slot schedule for a manual channel, preview then save with the seed, discard), library inserts, commercial breaks, remove/length/undo, drafts with inserted items, filler-list creation, and channel filler settings, demo guards, and no silent demo fallback.
   - `programmingCache.test.ts` (slim programming, ETag/304, shared reads, the optional TTL and invalidation by writes, compression over real HTTP, size and time budgets on a synthetic 5,000-item channel), `loading.test.ts` (client phases, cancellation and timeouts, hanging IndexedDB and companion draft stores, row window, `?channel=` and the last channel), `pageLoading.test.tsx` (the desk with hanging or slow draft stores, empty/small/5,000-item channels, quick switching, Cancel and Try again, late drafts, day changes, unmounting, the channel in the address).
   - `skins.test.ts`: skin ids and the Platinum fallback, `public/skin-init.js` run in a `node:vm` sandbox (valid, unknown, throwing storage), and the stylesheet: each skin overrides only tokens `:root` defines, every `var()` used is defined, only Broadcast is dark. The `appearance` block in `page.test.tsx` covers the dialog (View menu and phone sheet, arrows and Enter, Done and Escape, saving at once, restore after remount, unknown values, storage that throws or is missing).
-  - `watch.test.ts` (guide, sessions, stream rewriting and refusals, redirect graph), `scheduler.test.ts` (plans, patches, overlays, skips, cancel), `companionStores.test.ts` (snapshots, shared drafts, media playback ranges, AI review), `tvRemote.test.ts` (remote keys, CH±, number entry, retry waits, now/next), `deskTools.test.ts` (lineup check, alignment, marathons, air-once patches, week log, guide grid, browser draft sync, lineup files). Tests that build a full config use a temporary `LINEUP_DATA_DIR` (`tests/tempData.ts`).
+  - `epg.test.ts` (entries, checks, a well-formed escaped XMLTV preview parsed with `DOMParser`).
+  - `notify.test.ts` (address rules (public on HTTPS 443 even with the private option, private-only for http or other ports, mixed answers refused), URL checks, pinned lookups, redirects, timeouts, retries, dedupe, the payload, and events from the scheduler, refused saves, batches and the Control Room without addresses or reasons); `setup.test.ts` (write-only address, re-checked exception, test route) and `setupWizard.test.tsx` (the Notifications section).
+  - `planner.test.ts` (determinism, weights, orders, limits, dayparts, warnings, 150 generated plans against every invariant, timing, saving with `startTime`, the airing limit never passed off as complete, exact daypart boundaries incl. a clock change) and `plannerDialog.test.tsx` (preview, stale preview, saving exactly the previewed items, refusals).
+  - `calendar.test.ts` (zones, clock changes, recurrences, validation, conflicts, priority, arming and restoring with the scheduler, restart, re-arming on calendar changes (priority added, changed, winner off or removed, idempotency, an occurrence on air untouched, the tie-break), failing closed (a reconcile that fails holds a stale plan with nothing written and lets it go once it can, an edit or new entry saved while reconciling fails answers `reconciled: false`, an edit landing between arming and applying cancels instead, an edit sent while an occurrence goes in waits for it), the revision (lead time and name invalidate, started occurrences untouched), routes) and `calendarDialog.test.tsx` (save, schedule yearly, refused overlap, priority, the unreconciled warning).
+  - `batch.test.ts` (validation, previews, conflicts, Tunarr going down mid-batch, applies that name a channel without a valid fingerprint (refused whole, nothing recorded or written, renumbering included), renumbering swaps and cycles (spare numbers inside 1–99,999 near the top of the range, refused before writing with none free, a spare taken meanwhile), outside changes before or between moves, media repair with replacements checked in Tunarr, packages, conditional rollback, the record) and `batchDialog.test.tsx` (the dialog through the real routes: group change and rollback, repair needing an updated preview, Back).
+  - `controlRoom.test.ts` (health rules, loops across checks, summary parts failing independently, bounded concurrency, the stream check) and `controlRoomDialog.test.tsx` (the dialog by keys alone); `page.test.tsx` opens it with `O` and acts on another channel once it loads.
+  - `compatibility.test.ts` (the matrix's decisions (required routes missing from the description → unavailable even when reading works, a part's route missing → that part refused and the capability degraded, a successful read never vouching for writes, a missing `DELETE` on every manager, channel creation off only when none of it is listed, a description that failed to load leaving writes unchecked, timeouts → degraded), versions, Tunarr without `/api/version` or `/openapi.json`, partial degradation, Tunarr down, read-only and address-free reports, cache, refresh, shared runs, the diagnostics file); `settingsDialogs.test.tsx` covers the Compatibility panel (including "Partly turned off") and the managers turning off parts they can't do, and `page.test.tsx` the desk refusing only unavailable features.
+  - `watch.test.ts` (guide, sessions, stream rewriting and refusals, redirect graph), `scheduler.test.ts` (plans, patches, overlays, skips, cancel, the snapshot an overlay's restore needs: nothing written without it, a missing one failed, a changed channel skipped; calendar changes held by their guard with what follows on the channel, never applied without one, skipped when their time runs out while held, not applied when cancelled while waiting), `companionStores.test.ts` (snapshots, shared drafts, media playback ranges, AI review), `tvRemote.test.ts` (remote keys, CH±, number entry, retry waits, now/next), `deskTools.test.ts` (lineup check, alignment, marathons, air-once patches, week log, guide grid, browser draft sync, lineup files). Tests that build a full config use a temporary `LINEUP_DATA_DIR` (`tests/tempData.ts`).
 - **`e2e/` (Playwright):**
   - `responsive.spec.ts` checks a 390×844 touch phone (Menu sheet, Program Info sheet edit and save, channel strip) and that 768×1024, 1280×800 and 2560×1080 fit without horizontal overflow.
   - `desk.spec.ts` runs at 1920×1080 against the built companion and `fake-tunarr.mjs`. The fake mimics Tunarr's guide window and provides `/__test/reset`, `/__test/state` and `/__test/edit-elsewhere` hooks.
@@ -833,6 +1150,7 @@ bundle (`envPrefix`); none are used.
     - keyboard menus, CSV download and phone width
   - `skins.spec.ts`: picking each skin by keyboard, checked through computed styles (desktop, selection, `color-scheme`); persistence across a reload; `skin-init.js` applying the skin with the app bundle blocked; Escape keeping the pick; the desk, guide grid, week view and Watch Live (OSD, cable guide focus and ↓, remote) under every skin without horizontal overflow; and the phone Menu sheet.
   - `large-channel.spec.ts`: synthetic channels from `e2e/syntheticChannel.mjs` (added to the fake with `/__test/large`; `/__test/delay` slows its programming) at 5,000 and 20,000 items, a day of short spots and a throttled 1.6 Mbit/s link; prints `[perf]` JSON and checks budgets for bytes on the wire, time to open, mounted rows, heap, channel and day switches.
+  - `operations.spec.ts`: the guide preview (listing, a flex-title check, an XMLTV download without addresses); notifications (loopback refused even with the private exception, a write-only public address, a test failing cleanly on DNS, turning off); the advanced planner (a show, a day, a seed, preview, save checked in the fake); the schedule library and calendar (save, yearly entry, refused overlap, kept after a reload, remove); batch operations by keyboard (group change, rollback, Recent batches), media repair after `/__test/forget-program`, and a package exported and imported; also Compatibility in Server Settings (diagnostics without the address or password; a route the fake Tunarr drops with `/__test/missing-routes` refuses only its feature) and the Control Room by remote (check all, filters, actions, Back) at 1920×1080 and phone width. The fake also answers `/api/version` and `/openapi.json`.
   - `tools.spec.ts`: viewer counts without addresses, the guide grid by remote, watching through the companion only, the lineup check and snapshot restore, the week view export, and a planned/cancelled dated save. The fake also serves `/api/guide/channels`, `/api/sessions` and `/stream/channels/…`. Each test clears the companion's shared drafts first.
 
 ## 14. Cross-cutting patterns

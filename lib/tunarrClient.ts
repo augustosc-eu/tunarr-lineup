@@ -15,6 +15,15 @@ import type { Review } from '../server/ai';
 import type { SettingsView } from '../server/settings';
 import type { ConfigView, Probe } from '../server/setup';
 import type { StationIdPicks } from '../server/stationIdStore';
+import type { CompatibilityReport } from '../server/compatibility';
+import type { ControlRoomSummary } from '../server/controlRoom';
+import type { ChannelDiagnostic } from '../server/channelHealth';
+import type { BatchPreview } from '../server/batch';
+import type { BatchRecord, BatchSummary } from '../server/batchStore';
+import type { ProgrammingPackage } from '../server/programmingPackage';
+import type { CalendarEntry, LibraryEntry, LibrarySummary } from '../server/calendarStore';
+import type { CalendarCheck } from '../server/calendarArm';
+import type { Occurrence } from '../server/calendar';
 
 export type ScheduleDraft = { type: SlotSchedule['type']; settings?: Record<string, unknown>; slots: Slot[]; extraPrograms?: string[] };
 export type AiStatus = { enabled: true; provider: string; model: string } | { enabled: false; message: string };
@@ -23,8 +32,8 @@ export type MediaFile = { name: string; size: number; modifiedAt: number };
 /** A role folder in the media folder, and its library in Tunarr once added. */
 export type MediaRoleFolder = { role: FillerRole; folder: string; files: MediaFile[]; tunarr: { mediaSourceId: string; libraryId: string; lastScannedAt?: number; scanning: boolean } | null };
 export type MediaFolderStatus = { enabled: true; maxBytes: number; folders: MediaRoleFolder[]; tunarrError?: string } | { enabled: false; message: string };
-export type FillerSync = { connected: boolean; created: Array<{ id: string; name: string; count: number; role: FillerRole }>; updated: Array<{ id: string; count: number }>; errors: string[] };
-export type { ChangeSummary, ConfigView, Probe, Review, SettingsView, Snapshot, SnapshotSummary, StationIdPicks };
+export type FillerSync = { connected: boolean; created: Array<{ id: string; name: string; count: number; role: FillerRole }>; updated: Array<{ id: string; count: number }>; errors: string[]; skipped?: string[] };
+export type { ChangeSummary, ChannelDiagnostic, CompatibilityReport, ControlRoomSummary, ConfigView, Probe, Review, SettingsView, Snapshot, SnapshotSummary, StationIdPicks };
 export type ScheduledList = { enabled: boolean; message?: string; changes: ChangeSummary[] };
 /** One change in a plan sent to the scheduler (server/scheduler.ts validatePlan). */
 export type PlannedChange = {
@@ -41,6 +50,10 @@ export type PlannedChange = {
   programs?: Record<string, unknown>;
 };
 export type ViewerCounts = Record<string, { viewers: number; streams: number }>;
+/** A calendar entry as the list shows it (server/calendarArm.ts entryView). */
+export type CalendarEntryView = CalendarEntry & { scheduleName: string | null; next: Occurrence[]; active: boolean };
+/** Whether a calendar edit's plans were checked right after it was saved (server/calendarArm.ts reconcileAfterEdit); `warning` when not. */
+export type CalendarEditResult = { reconciled?: boolean; warning?: string };
 
 /** The channel's live stream as HLS, through the companion (server/watch.ts). */
 export const streamUrl = (channelId: string) => `/api/tunarr/channels/${encodeURIComponent(channelId)}/stream.m3u8`;
@@ -225,6 +238,8 @@ export type ConfigChanges = {
   ai?: AiFields;
   media?: { dir: string; tunarrDir?: string };
   options?: { scheduler?: boolean; externalLogos?: boolean };
+  /** The webhook address is write-only: left out keeps it, empty turns notifications off. */
+  notifications?: { url?: string; events?: string[]; includeNames?: boolean; allowPrivate?: boolean };
   account?: { currentPassword: string; username?: string; newPassword?: string };
 };
 export type SetupFinish = Omit<ConfigChanges, 'account'> & { code: string; tunarrUrl: string; account: { username: string; password: string } };
@@ -336,6 +351,33 @@ export const tunarrApi = {
   saveServerConfig: (body: ConfigChanges) => request<ConfigView>('/api/tunarr/server-config', jsonBody('PUT', body)),
   detectTunarr: () => request<{ found: Probe[]; tried: string[] }>('/api/tunarr/server-config/detect', jsonBody('POST', {})),
   testTunarr: (tunarrUrl: string) => request<Probe>('/api/tunarr/server-config/test', jsonBody('POST', { tunarrUrl })),
+  testNotification: () => request<{ ok: boolean; status?: number; error?: string; attempts: number }>('/api/tunarr/server-config/notify-test', jsonBody('POST', {})),
+  /** What this Tunarr can do for Lineup, from read-only checks (server/compatibility.ts); cached for 5 minutes. */
+  compatibility: (options?: RequestOptions) => request<CompatibilityReport>('/api/tunarr/compatibility', undefined, options),
+  refreshCompatibility: () => request<CompatibilityReport>('/api/tunarr/compatibility/refresh', jsonBody('POST', {})),
+  /** Every channel at a glance: now/next, viewers, scheduled changes, last checks (server/controlRoom.ts). */
+  controlRoom: (options?: RequestOptions) => request<ControlRoomSummary>('/api/tunarr/control-room', undefined, options),
+  /** The deeper check (each channel's programming), up to 25 channels per call. */
+  checkChannels: (channelIds: string[], options?: RequestOptions) => request<{ diagnostics: ChannelDiagnostic[] }>('/api/tunarr/control-room/check', jsonBody('POST', { channelIds }), options),
+  /** Batch operations (server/batch.ts): preview, apply (runs in the background), the record, rollback, export. */
+  batchPreview: (body: { operation: string; channelIds?: string[]; params: unknown }) => request<BatchPreview>('/api/tunarr/batch/preview', jsonBody('POST', body), { timeoutMs: 180_000 }),
+  batchApply: (body: { operation: string; channelIds?: string[]; params: unknown; expect: Record<string, string>; label: string }) => request<BatchRecord>('/api/tunarr/batch/apply', jsonBody('POST', body), { timeoutMs: 180_000 }),
+  batches: () => request<BatchSummary[]>('/api/tunarr/batches'),
+  batch: (id: string) => request<BatchRecord & { running?: boolean }>(`/api/tunarr/batches/${encodeURIComponent(id)}`),
+  batchRollback: (id: string, channelIds: string[]) => request<BatchRecord>(`/api/tunarr/batches/${encodeURIComponent(id)}/rollback`, jsonBody('POST', { channelIds })),
+  batchExport: (channelIds: string[]) => request<ProgrammingPackage>('/api/tunarr/batch/export', jsonBody('POST', { channelIds }), { timeoutMs: 180_000 }),
+  /** The schedule library and the calendar (server/calendarStore.ts, server/calendarArm.ts). */
+  scheduleLibrary: () => request<LibrarySummary[]>('/api/tunarr/schedule-library'),
+  saveToLibrary: (body: { name: string; description?: string; tags?: string[]; origin: { kind: string; channelName?: string }; lineup: unknown[]; programs?: Record<string, unknown> }) => request<LibrarySummary>('/api/tunarr/schedule-library', jsonBody('POST', body)),
+  libraryEntry: (id: string) => request<LibraryEntry>(`/api/tunarr/schedule-library/${encodeURIComponent(id)}`),
+  updateLibraryEntry: (id: string, details: { name?: string; description?: string; tags?: string[] }) => request<LibrarySummary>(`/api/tunarr/schedule-library/${encodeURIComponent(id)}`, jsonBody('PUT', details)),
+  deleteLibraryEntry: (id: string) => request<unknown>(`/api/tunarr/schedule-library/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  calendar: () => request<{ enabled: boolean; message?: string; entries: CalendarEntryView[] }>('/api/tunarr/calendar'),
+  previewCalendar: (body: unknown) => request<CalendarCheck>('/api/tunarr/calendar/preview', jsonBody('POST', body)),
+  createCalendarEntry: (body: unknown) => request<CalendarEntryView & CalendarEditResult>('/api/tunarr/calendar', jsonBody('POST', body)),
+  updateCalendarEntry: (id: string, body: unknown) => request<CalendarEntryView & CalendarEditResult>(`/api/tunarr/calendar/${encodeURIComponent(id)}`, jsonBody('PUT', body)),
+  deleteCalendarEntry: (id: string) => request<{ removed: boolean; ending: number; cancelled: number } & CalendarEditResult>(`/api/tunarr/calendar/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  endCalendarEntry: (id: string) => request<{ ending: number; cancelled: number }>(`/api/tunarr/calendar/${encodeURIComponent(id)}/end`, jsonBody('POST', {})),
   /** The settings the desk may change, and whether the others are set (server/settings.ts). */
   settings: () => request<SettingsView>('/api/tunarr/server-settings'),
   /** `null` goes back to the value from setup. */

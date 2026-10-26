@@ -2,6 +2,12 @@
 
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ChannelSettingsDialog } from './components/ChannelSettingsDialog';
+import { ControlRoomDialog, type RoomAction } from './components/ControlRoomDialog';
+import { BatchDialog } from './components/BatchDialog';
+import { ScheduleCalendarDialog, type LibraryDraft } from './components/ScheduleCalendarDialog';
+import { PlannerDialog } from './components/PlannerDialog';
+import { GuidePreviewDialog } from './components/GuidePreviewDialog';
+import type { BatchTask } from '../lib/batch';
 import { DayStrip } from './components/DayStrip';
 import { EventDialog } from './components/EventDialog';
 import { InsertDialog } from './components/InsertDialog';
@@ -81,6 +87,7 @@ import {
 import { channelLogoUrl, programArtwork, programDetail, programTitle } from '../lib/programInfo';
 import { airOncePatches, airTimeLabel, boundaryAt, exactBoundary, insertedStart, passesBefore, type EventPlacement, type InsertWhere } from '../lib/events';
 import { checkLineup, type Issue } from '../lib/lineupCheck';
+import { blockedReason, partBlocked, type CapabilityId, type CompatibilityReport, type PartBlocker, type PartId } from '../lib/compatibility';
 import type { GuideChannel } from '../lib/guideGrid';
 import { logRows, type DayRows } from '../lib/weekLog';
 import { keptStartTime, lineupLength } from '../server/lineupVersion';
@@ -350,13 +357,19 @@ export default function Home() {
   const [templatesOpen, setTemplatesOpen] = useState(false);
   const [eventOpen, setEventOpen] = useState(false);
   // Views and tools over the lineup (each an overlay).
-  const [view, setView] = useState<'guide' | 'week' | 'check' | 'align' | 'marathon' | 'snapshots' | 'scheduled' | null>(null);
+  const [view, setView] = useState<'guide' | 'week' | 'check' | 'align' | 'marathon' | 'snapshots' | 'scheduled' | 'control' | 'epg' | null>(null);
   const [networkMode, setNetworkMode] = useState<NetworkMode | null>(null);
+  const [batchTask, setBatchTask] = useState<{ task: BatchTask; channelIds?: string[] } | null>(null);
+  // File → Schedule Library & Calendar (with a lineup to save when opened from Save to Schedule Library).
+  const [libraryOpen, setLibraryOpen] = useState<{ toSave: LibraryDraft | null } | null>(null);
+  const [plannerOpen, setPlannerOpen] = useState(false);
   const [planKind, setPlanKind] = useState<PlanKind | null>(null);
   const [watching, setWatching] = useState<string | null>(null);
   const [viewers, setViewers] = useState<ViewerCounts>({});
   const [aiEnabled, setAiEnabled] = useState(false);
   const [scheduler, setScheduler] = useState<{ enabled: boolean; message?: string }>({ enabled: false });
+  // What this Tunarr can do (server/compatibility.ts); null until checked, and in demo mode.
+  const [compat, setCompat] = useState<CompatibilityReport | null>(null);
   const [grab, setGrab] = useState<Grab | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [connectionOpen, setConnectionOpen] = useState(false);
@@ -401,6 +414,8 @@ export default function Home() {
   const scrolledToNow = useRef('');
   // A time to select once another channel has loaded (opened from the guide grid).
   const pendingJump = useRef<{ channelId: string; time: number } | null>(null);
+  // From the Control Room: a view (lineup check, snapshots) to open once that channel's programming is loaded.
+  const pendingView = useRef<{ channelId: string; view: 'check' | 'snapshots' } | null>(null);
 
   const live = mode === 'live';
   const filler = useFillerSpots(live);
@@ -510,6 +525,26 @@ export default function Home() {
     setMessage(text);
     window.setTimeout(() => setMessage((current) => (current === text ? '' : current)), 3600);
   };
+
+  /** True (and says why) when this Tunarr is known not to offer `id`; the feature then fails closed. */
+  const refuse = (id: CapabilityId) => {
+    const reason = live ? blockedReason(compat, id) : null;
+    if (reason) notify(reason);
+    return !!reason;
+  };
+  /** A menu action that's refused, with the reason, when its capability is missing (items stay focusable on a remote). */
+  const gate = (id: CapabilityId, run: () => void) => () => { if (!refuse(id)) run(); };
+  /** Why one part of a capability (a manager's create, edit or delete) is refused on this Tunarr; dialogs turn that action off and say why. */
+  const partRefused: PartBlocker = (id, part) => (live ? partBlocked(compat, id, part) : null);
+  /** Like `gate`, for one part of a capability. */
+  const gatePart = (id: CapabilityId, part: PartId, run: () => void) => () => {
+    const reason = partRefused(id, part);
+    if (reason) notify(reason);
+    else run();
+  };
+  // Saving is turned off before anyone tries when Tunarr's API shows the write route is missing (the reason stays visible in the inspector).
+  const savesBlocked = live ? blockedReason(compat, 'manual-saves') : null;
+  const slotsBlocked = live ? blockedReason(compat, 'slot-schedules') : null;
 
   const select = (index: number, start: number | null, extend = false) => {
     if (!extend) setAnchorIndex(index);
@@ -722,6 +757,7 @@ export default function Home() {
 
   const goLive = async () => {
     setConnection({ status: 'checking' });
+    setCompat(null);
     const state = await checkHealth({ timeoutMs: SHORT_TIMEOUT_MS });
     if (!mounted.current) return;
     setConnection(state);
@@ -789,7 +825,7 @@ export default function Home() {
 
   // Who's watching each channel (counts only), while the desk is on screen.
   useEffect(() => {
-    if (!live || connection.status !== 'connected') return;
+    if (!live || connection.status !== 'connected' || blockedReason(compat, 'sessions')) return;
     let cancelled = false;
     const read = () => {
       if (document.visibilityState === 'hidden') return;
@@ -799,7 +835,7 @@ export default function Home() {
     const timer = window.setInterval(read, VIEWERS_TICK_MS);
     document.addEventListener('visibilitychange', read);
     return () => { cancelled = true; window.clearInterval(timer); document.removeEventListener('visibilitychange', read); };
-  }, [live, connection.status]);
+  }, [live, connection.status, compat]);
 
   // What the companion offers: the AI review, and changes saved on a date.
   useEffect(() => {
@@ -807,6 +843,8 @@ export default function Home() {
     let cancelled = false;
     tunarrApi.aiStatus().then((status) => { if (!cancelled) setAiEnabled(status.enabled); }).catch(() => {});
     tunarrApi.scheduled().then((list) => { if (!cancelled) setScheduler({ enabled: list.enabled, message: list.message }); }).catch(() => {});
+    // A failed check leaves everything on: features are refused only when Tunarr is known not to offer them.
+    tunarrApi.compatibility().then((report) => { if (!cancelled) setCompat(report); }).catch(() => {});
     return () => { cancelled = true; };
   }, [live, connection.status]);
 
@@ -860,6 +898,13 @@ export default function Home() {
     focusCursor.current = true;
     select(row.lineupIndex, row.start);
   }, [activeChannelId, instances, loading]);
+
+  useEffect(() => {
+    const pending = pendingView.current;
+    if (!pending || loading || pending.channelId !== activeChannelId || base?.channelId !== pending.channelId) return;
+    pendingView.current = null;
+    setView(pending.view);
+  }, [activeChannelId, base, loading]);
 
   // Open today's schedule at whatever is on air, once per channel and day.
   useEffect(() => {
@@ -1129,7 +1174,7 @@ export default function Home() {
 
   /** Opens the slot editor: the channel's schedule, or a new one for a manual channel. */
   const openSlotEditor = () => {
-    if (!live || !activeChannelId) return;
+    if (!live || !activeChannelId || refuse('slot-schedules')) return;
     const channelId = activeChannelId;
     if (grab) cancelGrab();
     loadCatalog();
@@ -1178,7 +1223,7 @@ export default function Home() {
 
   const previewSlots = () => {
     const { channelId, draft } = slotEditor;
-    if (!channelId) return;
+    if (!channelId || refuse('slot-schedules')) return;
     setSlotEditor((current) => ({ ...current, busy: true, error: '' }));
     tunarrApi.previewSchedule(channelId, scheduleRequest(draft))
       .then((preview) => {
@@ -1193,7 +1238,7 @@ export default function Home() {
 
   const saveSlots = () => {
     const { channelId, draft, preview } = slotEditor;
-    if (!channelId || !preview || !base || slotEditor.previewOf !== draftKey(draft)) return;
+    if (!channelId || !preview || !base || slotEditor.previewOf !== draftKey(draft) || refuse('slot-schedules')) return;
     const commit = () => {
       setSlotEditor((current) => ({ ...current, busy: true, error: '' }));
       setSaving(true);
@@ -1453,7 +1498,7 @@ export default function Home() {
 
 
   const save = () => {
-    if (!dirty || saving || grab) return;
+    if (!dirty || saving || grab || refuse('manual-saves')) return;
     if (!live) {
       setOriginalLineup(structuredClone(lineup));
       resetEditing();
@@ -1659,6 +1704,45 @@ export default function Home() {
       });
     }), [live, channels]);
 
+  /** Opens Batch Operations on a task, if this Tunarr offers what it needs. */
+  const openBatch = (task: BatchTask, channelIds?: string[]) => {
+    const needs: CapabilityId[] = task === 'repair' || task === 'import' ? ['programming', 'manual-saves'] : task === 'export' ? ['programming'] : ['channel-settings'];
+    if (needs.some((id) => refuse(id))) return;
+    setBatchTask({ task, channelIds });
+  };
+
+  /** After a batch: the channel list may have new numbers or groups, and the open channel may have a new lineup. */
+  const afterBatch = (text: string, changedIds: string[]) => {
+    notify(text);
+    void tunarrApi.channels().then((list) => setChannels([...list].sort((a, b) => a.number - b.number))).catch(noteFailure);
+    if (activeChannelId && changedIds.includes(activeChannelId)) void loadProgramming(activeChannelId, selectedDate, { keepSelection: true });
+    refreshDraftMarks();
+  };
+
+  /** From the Control Room: act on one channel, switching the desk to it first where the action needs it. */
+  const roomAction = (action: RoomAction, channelId: string) => {
+    const channel = channels.find((item) => item.id === channelId);
+    if (!channel) return;
+    const here = channelId === activeChannelId;
+    switch (action) {
+      case 'watch': return gate('hls-streaming', () => { setView(null); setWatching(channelId); })();
+      case 'scheduled': return setView('scheduled');
+      case 'repair':
+        setView(null);
+        return openBatch('repair', [channelId]);
+      case 'guide': return gate('guide', () => { if (!here) loadChannel(channel); setView('guide'); })();
+      case 'open':
+        setView(null);
+        if (!here) loadChannel(channel);
+        return;
+      default:
+        if (here && base?.channelId === channelId && !loading) return setView(action);
+        pendingView.current = { channelId, view: action };
+        setView(null);
+        if (!here) loadChannel(channel);
+    }
+  };
+
   /** From the guide grid: open the channel in the desk at that time. */
   const openFromGuide = (channelId: string, time: number) => {
     setView(null);
@@ -1711,10 +1795,13 @@ export default function Home() {
       const key = event.key;
       const back = key === 'Escape' || key === 'GoBack' || key === 'BrowserBack';
       const mod = event.metaKey || event.ctrlKey;
-      if (confirmDialog || appearanceOpen || arrangeOpen || connectionOpen || infoDialog || slotEditor.open || libraryPicker || insertOpen || settingsOpen || listsOpen || setupDialog || newChannel || templatesOpen || eventOpen || view || networkMode || planKind || watching) {
+      if (confirmDialog || appearanceOpen || arrangeOpen || connectionOpen || infoDialog || slotEditor.open || libraryPicker || insertOpen || settingsOpen || listsOpen || setupDialog || newChannel || templatesOpen || eventOpen || view || networkMode || planKind || watching || batchTask || libraryOpen || plannerOpen) {
         if (!back) return;
         event.preventDefault();
         if (confirmDialog) setConfirmDialog(null);
+        else if (plannerOpen) setPlannerOpen(false);
+        else if (batchTask) setBatchTask(null);
+        else if (libraryOpen) setLibraryOpen(null);
         else if (appearanceOpen) setAppearanceOpen(false);
         else if (watching) setWatching(null);
         else if (planKind) setPlanKind(null);
@@ -1787,13 +1874,14 @@ export default function Home() {
           else if (key === 'b') setShowRundowns((open) => !open);
           else if (!grab && key === 'm' && selectedItem) setArrangeOpen(true);
           else if (!grab && !slotPreview && key === 'i' && activeChannel) setInsertOpen(true);
-          else if (!grab && !slotPreview && key === 'a' && live && activeChannel) setBinOpen((open) => !open);
+          else if (!grab && !slotPreview && key === 'a' && live && activeChannel) gate('library-search', () => setBinOpen((open) => !open))();
           else if (!grab && !slotPreview && key === 'e' && activeChannel && lineup.length) setEventOpen(true);
           else if (!grab && key === 'Delete' && selectedItem) { event.preventDefault(); removeSelection(); }
-          else if (!grab && key === 'g' && channels.length) setView('guide');
+          else if (!grab && key === 'g' && channels.length) gate('guide', () => setView('guide'))();
+          else if (!grab && key === 'o' && live && channels.length) setView('control');
           else if (!grab && key === 'w' && activeChannel) setView('week');
           else if (!grab && key === 'c' && activeChannel) setView('check');
-          else if (!grab && key === 'l' && live && activeChannel) setWatching(activeChannel.id);
+          else if (!grab && key === 'l' && live && activeChannel) gate('hls-streaming', () => setWatching(activeChannel.id))();
           else if (key === '?') setInfoDialog('shortcuts');
       }
     };
@@ -1882,10 +1970,19 @@ export default function Home() {
       { label: 'Save Later…', disabled: !live || !base || !activeChannel || !!grab || (!dirty && !slotPreview), onSelect: () => setPlanKind('save') },
       { label: 'Save as Seasonal Overlay…', disabled: !live || !base || !activeChannel || !!grab || (!dirty && !slotPreview), onSelect: () => setPlanKind('overlay') },
       { label: 'Scheduled Changes…', disabled: !live, onSelect: () => setView('scheduled') },
+      { label: 'Save to Schedule Library…', disabled: !live || !activeChannel || !!grab || (!lineup.length && !slotPreview), onSelect: () => {
+        if (!activeChannel) return;
+        const origin = { kind: slotPreview ? 'slot-preview' as const : 'desk' as const, channelName: `CH ${activeChannel.number} ${activeChannel.name}` };
+        const items = slotPreview ? slotPreview.lineup : buildManualSave(lineup).request.lineup;
+        setLibraryOpen({ toSave: { lineup: items, programs: viewPrograms, origin } });
+      } },
+      { label: 'Schedule Library & Calendar…', disabled: !live, onSelect: () => setLibraryOpen({ toSave: null }) },
       'separator',
       { label: 'Export Program Log…', disabled: !instances.length, onSelect: exportLog },
       { label: 'Export Week or Month Log…', disabled: !activeChannel || !lineup.length, onSelect: () => setView('week') },
       { label: 'Snapshots, Export and Import…', disabled: !activeChannel, onSelect: () => setView('snapshots') },
+      { label: 'Export Programming Package…', disabled: !live || !channels.length, onSelect: () => openBatch('export') },
+      { label: 'Import Programming Package…', disabled: !live || !channels.length, onSelect: () => openBatch('import') },
       'separator',
       { label: 'Reload From Tunarr', disabled: !live || !activeChannelId, onSelect: reloadChannel },
       { label: 'Connection…', onSelect: () => setConnectionOpen(true) },
@@ -1897,9 +1994,10 @@ export default function Home() {
       { label: 'Revert All Changes', disabled: !dirty || !!grab, onSelect: revertAll },
       'separator',
       { label: 'Insert…', shortcut: 'I', disabled: !activeChannel || !!grab || !!slotPreview, onSelect: () => setInsertOpen(true) },
-      { label: binOpen ? 'Hide Program Bin' : 'Program Bin', shortcut: 'A', disabled: !live || !activeChannel || !!grab || !!slotPreview, onSelect: () => setBinOpen((open) => !open) },
+      { label: binOpen ? 'Hide Program Bin' : 'Program Bin', shortcut: 'A', disabled: !live || !activeChannel || !!grab || !!slotPreview, onSelect: gate('library-search', () => setBinOpen((open) => !open)) },
       { label: 'Schedule Event…', shortcut: 'E', disabled: !activeChannel || !lineup.length || !!grab || !!slotPreview, onSelect: () => setEventOpen(true) },
       { label: 'Marathon…', disabled: !activeChannel || !lineup.length || !!grab || !!slotPreview, onSelect: () => setView('marathon') },
+      { label: 'Advanced Planner…', disabled: !live || !activeChannel || !base || !!grab || !!slotPreview, onSelect: gate('manual-saves', () => setPlannerOpen(true)) },
       { label: 'Open Breaks With Station IDs', disabled: !live || !activeChannel || !lineup.length || !!grab || !!slotPreview, onSelect: openBreaksWithStationIds },
       { label: 'Align Programs to Clock…', disabled: !activeChannel || !lineup.length || !!grab || !!slotPreview, onSelect: () => setView('align') },
       { label: 'Remove', shortcut: 'Del', disabled: !selectedItem || !!grab || !!slotPreview, onSelect: removeSelection },
@@ -1918,8 +2016,10 @@ export default function Home() {
       { label: 'Previous Day', shortcut: '←', onSelect: () => shiftDay(-1) },
       { label: 'Next Day', shortcut: '→', onSelect: () => shiftDay(1) },
       'separator',
-      { label: 'Guide Grid', shortcut: 'G', disabled: !channels.length, onSelect: () => setView('guide') },
+      { label: 'Guide Grid', shortcut: 'G', disabled: !channels.length, onSelect: gate('guide', () => setView('guide')) },
       { label: 'Week View', shortcut: 'W', disabled: !activeChannel, onSelect: () => setView('week') },
+      { label: 'Control Room', shortcut: 'O', disabled: !live || !channels.length, onSelect: () => setView('control') },
+      { label: 'Guide Preview (XMLTV)…', disabled: !channels.length, onSelect: gate('guide', () => setView('epg')) },
       { label: issueCount ? `Check Lineup (${issueCount})…` : 'Check Lineup…', shortcut: 'C', disabled: !activeChannel, onSelect: () => setView('check') },
       'separator',
       { label: 'Appearance…', onSelect: () => setAppearanceOpen(true) },
@@ -1928,29 +2028,31 @@ export default function Home() {
       { label: 'Previous Channel', shortcut: 'CH−', disabled: channels.length < 2, onSelect: () => stepChannel(-1) },
       { label: 'Next Channel', shortcut: 'CH+', disabled: channels.length < 2, onSelect: () => stepChannel(1) },
       { label: 'Reload Channel', disabled: !live || !activeChannelId, onSelect: reloadChannel },
-      { label: 'Watch Live', shortcut: 'L', disabled: !live || !activeChannel, onSelect: () => activeChannel && setWatching(activeChannel.id) },
+      { label: 'Watch Live', shortcut: 'L', disabled: !live || !activeChannel, onSelect: gate('hls-streaming', () => { if (activeChannel) setWatching(activeChannel.id); }) },
       'separator',
       { label: hasGeneratedSchedule(programming) ? 'Edit Slot Schedule…' : 'Create Slot Schedule…', disabled: !live || !activeChannelId || !!grab, onSelect: openSlotEditor },
-      { label: 'Channel Settings…', disabled: !live || !activeChannelId, onSelect: () => setSettingsOpen(true) },
+      { label: 'Channel Settings…', disabled: !live || !activeChannelId, onSelect: gate('channel-settings', () => setSettingsOpen(true)) },
       { label: 'Programming Templates…', disabled: !live || !!grab, onSelect: () => { loadCatalog(); setTemplatesOpen(true); } },
       { label: 'Share Commercials With Network…', disabled: !live || !activeChannel || channels.length < 2, onSelect: () => setNetworkMode('commercials') },
+      { label: 'Batch Operations…', disabled: !live || !channels.length || !!grab, onSelect: () => openBatch('filler') },
+      { label: 'Repair Missing Media…', disabled: !live || !channels.length || !!grab, onSelect: () => openBatch('repair') },
       'separator',
-      { label: 'New Channel…', disabled: !live || !!grab, onSelect: () => guardUnsaved(() => setNewChannel({ copyFrom: '' })) },
-      { label: 'Duplicate Channel…', disabled: !live || !activeChannelId || !!grab, onSelect: () => guardUnsaved(() => setNewChannel({ copyFrom: activeChannelId })) },
+      { label: 'New Channel…', disabled: !live || !!grab, onSelect: gatePart('channel-admin', 'create', () => guardUnsaved(() => setNewChannel({ copyFrom: '' }))) },
+      { label: 'Duplicate Channel…', disabled: !live || !activeChannelId || !!grab, onSelect: gatePart('channel-admin', 'copy', () => guardUnsaved(() => setNewChannel({ copyFrom: activeChannelId }))) },
       { label: 'Reset Channel…', disabled: !live || !activeChannel || !base || loading || saving || !!grab || !!slotPreview || !base.lineup.length, onSelect: confirmResetChannel },
-      { label: 'Delete Channel…', disabled: !live || !activeChannel || !!grab, onSelect: confirmDeleteChannel },
+      { label: 'Delete Channel…', disabled: !live || !activeChannel || !!grab, onSelect: gatePart('channel-admin', 'delete', confirmDeleteChannel) },
     ] },
     { title: 'Lists', items: [
-      { label: 'Station IDs…', disabled: !live, onSelect: () => { setListsRole('station-id'); setListsOpen('filler'); } },
-      { label: 'Commercials…', disabled: !live, onSelect: () => { setListsRole('commercials'); setListsOpen('filler'); } },
-      { label: 'Filler Lists…', disabled: !live, onSelect: () => { setListsRole(undefined); setListsOpen('filler'); } },
-      { label: 'Custom Shows…', disabled: !live, onSelect: () => setListsOpen('custom') },
-      { label: 'Smart Collections…', disabled: !live, onSelect: () => setSetupDialog('smart') },
+      { label: 'Station IDs…', disabled: !live, onSelect: gate('filler-lists', () => { setListsRole('station-id'); setListsOpen('filler'); }) },
+      { label: 'Commercials…', disabled: !live, onSelect: gate('filler-lists', () => { setListsRole('commercials'); setListsOpen('filler'); }) },
+      { label: 'Filler Lists…', disabled: !live, onSelect: gate('filler-lists', () => { setListsRole(undefined); setListsOpen('filler'); }) },
+      { label: 'Custom Shows…', disabled: !live, onSelect: gate('custom-shows', () => setListsOpen('custom')) },
+      { label: 'Smart Collections…', disabled: !live, onSelect: gate('smart-collections', () => setSetupDialog('smart')) },
     ] },
     { title: 'Setup', items: [
-      { label: 'Media Sources…', disabled: !live, onSelect: () => setSetupDialog('sources') },
+      { label: 'Media Sources…', disabled: !live, onSelect: gate('media-sources', () => setSetupDialog('sources')) },
       { label: 'Filler Folders…', disabled: !live, onSelect: () => setSetupDialog('folders') },
-      { label: 'Transcode Profiles…', disabled: !live, onSelect: () => setSetupDialog('transcode') },
+      { label: 'Transcode Profiles…', disabled: !live, onSelect: gate('transcode-profiles', () => setSetupDialog('transcode')) },
       'separator',
       { label: 'Server Settings…', disabled: mode === 'demo', onSelect: () => setSetupDialog('server') },
     ] },
@@ -2025,7 +2127,7 @@ export default function Home() {
         <div className="top-actions">
           {canUndo && <button className="quiet" onClick={undo}>Undo</button>}
           <button className={`connection ${connectionClass}`} onClick={() => setConnectionOpen(true)} aria-label={connectionLabel(mode, connection)}><span className="status-dot" /><span className="connection-label">{connectionLabel(mode, connection)}</span></button>
-          <button className="primary save" disabled={!dirty || saving || loading || !!grab} onClick={save}>{saving ? 'Saving…' : dirty ? 'Save lineup' : 'Saved'}</button>
+          <button className="primary save" disabled={!dirty || saving || loading || !!grab || !!savesBlocked} title={savesBlocked ?? undefined} onClick={save}>{saving ? 'Saving…' : savesBlocked ? 'Saving unavailable' : dirty ? 'Save lineup' : 'Saved'}</button>
         </div>
       </header>
 
@@ -2065,7 +2167,7 @@ export default function Home() {
             <label className="search"><span>⌕</span><input aria-label="Search this day" placeholder="Search this day" value={search} onChange={(event) => setSearch(event.target.value)} />{search && <button aria-label="Clear search" onClick={() => setSearch('')}>×</button>}</label>
             <span className="day-count">{visibleInstances.length} {visibleInstances.length === 1 ? 'program' : 'programs'}</span>
             <span className="day-actions">
-              {live && activeChannel && <button className="bin-toggle" aria-pressed={binOpen} disabled={!!grab || !!slotPreview} onClick={() => setBinOpen((open) => !open)}>▦ Program Bin</button>}
+              {live && activeChannel && <button className="bin-toggle" aria-pressed={binOpen} disabled={!!grab || !!slotPreview} onClick={gate('library-search', () => setBinOpen((open) => !open))}>▦ Program Bin</button>}
               {activeChannel && <button className={`check-badge ${issueCount ? 'has-issues' : ''}`} onClick={() => setView('check')} aria-label={issueCount ? `Check lineup: ${issueCount} ${issueCount === 1 ? 'issue' : 'issues'} this day` : 'Check lineup'}>{issueCount ? `⚠ ${issueCount}` : '✓ Check'}</button>}
             </span>
           </div>
@@ -2089,7 +2191,7 @@ export default function Home() {
             <span className="preview-actions">
               <button onClick={() => setSlotEditor((current) => ({ ...current, open: true, showingPreview: false }))}>Edit slots</button>
               <button onClick={discardSlotPreview}>Discard preview</button>
-              <button className="primary" disabled={slotEditor.busy || saving} onClick={saveSlots}>{slotEditor.busy ? 'Saving…' : 'Save schedule'}</button>
+              <button className="primary" disabled={slotEditor.busy || saving || !!slotsBlocked} title={slotsBlocked ?? undefined} onClick={saveSlots}>{slotEditor.busy ? 'Saving…' : 'Save schedule'}</button>
             </span>
           </div>}
           {placing && placing.channelId === activeChannelId && <div className="preview-bar placing-bar" role="region" aria-label="Placing programs">
@@ -2194,7 +2296,7 @@ export default function Home() {
             <div className="info-row"><span>Cycle</span><b>{durationTimecode(cycleDuration(slotPreview.lineup))}</b></div>
             <div className="info-row"><span>Slots</span><b>{slotEditor.draft.slots.length}</b></div>
             <div className="primary-actions">
-              <button className="wide primary" disabled={slotEditor.busy || saving} onClick={saveSlots}>Save schedule</button>
+              <button className="wide primary" disabled={slotEditor.busy || saving || !!slotsBlocked} title={slotsBlocked ?? undefined} onClick={saveSlots}>Save schedule</button>
               <button className="wide" onClick={() => setSlotEditor((current) => ({ ...current, open: true, showingPreview: false }))}>Edit slots</button>
               <button className="wide" onClick={discardSlotPreview}>Discard preview</button>
             </div>
@@ -2217,6 +2319,7 @@ export default function Home() {
             {blockSize === 1 && hasAdjustableLength(selectedItem) && <LengthEditor key={`${selectedIndex}-${selectedItem.duration}`} duration={selectedItem.duration} disabled={!!grab} onApply={changeLength} />}
             <button className="wide pickup" onClick={() => (grab ? drop() : pickUp())}>{grab ? 'Drop here' : 'Pick up to slide'}</button>
             <p className="hint">{grab ? 'Use ↑ ↓ to slide, OK to drop, Back to cancel.' : <><span className="pointer-only">Tip: drag a row, Shift-click to select a block, or press OK on a row to pick it up.</span><span className="touch-only">Tip: Earlier and Later move it one place; Move or swap… sends it anywhere.</span></>}</p>
+            {savesBlocked && <div className="warning" role="note"><b>Saving is off for this Tunarr</b><span>{savesBlocked}</span></div>}
             {hasGeneratedSchedule(programming) && <div className="warning"><b>Generated schedule</b><span>Tunarr builds this lineup from {scheduleSummary(programming.schedule)} and may regenerate over manual changes. Edit the slots to change it at the source.</span>{live && <button className="wide" disabled={!!grab} onClick={openSlotEditor}>Edit slot schedule…</button>}</div>}
             {(history.past.length > 0 || history.future.length > 0 || dirty) && <div className="edit-list">
               <p className="eyebrow">EDIT LIST{history.past.length ? ` (${history.past.length})` : ''}</p>
@@ -2335,6 +2438,7 @@ export default function Home() {
                 ['E', 'Schedule an event on a date…'],
                 ['G', 'Guide grid (every channel)'],
                 ['W', 'Week view'],
+                ['O', 'Control Room: every channel’s state (in it: ↑ ↓ PgUp PgDn move, OK actions, F filter, R refresh, C check, A check shown, S stream, Back steps out)'],
                 ['C', 'Check lineup'],
                 ['L', 'Watch the channel live'],
                 ['While watching: digits, R, G, I, M, F', 'Tune by number, last channel, cable guide, info, mute, full screen'],
@@ -2413,20 +2517,21 @@ export default function Home() {
         onClose={() => setLibraryPicker(null)}
       />}
 
-      {listsOpen && <ListsManager kind={listsOpen} initialRole={listsRole} roles={filler.roles} onRoleChange={filler.setRole} onClose={() => setListsOpen(null)} onChanged={() => { filler.reload(); if (slotEditor.open || catalog) loadCatalog(); }} />}
+      {listsOpen && <ListsManager kind={listsOpen} blocked={partRefused} initialRole={listsRole} roles={filler.roles} onRoleChange={filler.setRole} onClose={() => setListsOpen(null)} onChanged={() => { filler.reload(); if (slotEditor.open || catalog) loadCatalog(); }} />}
 
       {eventOpen && activeChannel && <EventDialog channel={{ ...activeChannel, startTime: channelStart }} channels={channels} lineup={lineup} programs={programming.programs} date={selectedDate} generated={hasGeneratedSchedule(programming)} onClose={() => setEventOpen(false)} onPlace={placeEventEdit}
         airOnce={live ? { unavailable: !scheduler.enabled ? scheduler.message ?? 'Scheduled changes are off on the Lineup server.' : dirty ? 'Save or revert your edits first: it’s planned against the lineup in Tunarr.' : undefined, onSchedule: scheduleAirOnce } : undefined} />}
       {templatesOpen && <TemplatesDialog channels={channels} activeChannel={activeChannel} activeHasSchedule={hasGeneratedSchedule(programming)} catalog={catalog} fillerRoles={filler.roles} onClose={() => setTemplatesOpen(false)} onApply={applyTemplate} />}
-      {setupDialog === 'smart' && <SmartCollectionsManager onClose={() => setSetupDialog(null)} onChanged={() => { if (slotEditor.open || catalog) loadCatalog(); }} />}
-      {setupDialog === 'sources' && <MediaSourcesDialog onClose={() => setSetupDialog(null)} />}
-      {setupDialog === 'folders' && <FillerFoldersDialog roles={filler.roles} onClose={() => setSetupDialog(null)} onChanged={() => { filler.reload(); if (slotEditor.open || catalog) loadCatalog(); }} />}
-      {setupDialog === 'transcode' && <TranscodeProfilesDialog onClose={() => setSetupDialog(null)} />}
-      {setupDialog === 'server' && <ServerSettingsDialog onClose={() => setSetupDialog(null)} />}
+      {setupDialog === 'smart' && <SmartCollectionsManager blocked={partRefused} onClose={() => setSetupDialog(null)} onChanged={() => { if (slotEditor.open || catalog) loadCatalog(); }} />}
+      {setupDialog === 'sources' && <MediaSourcesDialog blocked={partRefused} onClose={() => setSetupDialog(null)} />}
+      {setupDialog === 'folders' && <FillerFoldersDialog blocked={partRefused} roles={filler.roles} onClose={() => setSetupDialog(null)} onChanged={() => { filler.reload(); if (slotEditor.open || catalog) loadCatalog(); }} />}
+      {setupDialog === 'transcode' && <TranscodeProfilesDialog blocked={partRefused} onClose={() => setSetupDialog(null)} />}
+      {setupDialog === 'server' && <ServerSettingsDialog onClose={() => setSetupDialog(null)} onCompatibility={(report) => { if (live) setCompat(report); }} />}
       {live && connection.status === 'setup_required' && <SetupWizard onDemo={switchToDemo} />}
       {newChannel && <NewChannelDialog
         channels={channels}
         copyFrom={newChannel.copyFrom}
+        blocked={partRefused}
         onClose={() => setNewChannel(null)}
         onCreated={(id) => {
           setNewChannel(null);
@@ -2482,6 +2587,8 @@ export default function Home() {
         logo={(channel) => <ChannelLogo channel={channel} live={live} />}
         onClose={() => setView(null)}
       />}
+      {view === 'epg' && <GuidePreviewDialog channels={channels} activeChannelId={activeChannelId} now={now} loadGuide={loadGridGuide} onClose={() => setView(null)} />}
+      {view === 'control' && <ControlRoomDialog now={now} activeChannelId={activeChannelId} onAction={roomAction} onClose={() => setView(null)} />}
       {view === 'week' && activeChannel && <WeekView channel={activeChannel} lineup={slotPreview ? slotPreview.lineup : lineup} programs={viewPrograms} channelStart={slotPreview ? slotPreview.startTime : channelStart} date={selectedDate} kindOf={kindOf} onJump={(date, start, index) => { if (!slotPreview) { jumpTo(date, start, index); return; } changeDate(date); setView(null); }} onExport={exportDays} onClose={() => setView(null)} />}
       {view === 'check' && activeChannel && <LineupCheckDialog channel={activeChannel} channels={channels} lineup={lineup} programs={programming.programs} channelStart={channelStart} date={selectedDate} kindOf={kindOf} live={live} channelFillerListIds={channelFillerIds} knownFillerListIds={knownFillerIds} aiEnabled={aiEnabled} onJump={jumpToIssue} onClose={() => setView(null)} />}
       {view === 'align' && activeChannel && <AlignDialog
@@ -2509,6 +2616,14 @@ export default function Home() {
         onDone={(text) => { notify(text); void tunarrApi.channels().then((list) => setChannels([...list].sort((a, b) => a.number - b.number))).catch(noteFailure); refreshDraftMarks(); }}
         onClose={() => setNetworkMode(null)}
       />}
+      {plannerOpen && activeChannel && base && <PlannerDialog channel={activeChannel} version={base.version} dirty={dirty} generated={hasGeneratedSchedule(programming)} onClose={() => setPlannerOpen(false)} onSaved={(text) => {
+        setPlannerOpen(false);
+        notify(text);
+        void loadProgramming(activeChannel.id, selectedDate);
+        void tunarrApi.channels().then((list) => setChannels([...list].sort((a, b) => a.number - b.number))).catch(noteFailure);
+      }} />}
+      {libraryOpen && <ScheduleCalendarDialog channels={channels} toSave={libraryOpen.toSave} onClose={() => setLibraryOpen(null)} />}
+      {batchTask && <BatchDialog blocked={partRefused} channels={channels} activeChannelId={activeChannelId} initialTask={batchTask.task} initialChannels={batchTask.channelIds} drafts={draftMarks} onDone={afterBatch} onClose={() => setBatchTask(null)} />}
       {watching && channels.find((channel) => channel.id === watching) && <WatchDialog
         channel={channels.find((channel) => channel.id === watching)!}
         channels={channels}

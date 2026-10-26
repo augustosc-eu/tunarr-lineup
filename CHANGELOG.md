@@ -8,6 +8,27 @@ were renamed 2026.10.1 and 2026.10.2.
 
 ## [Unreleased]
 
+### Added
+
+- **Compatibility** (Setup → Server Settings): Tunarr's version, whether it's one Lineup was validated against, and every capability the desk uses, decided by read-only checks (Tunarr's own API description for saves; live streams are never started to check them). A feature this Tunarr doesn't offer (a route answering "no such route", or a required route missing from its API description, such as channel settings that can be read but not saved) explains itself and its Save is turned off up front; managers are checked action by action (create, edit, delete, scan, refresh, sign in, new and deleted channels), so a missing write turns off just that button, with why, and reading keeps working; a timeout, an error or an API description that fails to load never turns anything off; the rest keeps working. **Export diagnostics** saves the report without Tunarr's address or credentials. Test Connection shows the version too.
+- **Control Room** (View → Control Room, `O`): every channel at once (now and next, viewers, guide, scheduled changes, last check), with checks on request that find missing programs, items with no length, bad or looping redirects, breaks from deleted lists, flex time with no filler and guide drift; filters, actions per channel, and an opt-in stream check.
+- **Batch operations** (Channel → Batch Operations…): filler settings, group title, transcode profile, numbers (never two channels on one number, and stopped, never overwriting, if Tunarr changes mid-way) and options across channels, previewed per channel, applied channel by channel only where nothing changed since the preview (an apply missing any channel's preview is refused whole, never cut short; swaps pass through a spare number inside 1–99,999, or are refused before anything moves), reported, and rolled back by choice; **Repair Missing Media…** (remove, keep the time as flex, or replace with a library program, checked in Tunarr and saved with Tunarr's length); **programming packages** to export and import lineups.
+- **Schedule library and calendar** (File → Save to Schedule Library…, Schedule Library & Calendar…): saved lineups put on channels once, every year or every week, in a chosen time zone, with exceptions, priorities and conflicts checked before saving; each occurrence is planned shortly before it starts and steps aside if the channel was edited, is planned again when the calendar changes before it starts (its name and lead time included; the higher priority always wins), never goes in while the calendar can't be checked (it waits, and a save says so instead of failing), needs a saved snapshot before it goes in if it will restore, and ends by restoring exactly, resuming, or keeping.
+- **Advanced planner** (Edit → Advanced Planner…): seeded, weighted rotations between shows, custom shows and picked programs, by airtime or by count, with episode order, season blocks, repeat limits, cooldowns and dayparts (exact to the minute in the chosen zone); the previewed plan is saved exactly, starting at its chosen time, and a plan cut short by the 50,000-program limit is shown as incomplete and can't be saved.
+- **Notifications** (Setup → Server Settings): optional messages to one webhook for scheduled changes, refused saves, unhealthy channels, missing media, guide failures and partial batches; HTTPS on port 443 to public addresses (a private-network address, with http or another port, only when allowed and only when it resolves to private addresses alone), the address write-only, and no names unless opted in.
+- **Guide preview** (View → Guide Preview (XMLTV)…): the hours ahead as guide apps will list them, checked for holes, overlaps and unreadable entries, with an XMLTV preview to download. Tunarr still serves the real guide.
+
+### Changed
+
+- A Tunarr route that doesn't exist now answers `501 tunarr_unsupported` instead of "not found".
+- A manual save may carry a `startTime` (used by the planner).
+
+### Fixed
+
+- A renumbering whose preview included a channel since deleted in Tunarr now moves nothing (it used to renumber the others, so one half of a swap could go in).
+- Duplicate Channel is checked on its own (copying needs Tunarr to read and save the copy too), the New Channel dialog turns its button off when “Start from” picks something this Tunarr can't do, and the Lineup server refuses such a channel before writing anything. Duplicate Channel no longer reads transcode profiles; the dialog reads them once, when an empty channel is chosen and allowed.
+- Filler-folder pickup no longer calls routes the compatibility check found missing: each step (adding the upload folder, reading a folder, making or refreshing a list) is left out on its own, the rest still runs, and Filler Folders says what was left out. The first pickup after a start waits for the compatibility check (or the one already running) instead of going ahead without it.
+
 ## [2026.10.19] - 2026-10-25
 
 ### Fixed

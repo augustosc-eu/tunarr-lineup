@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { durationTimecode } from '../../lib/broadcast';
+import { refusedParts, type PartBlocker } from '../../lib/compatibility';
 import { FILLER_ROLES, guessRole, roleOf, ROLE_LABELS, ROLE_SPOT_LABELS, spotBreakdown, spotLength, type FillerRole, type FillerRoles } from '../../lib/fillerRoles';
 import type { ContentProgram, ListSummary } from '../../lib/library';
 import { tunarrApi } from '../../lib/tunarrClient';
@@ -17,6 +18,8 @@ type Props = {
   onRoleChange?: (listId: string, role: FillerRole | null) => Promise<void>;
   /** Filler only: open filtered to one role (Lists → Station IDs… / Commercials…). */
   initialRole?: FillerRole;
+  /** Why this Tunarr refuses one of the dialog's actions (create, edit, delete), from the compatibility report. */
+  blocked?: PartBlocker;
 };
 
 const TITLES: Partial<Record<FillerRole, string>> = { 'station-id': 'Station IDs', commercials: 'Commercials' };
@@ -33,7 +36,11 @@ const describe = (program: ContentProgram) => {
 };
 const errorText = (error: unknown) => (error instanceof Error ? error.message : 'Something went wrong.');
 
-export function ListsManager({ kind, onClose, onChanged, roles = {}, onRoleChange, initialRole }: Props) {
+export function ListsManager({ kind, onClose, onChanged, roles = {}, onRoleChange, initialRole, blocked }: Props) {
+  const capability = kind === 'filler' ? 'filler-lists' : 'custom-shows';
+  // Actions this Tunarr's API doesn't offer are turned off, and the note says why.
+  const refused = (part: 'create' | 'edit' | 'delete') => !!blocked?.(capability, part);
+  const refusals = refusedParts(blocked, [[capability, 'create'], [capability, 'edit'], [capability, 'delete'], [capability, 'contents']]);
   const noun = kind === 'filler' ? (initialRole === 'station-id' ? 'station ID list' : initialRole === 'commercials' ? 'commercial list' : 'filler list') : 'custom show';
   const [filter, setFilter] = useState<FillerRole | 'all'>(kind === 'filler' && initialRole ? initialRole : 'all');
   // A new list's role is stored once Tunarr has given it an id.
@@ -153,9 +160,10 @@ export function ListsManager({ kind, onClose, onChanged, roles = {}, onRoleChang
         {kind === 'filler' && <div className="segmented role-filter" role="radiogroup" aria-label="Show lists for">
           {(['all', ...FILLER_ROLES] as const).map((role) => <button key={role} role="radio" aria-checked={filter === role} className={filter === role ? 'primary' : ''} onClick={() => setFilter(role)}>{role === 'all' ? 'All' : ROLE_LABELS[role]}</button>)}
         </div>}
+        {refusals.length > 0 && <div className="warning" role="note"><b>Not on this Tunarr</b>{refusals.map((reason) => <span key={reason}>{reason}</span>)}</div>}
         <div className="lists-layout">
           <div className="lists-index">
-            <button className="wide primary" onClick={() => { setEditing({ id: null, name: '', programs: [], loaded: true, synced: false }); setPendingRole(filter === 'all' ? '' : filter); setDirty(true); setConfirmDelete(false); }}>New {noun}</button>
+            <button className="wide primary" disabled={refused('create')} onClick={() => { setEditing({ id: null, name: '', programs: [], loaded: true, synced: false }); setPendingRole(filter === 'all' ? '' : filter); setDirty(true); setConfirmDelete(false); }}>New {noun}</button>
             <div className="candidate-list" role="listbox" aria-label={kind === 'filler' ? 'Filler lists' : 'Custom shows'}>
               {lists === null && <p className="subtle candidate-empty">Loading…</p>}
               {shown?.length === 0 && <p className="subtle candidate-empty">{lists?.length && filter !== 'all' ? `No lists tagged ${ROLE_LABELS[filter]} yet. Pick a list under All and set its role.` : 'None yet.'}</p>}
@@ -202,9 +210,9 @@ export function ListsManager({ kind, onClose, onChanged, roles = {}, onRoleChang
               <div className="dialog-actions">
                 {editing.id && (confirmDelete
                   ? <><span className="subtle">Delete “{editing.name}”? Channels and slots using it will lose it.</span><button onClick={() => setConfirmDelete(false)}>Keep</button><button className="primary" disabled={busy} onClick={() => void remove()}>Delete</button></>
-                  : <button disabled={busy} onClick={() => setConfirmDelete(true)}>Delete…</button>)}
+                  : <button disabled={busy || refused('delete')} onClick={() => setConfirmDelete(true)}>Delete…</button>)}
                 <span className="spacer" />
-                <button className="primary" disabled={!canSave} onClick={() => void save()}>{busy ? 'Saving…' : editing.id ? 'Save changes' : `Create ${noun}`}</button>
+                <button className="primary" disabled={!canSave || refused(editing.id ? 'edit' : 'create')} onClick={() => void save()}>{busy ? 'Saving…' : editing.id ? 'Save changes' : `Create ${noun}`}</button>
               </div>
             </>}
           </div>

@@ -102,10 +102,31 @@ function initialState() {
     synthetic: {},
     // Extra wait before answering a channel's programming (/__test/delay), to stand in for a slow Tunarr.
     programmingDelayMs: 0,
+    // Routes this Tunarr "doesn't have" (/__test/missing-routes), answered like Fastify's unknown route.
+    missingRoutes: [],
   };
 }
 
 let state = initialState();
+
+// The routes Lineup's compatibility check looks for, as Tunarr's OpenAPI document lists them.
+const API_PATHS = {
+  '/api/channels': ['get', 'post'], '/api/channels/{id}': ['get', 'put', 'delete'], '/api/channels/{id}/programming': ['get', 'post'],
+  '/api/channels/{channelId}/schedule-slots': ['post'], '/api/channels/{channelId}/schedule-time-slots': ['post'], '/api/channels/{id}/lineup': ['get'],
+  '/api/guide/channels': ['get'], '/api/sessions': ['get'],
+  '/api/filler-lists': ['get', 'post'], '/api/filler-lists/{id}': ['get', 'put', 'delete'], '/api/filler-lists/{id}/programs': ['get'],
+  '/api/custom-shows': ['get', 'post'], '/api/custom-shows/{id}': ['get', 'put', 'delete'], '/api/custom-shows/{id}/programs': ['get'],
+  '/api/smart_collections': ['get', 'post'], '/api/smart_collections/{id}': ['get', 'put', 'delete'],
+  '/api/media-sources': ['get', 'post'], '/api/media-sources/{id}': ['delete'], '/api/media-sources/{id}/libraries/refresh': ['post'],
+  '/api/media-sources/{id}/libraries/{libraryId}': ['put'], '/api/media-sources/{id}/libraries/{libraryId}/scan': ['post'],
+  '/api/jellyfin/login': ['post'], '/api/emby/login': ['post'],
+  '/api/programs/search': ['post'], '/api/programs/{id}': ['get'], '/api/programs/{id}/descendants': ['get'],
+  '/api/transcode_configs': ['get'], '/api/transcode_configs/{id}': ['get', 'put', 'delete'], '/api/transcode_configs/{id}/copy': ['post'],
+};
+const openApi = () => ({
+  openapi: '3.1.0', info: { title: 'Tunarr', version: '1.3.13' },
+  paths: Object.fromEntries(Object.entries(API_PATHS).filter(([route]) => !state.missingRoutes.includes(route.replace(/\{[^}]+\}/g, '*'))).map(([route, methods]) => [route, Object.fromEntries(methods.map((method) => [method, {}]))])),
+});
 
 function guide(channel, lineup, from, to) {
   // Tunarr only keeps a guide around "now"; mimic that window.
@@ -172,6 +193,18 @@ http.createServer(async (req, res) => {
     state.synthetic[channel.id] = programming;
     return send(res, 200, { id: channel.id, name: channel.name });
   }
+  // Media that left the library: the lineup still names it, but Tunarr has no details (/__test/forget-program).
+  if (path === '/__test/forget-program' && req.method === 'POST') {
+    delete state.programs[JSON.parse(await readBody(req)).id];
+    return send(res, 200, { ok: true });
+  }
+  if (path === '/__test/missing-routes' && req.method === 'POST') {
+    state.missingRoutes = JSON.parse(await readBody(req)).routes;
+    return send(res, 200, { ok: true });
+  }
+  if (state.missingRoutes.includes(path)) return send(res, 404, { message: `Route ${req.method}:${path} not found`, error: 'Not Found', statusCode: 404 });
+  if (path === '/api/version') return send(res, 200, { tunarr: '1.3.13', ffmpeg: '7.1-fake', nodejs: process.version });
+  if (path === '/openapi.json') return send(res, 200, openApi());
   if (path === '/__test/delay' && req.method === 'POST') {
     state.programmingDelayMs = JSON.parse(await readBody(req)).ms;
     return send(res, 200, { ok: true });
@@ -258,6 +291,12 @@ http.createServer(async (req, res) => {
   // The show's episodes, in order; anything else has none.
   if (path === `/api/programs/${ids.show}/descendants`) return send(res, 200, [state.programs[ids.ep1], state.programs[ids.ep2]].map((episode, index) => ({ ...episode, program: { ...episode.program, uuid: episode.id, seasonNumber: 1, episodeNumber: index + 1 } })));
   if (/^\/api\/programs\/[^/]+\/descendants$/.test(path)) return send(res, 200, []);
+  // One program as Tunarr indexes it (media repair checks a replacement with this).
+  const oneProgram = /^\/api\/programs\/([^/]+)$/.exec(path);
+  if (oneProgram && req.method === 'GET') {
+    const known = state.programs[oneProgram[1]] ?? libraryMovies.find((movie) => movie.id === oneProgram[1] || movie.uuid === oneProgram[1]);
+    return known ? send(res, 200, { ...(known.program ?? {}), ...known, id: oneProgram[1] }) : send(res, 404, { message: 'Program not found' });
+  }
   if (path === '/api/custom-shows') return send(res, 200, []);
   if (path === '/api/filler-lists' && req.method === 'GET') return send(res, 200, state.fillerLists.map(({ id, name, programs }) => ({ id, name, contentCount: programs.length })));
   if (path === '/api/filler-lists' && req.method === 'POST') {

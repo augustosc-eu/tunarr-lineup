@@ -2,9 +2,12 @@
 
 import { useEffect, useState } from 'react';
 import { tunarrApi, type ConfigChanges, type ConfigView, type SettingsView } from '../../lib/tunarrClient';
+import { CompatibilityPanel } from './CompatibilityPanel';
+import { NotificationsPanel } from './NotificationsPanel';
+import type { CompatibilityReport } from '../../lib/compatibility';
 import { aiChanges, aiDraftOf, AiFieldsEditor, mediaDraftOf, MediaFieldsEditor, TunarrAddressField, type AiDraft, type MediaDraft } from './SetupWizard';
 
-type Props = { onClose: () => void; onSaved?: () => void };
+type Props = { onClose: () => void; onSaved?: () => void; onCompatibility?: (report: CompatibilityReport) => void };
 type Value = number | boolean | string;
 type Setting = SettingsView['editable'][number];
 
@@ -15,7 +18,7 @@ const shown = (setting: Setting, value: Value | null) => (value === null ? 'not 
 const sameAi = (a: AiDraft, b: AiDraft) => a.provider === b.provider && (a.model ?? '') === (b.model ?? '') && (a.baseUrl ?? '') === (b.baseUrl ?? '') && !a.apiKey;
 
 /** Setup → Server Settings…: Tunarr, AI, the media folder and the sign-in (server/setup.ts), then the tuning settings (server/settings.ts). */
-export function ServerSettingsDialog({ onClose, onSaved }: Props) {
+export function ServerSettingsDialog({ onClose, onSaved, onCompatibility }: Props) {
   const [view, setView] = useState<SettingsView | null>(null);
   const [draft, setDraft] = useState<Record<string, Value>>({});
   const [busy, setBusy] = useState(false);
@@ -28,6 +31,7 @@ export function ServerSettingsDialog({ onClose, onSaved }: Props) {
   const [media, setMedia] = useState<MediaDraft>({ dir: '', tunarrDir: '' });
   const [account, setAccount] = useState({ username: '', currentPassword: '', newPassword: '', confirm: '' });
   const [signedOut, setSignedOut] = useState(false);
+  const [checks, setChecks] = useState(0);
 
   const showConfig = (loaded: ConfigView) => {
     setConfig(loaded);
@@ -81,6 +85,8 @@ export function ServerSettingsDialog({ onClose, onSaved }: Props) {
 
   const saveConnection = () => run(async () => {
     showConfig(await tunarrApi.saveServerConfig(connectionChanges));
+    // A new address is a different Tunarr: check it again (the panel remounts).
+    if (connectionChanges.tunarrUrl !== undefined) setChecks((count) => count + 1);
     // The tuning settings fall back to these values, so show them again too.
     setView(await tunarrApi.settings());
   }, 'Connection settings saved. They apply right away.');
@@ -113,6 +119,8 @@ export function ServerSettingsDialog({ onClose, onSaved }: Props) {
           <div className="dialog-actions">
             <button className="primary" disabled={!connectionChanged || busy} onClick={() => void saveConnection()}>{busy ? 'Saving…' : 'Save connection settings'}</button>
           </div>
+          <h3 className="section-title">Notifications</h3>
+          <NotificationsPanel view={config.notifications} onSaved={showConfig} />
           <h3 className="section-title">Sign-in</h3>
           <div className="setup-group">
             <label className="field"><span>User name</span><input aria-label="Sign-in user name" autoComplete="username" value={account.username} onChange={(event) => setAccount({ ...account, username: event.target.value })} /></label>
@@ -126,6 +134,9 @@ export function ServerSettingsDialog({ onClose, onSaved }: Props) {
               : <button disabled={!accountChanged || busy} onClick={() => void saveAccount()}>Change sign-in</button>}
           </div>
         </>}
+        <h3 className="section-title">Compatibility</h3>
+        <p className="subtle">What the saved Tunarr can do for Lineup, from read-only checks. Nothing here changes Tunarr.</p>
+        <CompatibilityPanel key={checks} onReport={onCompatibility} />
         {!view ? <p className="subtle">{error || 'Loading server settings…'}</p> : <>
           <h3 className="section-title">Tuning</h3>
           <p className="subtle">Changes here take effect right away and are kept by the Lineup server (settings.json in its data folder). They win over the value from setup until you reset them.</p>

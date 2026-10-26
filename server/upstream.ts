@@ -41,6 +41,18 @@ function upstreamMessage(text: string) {
   return message.replace(/\s+/g, ' ').trim().slice(0, 300);
 }
 
+/** Fastify's default 404 body: `{"message":"Route GET:/api/x not found","error":"Not Found","statusCode":404}`. */
+export function routeMissing(bytes: Uint8Array) {
+  if (!bytes.byteLength || bytes.byteLength > 2048) return false;
+  try {
+    const parsed = JSON.parse(new TextDecoder().decode(bytes)) as unknown;
+    const message = parsed && typeof parsed === 'object' ? (parsed as { message?: unknown }).message : undefined;
+    return typeof message === 'string' && /^Route (GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS):\S+ not found$/.test(message);
+  } catch {
+    return false;
+  }
+}
+
 export async function fetchUpstream(
   config: ProxyConfig,
   target: TunarrTarget,
@@ -78,7 +90,14 @@ export async function fetchUpstream(
   if (response.status >= 300 && response.status < 400) {
     throw new UpstreamError(502, 'tunarr_redirect', `Tunarr at ${target.host} answered with a redirect. Check Tunarr’s address under Setup → Server Settings.`);
   }
-  if (response.status === 404) throw new UpstreamError(404, 'not_found', options.notFound);
+  if (response.status === 404) {
+    // Tunarr's own "no such route" (Fastify's default reply) means this Tunarr
+    // doesn't offer the endpoint at all, which is not the same as "no such channel".
+    if (path.startsWith('/api/') && routeMissing(bytes)) {
+      throw new UpstreamError(501, 'tunarr_unsupported', `This Tunarr doesn’t offer ${method} ${path.split('?')[0]}. It may be a different version than Lineup expects; see Setup → Server Settings → Compatibility.`);
+    }
+    throw new UpstreamError(404, 'not_found', options.notFound);
+  }
   if (response.status === 400) {
     const text = new TextDecoder().decode(bytes);
     throw new UpstreamError(400, 'tunarr_rejected', upstreamMessage(text) || 'Tunarr rejected the request.');

@@ -122,3 +122,30 @@ describe('ServerSettingsDialog connection', () => {
     await waitFor(() => expect(screen.getByRole('alert').textContent).toMatch(/isn’t the current password/));
   });
 });
+
+describe('ServerSettingsDialog notifications', () => {
+  it('turns notifications on with a write-only address, sends a test, and turns them off', async () => {
+    const config = await companion();
+    const sent: string[] = [];
+    config.notifyHooks = { send: async (_url, body) => { sent.push(body); return { status: 204 }; } };
+    throughCompanion(config);
+    await handleTunarrApi({ method: 'POST', url: '/api/tunarr/setup/finish', headers: { host: 'lineup.test', 'content-type': 'application/json' }, body: JSON.stringify({ code: CODE, tunarrUrl: 'http://tunarr:8000', account: { username: 'ops', password: 'correct horse' } }) }, config);
+    render(<ServerSettingsDialog onClose={() => undefined} />);
+    const address = await screen.findByLabelText('Webhook address');
+    expect(screen.getByText('Off')).toBeTruthy();
+    fireEvent.change(address, { target: { value: 'https://ntfy.example.com/secret-topic' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: /A save was refused/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save notifications' }));
+    expect(await screen.findByText('On · ntfy.example.com')).toBeTruthy();
+    expect(document.body.textContent).not.toContain('secret-topic');
+    expect(config.notifier?.settings?.events.has('save.conflict')).toBe(true);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send a test' }));
+    expect(await screen.findByText('Test sent (the webhook answered 204).')).toBeTruthy();
+    expect(JSON.parse(sent[0])).toMatchObject({ schema: 'tunarr-lineup.notification', version: 1, event: 'test' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Turn off' }));
+    expect(await screen.findByText('Notifications are off.')).toBeTruthy();
+    expect(config.notifier?.settings).toBeNull();
+  });
+});

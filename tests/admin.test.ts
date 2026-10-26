@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { manageableSources, validateMediaSourceAdd, validateTranscodeChanges } from '../server/admin';
+import { compatibility } from '../server/compatibility';
 import { clearLogoCache, isPublicAddress, logoSource } from '../server/logos';
 import { describeRules, filterToRules, rulesToFilter } from '../server/smartCollection';
 import { createProxyConfig, handleTunarrApi, type ProxyConfig, type ProxyRequest, type TunarrTarget } from '../server/tunarrProxy';
@@ -78,6 +79,34 @@ describe('channels', () => {
     expect(calls.every((call) => call.method === 'GET')).toBe(true);
     expect((await handleTunarrApi(req('POST', '/channels/create', { name: '' }), config)).status).toBe(400);
     expect((await handleTunarrApi(req('POST', '/channels/create', { name: 'x', copyFrom: '../etc' }), config)).status).toBe(400);
+  });
+
+  it('refuses a duplicate or new channel before any write once the check shows a route it needs is missing', async () => {
+    // Tunarr lists POST /api/channels but not PUT /api/channels/:id: a copy would be made and never renamed.
+    const paths = { '/api/channels': { get: {}, post: {} }, '/api/channels/{id}': { get: {}, delete: {} }, '/api/transcode_configs': { get: {} } };
+    const { calls, config } = harness((url, method) => {
+      if (url === '/openapi.json') return { info: { version: '1.3.13' }, paths };
+      if (url === '/api/channels' && method === 'GET') return channels;
+      if (url === '/api/transcode_configs') return [{ id: PROFILE, isDefault: true }];
+      if (url.startsWith('/api/channels/') && method === 'GET') return channels[0];
+      if (url === '/api/channels' && method === 'POST') return { id: 'new-id' };
+      return url.startsWith('/api/') ? [] : {};
+    });
+    await compatibility(config);
+    calls.length = 0;
+    const copy = await handleTunarrApi(req('POST', '/channels/create', { name: 'One again', copyFrom: 'chan-1' }), config);
+    expect(copy.status).toBe(501);
+    expect(parse(copy).error.message).toContain('duplicating channels');
+    expect(calls).toEqual([]);
+    // Creating an empty channel needs only what's listed, so it still goes ahead.
+    expect((await handleTunarrApi(req('POST', '/channels/create', { name: 'Fresh' }), config)).status).toBe(201);
+    expect(calls.filter((call) => call.method !== 'GET').map((call) => call.url)).toEqual(['/api/channels']);
+  });
+
+  it('tries a duplicate as before when there is no check to go by', async () => {
+    const { calls, config } = harness((url, method) => (url === '/api/channels' && method === 'GET' ? channels : url === '/api/channels' ? { id: 'copy-id' } : { id: 'copy-id', name: 'x', number: 9 }));
+    expect((await handleTunarrApi(req('POST', '/channels/create', { name: 'Copy', copyFrom: 'chan-1' }), config)).status).toBe(201);
+    expect(calls.filter((call) => call.method !== 'GET').map((call) => call.method)).toEqual(['POST', 'PUT']);
   });
 
   it('deletes a channel by id only', async () => {

@@ -4,8 +4,8 @@ import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { itemIdentity, programmingVersion } from '../server/lineupVersion';
 import { premierePlacement } from '../server/premiere';
-import { createScheduler, findPatch, validatePlan, type ScheduledChange } from '../server/scheduler';
-import { createSnapshotStore } from '../server/snapshotStore';
+import { CalendarCheckError, createScheduler, findPatch, validatePlan, type CalendarGuard, type ScheduledChange } from '../server/scheduler';
+import { createSnapshotStore, type SnapshotStore } from '../server/snapshotStore';
 import { createProxyConfig, handleTunarrApi, type ProxyConfig } from '../server/tunarrProxy';
 
 const CHANNEL = 'chan-1';
@@ -194,6 +194,82 @@ describe('scheduler', () => {
     expect(ended.message).toContain('Snapshots');
   });
 
+  describe('the snapshot a restore depends on', () => {
+    const overlay = (at = now + 1000) => ({
+      group: 'overlay' as const,
+      changes: [
+        { channelId: CHANNEL, channelName: '', label: 'Holidays', at, action: { kind: 'lineup' as const, lineup: [C], expectVersion: programmingVersion([A, B], undefined) }, programs: {} },
+        { channelId: CHANNEL, channelName: '', label: 'Holidays end', at: at + 4000, action: { kind: 'restore' as const, after: '#0' }, programs: {} },
+      ],
+    });
+    /** A scheduler whose snapshot store fails in the chosen way. */
+    async function withSnapshots(make: (real: SnapshotStore) => SnapshotStore) {
+      const base = await fakeTunarr([A, B]);
+      const scheduler = createScheduler(base.config, { enabled: true, dataDir: await mkdtemp(path.join(tmpdir(), 'lineup-scheduler-')), snapshots: make(base.snapshots) });
+      return { ...base, scheduler };
+    }
+    const writes = (state: { saves: unknown[][] }) => state.saves.length;
+
+    it('doesn’t write to Tunarr when the snapshot can’t be kept, and says so', async () => {
+      for (const broken of [
+        (real: SnapshotStore): SnapshotStore => ({ ...real, take: async () => { throw new Error('disk full'); }, list: async () => { throw new Error('disk full'); } }),
+        // Written, but it can't be read back (as after a lost file).
+        (real: SnapshotStore): SnapshotStore => ({ ...real, get: async () => undefined }),
+      ]) {
+        const { state, scheduler } = await withSnapshots(broken);
+        await scheduler.store.add(overlay());
+        await scheduler.runDue(now + 2000);
+        expect(writes(state)).toBe(0);
+        expect(state.lineup).toEqual([A, B]);
+        const [begin, end] = await scheduler.store.list();
+        expect(begin).toMatchObject({ status: 'failed', message: expect.stringContaining('No snapshot') });
+        expect(end).toMatchObject({ status: 'skipped' });
+      }
+    });
+
+    it('applies and restores when the snapshot is on disk', async () => {
+      const { state, scheduler, snapshots } = await fakeTunarr([A, B]);
+      await scheduler.store.add(overlay());
+      await scheduler.runDue(now + 2000);
+      const [begin] = await scheduler.store.list();
+      expect(begin.status).toBe('done');
+      expect(await snapshots.get(CHANNEL, begin.snapshotId!)).toMatchObject({ lineup: [A, B] });
+      await scheduler.runDue(now + 6000);
+      expect(state.lineup).toEqual([A, B]);
+      expect((await scheduler.store.list()).every((change) => change.status === 'done')).toBe(true);
+    });
+
+    it('reports a restore whose snapshot went missing as failed, not done or silently skipped', async () => {
+      const { state, scheduler } = await fakeTunarr([A, B]);
+      await scheduler.store.add(overlay());
+      await scheduler.runDue(now + 2000);
+      const [begin] = await scheduler.store.list();
+      await scheduler.store.update(begin.id, { snapshotId: '00000000-0000-4000-8000-000000000000' });
+      await scheduler.runDue(now + 6000);
+      expect(state.lineup).toEqual([C]);
+      const end = (await scheduler.store.list()).find((change) => change.label === 'Holidays end')!;
+      expect(end).toMatchObject({ status: 'failed', message: expect.stringContaining('snapshot taken before “Holidays” is missing') });
+    });
+
+    it('skips the restore, never forcing it, when the channel changed before it', async () => {
+      const { state, scheduler } = await fakeTunarr([A, B]);
+      await scheduler.store.add(overlay());
+      await scheduler.runDue(now + 2000);
+      state.lineup = [B];
+      await scheduler.runDue(now + 6000);
+      expect(state.lineup).toEqual([B]);
+      expect(state.saves).toHaveLength(1);
+      expect((await scheduler.store.list()).find((change) => change.label === 'Holidays end')).toMatchObject({ status: 'skipped', message: expect.stringContaining('was changed during') });
+    });
+
+    it('keeps D50 for a plain dated save: it still goes in without a snapshot', async () => {
+      const { state, scheduler } = await withSnapshots((real) => ({ ...real, take: async () => { throw new Error('disk full'); }, list: async () => { throw new Error('disk full'); } }));
+      await scheduler.store.add({ group: 'save', changes: [overlay().changes[0]] });
+      await scheduler.runDue(now + 2000);
+      expect(state.lineup).toEqual([C]);
+    });
+  });
+
   it('skips changes the companion missed, and cancels a whole plan together', async () => {
     const { scheduler } = await fakeTunarr([A]);
     await scheduler.store.add({ group: 'save', changes: [{ channelId: CHANNEL, channelName: '', label: 'Late', at: now, notAfter: now + 1000, action: { kind: 'lineup', lineup: [B], expectVersion: 'x-y-z' }, programs: {} }] });
@@ -209,6 +285,71 @@ describe('scheduler', () => {
     });
     expect(await scheduler.store.cancel(plan[0].id)).toBe(true);
     expect((await scheduler.store.list()).filter((change) => change.planId === plan[0].planId).map((change) => change.status)).toEqual(['cancelled', 'cancelled']);
+  });
+
+  describe('calendar changes and the calendar guard', () => {
+    const calendarPlan = (at: number) => ({ group: 'calendar' as const, calendarId: 'entry', changes: [{ channelId: CHANNEL, channelName: '', label: 'Halloween', at, action: { kind: 'lineup' as const, lineup: [C], expectVersion: programmingVersion([A], undefined) }, programs: {} }] });
+    const savePlan = (at: number, lineup: unknown[]) => ({ group: 'save' as const, changes: [{ channelId: CHANNEL, channelName: '', label: 'Later', at, action: { kind: 'lineup' as const, lineup: lineup as typeof A[], expectVersion: programmingVersion([C], undefined) }, programs: {} }] });
+    async function withGuard(guard?: CalendarGuard) {
+      const base = await fakeTunarr([A]);
+      const scheduler = createScheduler(base.config, { enabled: true, dataDir: await mkdtemp(path.join(tmpdir(), 'lineup-scheduler-')), snapshots: base.snapshots, calendarGuard: guard });
+      return { ...base, scheduler };
+    }
+
+    it('holds a calendar change, and what follows it on the channel, while the calendar can’t be checked', async () => {
+      let broken = true;
+      const guard: CalendarGuard = async (_now, apply) => { if (broken) throw new CalendarCheckError('no'); return apply(); };
+      const { state, scheduler } = await withGuard(guard);
+      await scheduler.store.add(calendarPlan(now + 1000));
+      await scheduler.store.add(savePlan(now + 2000, [B]));
+      expect(await scheduler.runDue(now + 3000)).toBe(0);
+      expect(state.saves).toEqual([]);
+      const held = await scheduler.store.list();
+      expect(held.map((change) => [change.status, change.held])).toEqual([['pending', true], ['pending', true]]);
+      expect(held[1].message).toContain('calendar occurrence due before it');
+      broken = false;
+      await scheduler.runDue(now + 4000);
+      // In order: the occurrence, then the save planned on top of it.
+      expect(state.saves).toEqual([[C], [B]]);
+      expect((await scheduler.store.list()).map((change) => [change.status, change.held])).toEqual([['done', undefined], ['done', undefined]]);
+    });
+
+    it('lets changes on other channels, or before the calendar one, go in', async () => {
+      const guard: CalendarGuard = async () => { throw new CalendarCheckError('no'); };
+      const { state, scheduler } = await withGuard(guard);
+      await scheduler.store.add({ group: 'save', changes: [{ ...savePlan(now + 500, [B]).changes[0], action: { kind: 'lineup', lineup: [B], expectVersion: programmingVersion([A], undefined) } }] });
+      await scheduler.store.add(calendarPlan(now + 1000));
+      await scheduler.runDue(now + 3000);
+      expect(state.saves).toEqual([[B]]);
+      expect((await scheduler.store.list()).map((change) => change.status)).toEqual(['done', 'pending']);
+    });
+
+    it('never applies a calendar change without a guard, and skips one whose time ran out while held', async () => {
+      const { state, scheduler } = await withGuard();
+      await scheduler.store.add({ ...calendarPlan(now + 1000), changes: [{ ...calendarPlan(now + 1000).changes[0], notAfter: now + 5000 }] });
+      await scheduler.runDue(now + 2000);
+      expect(state.saves).toEqual([]);
+      expect((await scheduler.store.list())[0]).toMatchObject({ status: 'pending', held: true });
+      await scheduler.runDue(now + 6000);
+      expect((await scheduler.store.list())[0]).toMatchObject({ status: 'skipped', message: expect.stringContaining('waiting for the calendar') });
+      expect(state.saves).toEqual([]);
+    });
+
+    it('doesn’t apply a change cancelled while it waited for its turn', async () => {
+      const ref: { scheduler?: Awaited<ReturnType<typeof withGuard>>['scheduler'] } = {};
+      const guard: CalendarGuard = async (_now, apply) => {
+        // The calendar's reconcile cancels it (its entry changed) just before it would go in.
+        await ref.scheduler!.store.cancel((await ref.scheduler!.store.list())[0].id, 'Cancelled before it started.');
+        return apply();
+      };
+      const made = await withGuard(guard);
+      const scheduler = made.scheduler;
+      ref.scheduler = scheduler;
+      await scheduler.store.add(calendarPlan(now + 1000));
+      await scheduler.runDue(now + 2000);
+      expect(made.state.saves).toEqual([]);
+      expect((await scheduler.store.list())[0]).toMatchObject({ status: 'cancelled', message: 'Cancelled before it started.' });
+    });
   });
 
   it('refuses new plans when the scheduler is off, but still lists', async () => {

@@ -1,12 +1,19 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { refusedParts, type PartBlocker } from '../../lib/compatibility';
 import { FILLER_ROLES, folderRole, ROLE_LABELS, type FillerRole, type FillerRoles } from '../../lib/fillerRoles';
 import type { ListSummary, ManagedSource } from '../../lib/library';
 import { mediaFileUrl, tunarrApi, uploadMediaFile, type FillerSync, type MediaFolderStatus } from '../../lib/tunarrClient';
 import type { FillerFolders } from '../../server/fillerRoles';
 
-type Props = { roles: FillerRoles; onClose: () => void; onChanged: () => void };
+type Props = {
+  roles: FillerRoles;
+  onClose: () => void;
+  onChanged: () => void;
+  /** Why this Tunarr refuses adding folders, scanning or making lists, from the compatibility report. */
+  blocked?: PartBlocker;
+};
 type Folder = { mediaSourceId: string; libraryId: string; name: string; source?: string; scanned?: number; scanning?: boolean };
 
 /** How often the open dialog checks Tunarr for finished scans. */
@@ -47,7 +54,15 @@ function syncText(sync: FillerSync, lists: ListSummary[]) {
  * follow their folder after each scan. Libraries with no obvious role get a
  * one-time "Make filler list".
  */
-export function FillerFoldersDialog({ roles, onClose, onChanged }: Props) {
+export function FillerFoldersDialog({ roles, onClose, onChanged, blocked }: Props) {
+  // Actions this Tunarr's API doesn't offer are turned off, and the note says why.
+  const noAdd = !!blocked?.('media-sources', 'create');
+  const noScan = !!blocked?.('media-sources', 'scan');
+  const noList = !!blocked?.('filler-lists', 'create');
+  const refusals = refusedParts(blocked, [['media-sources', 'create'], ['media-sources', 'scan'], ['filler-lists', 'create']]);
+  // Pickup only adds the upload folder and makes or refreshes lists: with all of that refused, it isn't asked for at all
+  // (the server leaves out each refused step on its own too).
+  const noPickUp = noAdd && noList && !!blocked?.('filler-lists', 'edit');
   const [status, setStatus] = useState<MediaFolderStatus | null>(null);
   const [sources, setSources] = useState<ManagedSource[] | null>(null);
   const [lists, setLists] = useState<ListSummary[]>([]);
@@ -57,6 +72,7 @@ export function FillerFoldersDialog({ roles, onClose, onChanged }: Props) {
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [syncErrors, setSyncErrors] = useState<string[]>([]);
+  const [syncSkipped, setSyncSkipped] = useState<string[]>([]);
   const [confirmDelete, setConfirmDelete] = useState('');
   const [copied, setCopied] = useState('');
   const [folderRoles, setFolderRoles] = useState<Record<string, FillerRole>>({});
@@ -83,10 +99,12 @@ export function FillerFoldersDialog({ roles, onClose, onChanged }: Props) {
 
   const pickUp = useCallback(() => {
     if (busy.current) return Promise.resolve();
+    if (noPickUp) return load().then(() => undefined);
     return tunarrApi.syncFillerFolders()
       .then(async (sync) => {
         const found = await load();
         setSyncErrors(sync.errors);
+        setSyncSkipped(sync.skipped ?? []);
         const text = syncText(sync, found);
         if (text) {
           setMessage(text);
@@ -94,13 +112,14 @@ export function FillerFoldersDialog({ roles, onClose, onChanged }: Props) {
         }
       })
       .catch(async (reason) => { setSyncErrors([errorText(reason)]); await load(); });
-  }, [load]);
+  }, [load, noPickUp]);
 
   useEffect(() => {
     void pickUp();
+    if (noPickUp) return;
     const timer = window.setInterval(() => void pickUp(), PICK_UP_MS);
     return () => window.clearInterval(timer);
-  }, [pickUp]);
+  }, [noPickUp, pickUp]);
 
   const run = async (key: string, task: () => Promise<string>) => {
     busy.current = true;
@@ -184,7 +203,7 @@ export function FillerFoldersDialog({ roles, onClose, onChanged }: Props) {
           <b>{folder.name}</b><small>{folder.source} · {scannedText(folder)}</small>
           <span className="spacer" />
           <small>{list ? `→ “${list.name}”${role ? ` (${ROLE_LABELS[role]})` : ''}` : `→ a ${role ? ROLE_LABELS[role] : 'filler'} list after its scan`}</small>
-          <button disabled={!!working} onClick={() => void scan(folder)}>{working === `scan-${folder.libraryId}` ? 'Starting…' : 'Scan now'}</button>
+          <button disabled={!!working || noScan} onClick={() => void scan(folder)}>{working === `scan-${folder.libraryId}` ? 'Starting…' : 'Scan now'}</button>
         </div>
       </div>
     );
@@ -196,6 +215,7 @@ export function FillerFoldersDialog({ roles, onClose, onChanged }: Props) {
         <button className="modal-close" aria-label="Close" onClick={onClose}>×</button>
         <p className="eyebrow">SETUP</p>
         <h2 id="folders-title">Filler folders</h2>
+        {refusals.length > 0 && <div className="warning" role="note"><b>Not on this Tunarr</b>{refusals.map((reason) => <span key={reason}>{reason}</span>)}</div>}
         <p className="subtle">Keep station IDs, commercials, promos and bumpers as video files in folders. Lineup picks them up by itself: the upload folder, folders you add here, and any Tunarr library named for a role (“Commercials”, “station-ids”). Each becomes a filler list with its role, and the list follows its folder after every Tunarr scan.</p>
 
         <h3 className="section-title">Upload folder</h3>
@@ -219,7 +239,7 @@ export function FillerFoldersDialog({ roles, onClose, onChanged }: Props) {
                     <input type="file" accept="video/*,.mkv,.ts,.m2ts" multiple hidden aria-label={`Upload to ${ROLE_LABELS[folder.role]}`} ref={(element) => { inputs.current[folder.role] = element; }}
                       onChange={(event) => { const files = [...(event.target.files ?? [])]; event.target.value = ''; if (files.length) void upload(folder.role, files, linked); }} />
                     <button disabled={!!working} onClick={() => inputs.current[folder.role]?.click()}>{working === `upload-${folder.role}` ? 'Uploading…' : 'Upload videos…'}</button>
-                    {linked && <button disabled={!!working} onClick={() => void scan(linked)}>{working === `scan-${linked.libraryId}` ? 'Starting…' : 'Scan now'}</button>}
+                    {linked && <button disabled={!!working || noScan} onClick={() => void scan(linked)}>{working === `scan-${linked.libraryId}` ? 'Starting…' : 'Scan now'}</button>}
                   </div>
                   {folder.files.map((file) => {
                     const key = `${folder.role}/${file.name}`;
@@ -264,7 +284,7 @@ export function FillerFoldersDialog({ roles, onClose, onChanged }: Props) {
                       <select aria-label={`Role for ${folder.name}`} value={role} disabled={!!working} onChange={(event) => setFolderRoles((current) => ({ ...current, [folder.libraryId]: event.target.value as FillerRole }))}>
                         {FILLER_ROLES.map((item) => <option key={item} value={item}>{ROLE_LABELS[item]}</option>)}
                       </select>
-                      <button className="primary" disabled={!!working} onClick={() => void makeList(folder, role)}>{working === `list-${folder.libraryId}` ? 'Reading…' : 'Make filler list'}</button>
+                      <button className="primary" disabled={!!working || noList} onClick={() => void makeList(folder, role)}>{working === `list-${folder.libraryId}` ? 'Reading…' : 'Make filler list'}</button>
                     </div>
                   </div>
                 );
@@ -275,7 +295,7 @@ export function FillerFoldersDialog({ roles, onClose, onChanged }: Props) {
         <div className="settings-grid add-folder">
           <label className="field"><span>Role</span><select aria-label="New folder role" value={newRole} onChange={(event) => setNewRole(event.target.value as FillerRole)}>{FILLER_ROLES.map((role) => <option key={role} value={role}>{ROLE_LABELS[role]}</option>)}</select></label>
           <label className="field wide-field"><span>Folder on the Tunarr server</span><input aria-label="Folder path" value={newPath} placeholder="/media/commercials" onChange={(event) => setNewPath(event.target.value)} /></label>
-          <button disabled={!newPath.trim() || !!working} onClick={() => void run('add-folder', async () => {
+          <button disabled={!newPath.trim() || !!working || noAdd} onClick={() => void run('add-folder', async () => {
             const path = newPath.trim();
             await tunarrApi.addFillerFolder(path, newRole);
             setNewPath('');
@@ -286,6 +306,7 @@ export function FillerFoldersDialog({ roles, onClose, onChanged }: Props) {
         {progress && <p className="subtle" role="status">{progress}</p>}
         {message && !progress && <p className="subtle" role="status">{message}</p>}
         {syncErrors.length > 0 && <div className="warning"><b>Pickup</b><span>{syncErrors.join(' ')}</span></div>}
+        {syncSkipped.length > 0 && <div className="warning"><b>Left out of pickup</b>{syncSkipped.map((line) => <span key={line}>{line}</span>)}</div>}
         {error && <div className="warning" role="alert"><b>Something went wrong</b><span>{error}</span></div>}
         <div className="dialog-actions"><span className="spacer" /><button onClick={onClose}>Done</button></div>
       </section>

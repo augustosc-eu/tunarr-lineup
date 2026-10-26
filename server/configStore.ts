@@ -15,6 +15,8 @@ export const CONFIG_KEYS = [
   'TUNARR_URL', 'TUNARR_TIMEOUT_MS', 'TUNARR_SAVE_TIMEOUT_MS', 'LINEUP_EXTERNAL_LOGOS', 'LINEUP_SCHEDULER',
   'LINEUP_AI_PROVIDER', 'LINEUP_AI_API_KEY', 'LINEUP_AI_BASE_URL', 'LINEUP_AI_MODEL', 'LINEUP_AI_TIMEOUT_MS',
   'LINEUP_MEDIA_DIR', 'LINEUP_MEDIA_TUNARR_DIR', 'LINEUP_MEDIA_MAX_MB',
+  // Operational notifications (D68): the webhook (write-only), its events, names opt-in, the private-network exception.
+  'LINEUP_NOTIFY_URL', 'LINEUP_NOTIFY_EVENTS', 'LINEUP_NOTIFY_NAMES', 'LINEUP_NOTIFY_PRIVATE',
 ] as const;
 export type ConfigKey = (typeof CONFIG_KEYS)[number];
 

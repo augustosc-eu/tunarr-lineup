@@ -5,6 +5,9 @@ import { aiFailure, buildUserMessage, callModel, gatherContext, MAX_PROMPT_CHARS
 import { isChangeId, summarize, validatePlan } from './scheduler.js';
 import { validateDraft } from './sharedDraftStore.js';
 import { buildFromLibrary } from './content.js';
+import { compatibility, unavailableReason, type CapabilityId, type PartId } from './compatibility.js';
+import { checkCalendar, endOccurrences, entryView, reconcileAfterEdit, runEnding, withCalendarLock } from './calendarArm.js';
+import { isStoreId, librarySummary, validateDetails, validateLibraryEntry } from './calendarStore.js';
 import { validateMediaSourceAdd } from './admin.js';
 import { FILLER_ROLES, folderRole, isFillerRole, ROLE_LABELS, type FillerRole } from './fillerRoles.js';
 import type { FillerRoleStore } from './fillerRoleStore.js';
@@ -38,7 +41,15 @@ export type LineupRoute =
   | { name: 'scheduled-change'; methods: string[]; id: string }
   | { name: 'station-ids'; methods: string[] }
   | { name: 'station-id-picks'; methods: string[]; channelId: string }
-  | { name: 'settings'; methods: string[] };
+  | { name: 'settings'; methods: string[] }
+  | { name: 'compatibility'; methods: string[] }
+  | { name: 'compatibility-refresh'; methods: string[] }
+  | { name: 'schedule-library'; methods: string[] }
+  | { name: 'schedule-library-entry'; methods: string[]; id: string }
+  | { name: 'calendar'; methods: string[] }
+  | { name: 'calendar-preview'; methods: string[] }
+  | { name: 'calendar-entry'; methods: string[]; id: string }
+  | { name: 'calendar-end'; methods: string[]; id: string };
 
 const TEMPLATE_ID = /^[a-z0-9][a-z0-9-]{0,47}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -72,6 +83,18 @@ export function matchLineupRoute(path: string): LineupRoute | { invalid: string 
   if (path === '/ai/review') return { name: 'ai-review', methods: ['POST'] };
   if (path === '/drafts') return { name: 'drafts', methods: ['GET'] };
   if (path === '/server-settings') return { name: 'settings', methods: ['GET', 'PUT'] };
+  if (path === '/compatibility') return { name: 'compatibility', methods: ['GET'] };
+  if (path === '/compatibility/refresh') return { name: 'compatibility-refresh', methods: ['POST'] };
+  if (path === '/schedule-library') return { name: 'schedule-library', methods: ['GET', 'POST'] };
+  const saved = /^\/schedule-library\/([^/]+)$/.exec(path);
+  if (saved) return isStoreId(saved[1]) ? { name: 'schedule-library-entry', methods: ['GET', 'PUT', 'DELETE'], id: saved[1] } : { invalid: 'Schedule id is not valid.' };
+  if (path === '/calendar') return { name: 'calendar', methods: ['GET', 'POST'] };
+  if (path === '/calendar/preview') return { name: 'calendar-preview', methods: ['POST'] };
+  const dated = /^\/calendar\/([^/]+)(\/end)?$/.exec(path);
+  if (dated) {
+    if (!isStoreId(dated[1])) return { invalid: 'Calendar entry id is not valid.' };
+    return dated[2] ? { name: 'calendar-end', methods: ['POST'], id: dated[1] } : { name: 'calendar-entry', methods: ['PUT', 'DELETE'], id: dated[1] };
+  }
   if (path === '/station-ids') return { name: 'station-ids', methods: ['GET'] };
   const picks = /^\/station-ids\/([^/]+)$/.exec(path);
   if (picks) return CHANNEL_ID.test(picks[1]) ? { name: 'station-id-picks', methods: ['PUT'], channelId: picks[1] } : { invalid: 'Channel id is not valid.' };
@@ -117,6 +140,8 @@ export type SyncResult = {
   created: Array<{ id: string; name: string; count: number; role: FillerRole }>;
   updated: Array<{ id: string; count: number }>;
   errors: string[];
+  /** Steps left out because the compatibility check shows this Tunarr lacks their route (each reason once). */
+  skipped: string[];
 };
 
 const errorMessage = (error: unknown) => (error instanceof UpstreamError || error instanceof StoreError ? error.message : 'Something went wrong.');
@@ -141,11 +166,32 @@ export function syncFillerFolders(config: ProxyConfig, target: TunarrTarget): Pr
 }
 
 async function runSync(config: ProxyConfig, target: TunarrTarget): Promise<SyncResult> {
-  const result: SyncResult = { connected: false, created: [], updated: [], errors: [] };
+  const result: SyncResult = { connected: false, created: [], updated: [], errors: [], skipped: [] };
   const media = config.mediaFolder && !('off' in config.mediaFolder) ? config.mediaFolder : undefined;
   const store = config.fillerRoles as FillerRoleStore | undefined;
+  // Each step is left out on its own when the compatibility check shows Tunarr lacks its route, so a pickup
+  // every few seconds never calls a route known to be missing; the rest still runs. With no fresh report the
+  // check runs first (or the one already running is awaited), so the first pickup after a start can't write
+  // ahead of it. A part that couldn't be checked, or a check that failed outright, means the step is tried.
+  const report = await compatibility(config).catch(() => undefined);
+  const off = (id: CapabilityId, part?: PartId) => unavailableReason(report, id, part);
+  const leaveOut = (what: string, reason: string) => {
+    const line = `${what}: ${reason}`;
+    if (!result.skipped.includes(line)) result.skipped.push(line);
+  };
+  const sourcesOff = off('media-sources');
+  if (sourcesOff) {
+    leaveOut('Folders aren’t picked up', sourcesOff);
+    return result;
+  }
+  // Reading a folder's videos, then making or refreshing its list.
+  const readOff = off('library-search');
+  const createOff = readOff ?? off('filler-lists', 'create');
+  const editOff = readOff ?? off('filler-lists', 'edit');
   let sources = await callTunarr(config, target, 'GET', '/api/media-sources');
-  if (media && !Object.keys(roleLibraries(sources, media)).length) {
+  const connectOff = off('media-sources', 'create');
+  if (media && !Object.keys(roleLibraries(sources, media)).length && connectOff) leaveOut('The upload folder wasn’t added to Tunarr', connectOff);
+  else if (media && !Object.keys(roleLibraries(sources, media)).length) {
     try {
       await media.prepare();
       // Tunarr scans a new local source on its own.
@@ -173,6 +219,10 @@ async function runSync(config: ProxyConfig, target: TunarrTarget): Promise<SyncR
   for (const [listId, link] of Object.entries(links)) {
     const library = byId.get(link.libraryId);
     if (!library || library.scanning || !library.lastScannedAt || library.lastScannedAt <= (link.builtAt ?? 0)) continue;
+    if (editOff) {
+      leaveOut('Lists weren’t updated from their folders', editOff);
+      continue;
+    }
     try {
       const built = await buildFromLibrary(config, target, { mediaSourceId: link.mediaSourceId, libraryId: link.libraryId, listId });
       if (built) result.updated.push({ id: listId, count: built.count });
@@ -198,6 +248,10 @@ async function runSync(config: ProxyConfig, target: TunarrTarget): Promise<SyncR
     const waiting = pending[library.id];
     const role = upload ?? waiting?.role ?? folderRole(library.name);
     if (!role) continue;
+    if (createOff) {
+      leaveOut('Folders didn’t get new filler lists', createOff);
+      continue;
+    }
     const name = upload ? `${ROLE_LABELS[role]} (folder)` : waiting?.name ?? `${ROLE_LABELS[role]} – ${lastSegment(library.name)}`;
     try {
       const built = await buildFromLibrary(config, target, { mediaSourceId: library.mediaSourceId, libraryId: library.id, name, role });
@@ -295,6 +349,89 @@ export async function handleLineupRoute(route: LineupRoute, { config, target, me
         applySettings(config, settings.env, saved);
         return json(200, settingsView(settings.env, saved));
       }
+      case 'schedule-library': {
+        const library = config.scheduleLibrary;
+        if (!library) return fail(503, 'store_off', 'The schedule library isn’t available on this server.');
+        if (method === 'GET') return json(200, (await library.list()).map(librarySummary));
+        const checked = validateLibraryEntry(body);
+        if ('error' in checked) return fail(400, 'invalid_request', checked.error);
+        return json(201, librarySummary(await library.create(checked)));
+      }
+      case 'schedule-library-entry': {
+        const library = config.scheduleLibrary;
+        if (!library) return fail(503, 'store_off', 'The schedule library isn’t available on this server.');
+        if (method === 'GET') {
+          const entry = await library.get(route.id);
+          return entry ? json(200, entry) : fail(404, 'not_found', 'That schedule is no longer in the library.');
+        }
+        if (method === 'PUT') {
+          const details = isObject(body) ? validateDetails(body, true) : { error: 'Send { name?, description?, tags? }.' };
+          if ('error' in details) return fail(400, 'invalid_request', details.error);
+          const entry = await library.update(route.id, details);
+          return entry ? json(200, librarySummary(entry)) : fail(404, 'not_found', 'That schedule is no longer in the library.');
+        }
+        // Under the calendar's lock, so an entry being saved for it can't slip in between the check and the removal.
+        return withCalendarLock(async () => {
+          const users = ((await config.calendar?.list()) ?? []).filter((entry) => entry.scheduleId === route.id);
+          if (users.length) return fail(409, 'schedule_in_use', `The calendar still uses it: ${users.map((entry) => `“${entry.name}”`).join(', ')}. Remove those entries first.`);
+          return (await library.remove(route.id)) ? json(200, { deleted: true }) : fail(404, 'not_found', 'That schedule is no longer in the library.');
+        });
+      }
+      case 'calendar': {
+        const store = config.calendar;
+        if (!store) return fail(503, 'store_off', 'The calendar isn’t available on this server.');
+        if (method === 'GET') {
+          const names = new Map(((await config.scheduleLibrary?.list()) ?? []).map((entry) => [entry.id, entry.name]));
+          const entries = (await store.list()).map((entry) => entryView(entry, names.get(entry.scheduleId) ?? null));
+          return json(200, config.scheduler?.enabled ? { enabled: true, entries } : { enabled: false, message: 'Scheduled changes are off: calendar entries are kept, but nothing goes in until they’re turned on (Setup → Server Settings).', entries });
+        }
+        // Checked, saved and reconciled under the calendar's lock (server/calendarArm.ts): a due occurrence goes in before or after it, never on a half-made edit.
+        // Once saved, the reply is a success even if reconciling failed (it says so): the entry exists, and sending it again would make a second one.
+        return withCalendarLock(async () => {
+          const checked = await checkCalendar(config, body);
+          if ('error' in checked) return fail(400, 'invalid_request', checked.error);
+          if (checked.refused) return fail(409, 'calendar_conflict', 'It overlaps an entry of the same priority on a shared channel. Change the dates, the channels or a priority.', { conflicts: checked.conflicts });
+          const entry = await store.create(checked.entry);
+          return json(201, { ...entryView(entry, checked.scheduleName), ...(await reconcileAfterEdit(config)) });
+        });
+      }
+      case 'calendar-preview': {
+        const checked = await checkCalendar(config, body, isObject(body) && typeof body.id === 'string' && isStoreId(body.id) ? body.id : undefined);
+        return 'error' in checked ? fail(400, 'invalid_request', checked.error) : json(200, checked);
+      }
+      case 'calendar-entry': {
+        const store = config.calendar;
+        if (!store) return fail(503, 'store_off', 'The calendar isn’t available on this server.');
+        if (method === 'PUT') {
+          return withCalendarLock(async () => {
+            if (!(await store.get(route.id))) return fail(404, 'not_found', 'That calendar entry is gone.');
+            const checked = await checkCalendar(config, body, route.id);
+            if ('error' in checked) return fail(400, 'invalid_request', checked.error);
+            if (checked.refused) return fail(409, 'calendar_conflict', 'It overlaps an entry of the same priority on a shared channel. Change the dates, the channels or a priority.', { conflicts: checked.conflicts });
+            // Occurrences on air now keep their plan; ones armed but not started are cancelled here and planned again on the scheduler's next run.
+            const entry = await store.update(route.id, checked.entry);
+            return entry ? json(200, { ...entryView(entry, checked.scheduleName), ...(await reconcileAfterEdit(config)) }) : fail(404, 'not_found', 'That calendar entry is gone.');
+          });
+        }
+        // Removing an entry ends what it has on now (restoring as planned) and cancels what it armed.
+        const removal = await withCalendarLock(async () => {
+          const result = await endOccurrences(config, route.id, { cancelArmed: true });
+          const removed = await store.remove(route.id);
+          return { result, response: removed ? json(200, { removed: true, ...result, ...(await reconcileAfterEdit(config)) }) : fail(404, 'not_found', 'That calendar entry is gone.') };
+        });
+        await runEnding(config, removal.result.ending);
+        return removal.response;
+      }
+      case 'calendar-end': {
+        if (!(await config.calendar?.get(route.id))) return fail(404, 'not_found', 'That calendar entry is gone.');
+        const result = await withCalendarLock(() => endOccurrences(config, route.id, { cancelArmed: false }));
+        await runEnding(config, result.ending);
+        return json(200, result);
+      }
+      case 'compatibility':
+      case 'compatibility-refresh':
+        // Read-only checks; works without Tunarr's address (the report says it isn't set up).
+        return json(200, await compatibility(config, { refresh: route.name === 'compatibility-refresh' }));
       case 'filler-roles': {
         if (!roles) return fail(503, 'store_off', 'Filler roles are not available on this server.');
         return json(200, await roles.list());

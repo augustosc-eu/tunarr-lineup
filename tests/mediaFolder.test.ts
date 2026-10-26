@@ -6,6 +6,7 @@ import path from 'node:path';
 import { Readable } from 'node:stream';
 import { afterAll, describe, expect, it } from 'vitest';
 import { createLineupServer } from '../server/app';
+import { CAPABILITY_MATRIX, compatibility } from '../server/compatibility';
 import { libraryEntries, validateFromLibrary } from '../server/content';
 import { createFillerRoleStore } from '../server/fillerRoleStore';
 import { folderRole } from '../server/fillerRoles';
@@ -172,9 +173,12 @@ describe('picking up filler folders automatically', () => {
     const sources = structuredClone(initial);
     const files: Record<string, number> = {};
     const lists = new Map<string, unknown[]>();
+    // Tunarr's API description, when set (see `describedWithout`).
+    const described: { paths?: Record<string, Record<string, unknown>> } = {};
     let next = 0;
     const harnessed = harness(env, (url, method, body) => {
       const request = body as Record<string, unknown>;
+      if (url === '/openapi.json') return described.paths ? { info: { version: '1.3.13' }, paths: described.paths } : { __status: 404 };
       if (url === '/api/media-sources' && method === 'POST') {
         const id = `fb9b2110-d086-49b3-997c-${String(++next).padStart(12, '0')}`;
         sources.push({ id, type: 'local', name: String(request.name), libraries: (request.paths as string[]).map((externalKey, index) => ({ id: id.replace('fb9b2110', `${index}0000000`.slice(0, 8)), externalKey, name: externalKey, enabled: true, lastScannedAt: SCANNED })) });
@@ -197,9 +201,26 @@ describe('picking up filler folders automatically', () => {
         return {};
       }
     });
-    return { ...harnessed, sources, files, lists };
+    return { ...harnessed, sources, files, lists, described };
   }
   const sync = async (config: ProxyConfig) => parse(await handleTunarrApi(post('/filler-folders/sync', {}), config));
+  /** Every route the compatibility matrix asks about, as Tunarr's API description lists them, but `missing` ("post /api/filler-lists"). */
+  const describedWithout = (...missing: string[]) => {
+    const paths: Record<string, Record<string, unknown>> = {};
+    for (const row of CAPABILITY_MATRIX) {
+      for (const [method, route] of [...row.ops, ...(row.parts ?? []).flatMap((part) => part.ops)]) {
+        if (!missing.includes(`${method} ${route}`)) (paths[route.replace(/\{\}/g, '{id}')] ??= {})[method] = {};
+      }
+    }
+    return paths;
+  };
+  /** Runs a compatibility check against a Tunarr whose description lacks `missing`, then forgets the check's own requests. */
+  const checkWithout = async (fake: ReturnType<typeof tunarr>, ...missing: string[]) => {
+    fake.described.paths = describedWithout(...missing);
+    await compatibility(fake.config, { refresh: true });
+    fake.calls.length = 0;
+  };
+  const writes = (fake: ReturnType<typeof tunarr>, method: string, url: string) => fake.calls.filter((call) => call.method === method && call.url === url).length;
 
   it('adds the upload folder to Tunarr once and makes a list for each role folder with videos', async () => {
     const media = await tempDir();
@@ -264,6 +285,154 @@ describe('picking up filler folders automatically', () => {
     expect(after).toMatchObject({ created: [], updated: [], errors: [] });
     expect((await createFillerRoleStore(data).folders()).ignored).toEqual([LIBRARY]);
     expect((await sync(fake.config)).created).toEqual([]);
+  });
+
+  it('leaves out adding the upload folder when Tunarr lacks it, and still makes lists for other folders', async () => {
+    const media = await tempDir();
+    const fake = tunarr({ LINEUP_MEDIA_DIR: media, LINEUP_MEDIA_TUNARR_DIR: '/media/lineup', LINEUP_DATA_DIR: await tempDir() }, [
+      { id: SOURCE, type: 'plex', name: 'Plex', libraries: [{ id: id(91), name: 'Commercials', enabled: true, lastScannedAt: SCANNED }] },
+    ]);
+    fake.files[id(91)] = 2;
+    await checkWithout(fake, 'post /api/media-sources');
+    const result = await sync(fake.config);
+    expect(writes(fake, 'POST', '/api/media-sources')).toBe(0);
+    expect(result).toMatchObject({ connected: false, errors: [], created: [expect.objectContaining({ name: 'Commercials – Commercials', count: 2 })] });
+    expect(result.skipped).toEqual([expect.stringContaining('The upload folder wasn’t added to Tunarr: This Tunarr’s API doesn’t offer adding media sources')]);
+    // The next pickup says it once again, without calling the route.
+    expect((await sync(fake.config)).skipped).toHaveLength(1);
+    expect(writes(fake, 'POST', '/api/media-sources')).toBe(0);
+  });
+
+  it('leaves out reading folders when Tunarr lacks library search, and still adds the upload folder', async () => {
+    const media = await tempDir();
+    const fake = tunarr({ LINEUP_MEDIA_DIR: media, LINEUP_MEDIA_TUNARR_DIR: '/media/lineup', LINEUP_DATA_DIR: await tempDir() });
+    // No library yet, so the check can't try a search: only the description says it's missing.
+    await checkWithout(fake, 'post /api/programs/search');
+    const result = await sync(fake.config);
+    expect(result.connected).toBe(true);
+    expect(fake.calls.filter((call) => call.url === '/api/programs/search')).toHaveLength(0);
+    expect(writes(fake, 'POST', '/api/filler-lists')).toBe(0);
+    expect(result.skipped).toEqual([expect.stringContaining('Folders didn’t get new filler lists: Library search isn’t available on this Tunarr')]);
+  });
+
+  it('leaves out making lists when Tunarr lacks creating them, and still follows existing ones', async () => {
+    const fake = tunarr({ LINEUP_DATA_DIR: await tempDir() }, [{ id: SOURCE, type: 'local', name: 'Ads', libraries: [{ id: LIBRARY, name: '/media/commercials', enabled: true, lastScannedAt: SCANNED }] }]);
+    fake.files[LIBRARY] = 1;
+    const [made] = (await sync(fake.config)).created;
+    fake.sources[0].libraries.push({ id: id(95), name: '/media/promos', enabled: true, lastScannedAt: SCANNED });
+    fake.files[id(95)] = 2;
+    fake.files[LIBRARY] = 3;
+    fake.sources[0].libraries[0].lastScannedAt = Date.now() + 60_000;
+    await checkWithout(fake, 'post /api/filler-lists');
+    const result = await sync(fake.config);
+    expect(writes(fake, 'POST', '/api/filler-lists')).toBe(0);
+    expect(result.updated).toEqual([{ id: made.id, count: 3 }]);
+    expect(result.created).toEqual([]);
+    expect(result.skipped).toEqual([expect.stringContaining('creating filler lists')]);
+    // The promos folder is never read just to be refused.
+    expect(fake.calls.filter((call) => call.url === '/api/programs/search' && (call.body as { libraryId: string }).libraryId === id(95))).toHaveLength(0);
+  });
+
+  it('leaves out refreshing lists when Tunarr lacks editing them, and still makes new ones', async () => {
+    const fake = tunarr({ LINEUP_DATA_DIR: await tempDir() }, [{ id: SOURCE, type: 'local', name: 'Ads', libraries: [{ id: LIBRARY, name: '/media/commercials', enabled: true, lastScannedAt: SCANNED }] }]);
+    fake.files[LIBRARY] = 1;
+    await sync(fake.config);
+    fake.sources[0].libraries.push({ id: id(95), name: '/media/promos', enabled: true, lastScannedAt: SCANNED });
+    fake.files[id(95)] = 2;
+    fake.files[LIBRARY] = 3;
+    fake.sources[0].libraries[0].lastScannedAt = Date.now() + 60_000;
+    await checkWithout(fake, 'put /api/filler-lists/{}');
+    const result = await sync(fake.config);
+    expect(fake.calls.filter((call) => call.method === 'PUT')).toHaveLength(0);
+    expect(fake.calls.filter((call) => call.url === '/api/programs/search' && (call.body as { libraryId: string }).libraryId === LIBRARY)).toHaveLength(0);
+    expect(result.updated).toEqual([]);
+    expect(result.created).toEqual([expect.objectContaining({ name: 'Promos – promos', count: 2 })]);
+    expect(result.skipped).toEqual([expect.stringContaining('Lists weren’t updated from their folders')]);
+  });
+
+  it('refuses a list from a folder before reading it when Tunarr lacks creating lists', async () => {
+    const fake = tunarr({ LINEUP_DATA_DIR: await tempDir() }, [{ id: SOURCE, type: 'local', name: 'Ads', libraries: [{ id: LIBRARY, name: '/media/x', enabled: true, lastScannedAt: SCANNED }] }]);
+    fake.files[LIBRARY] = 1;
+    await checkWithout(fake, 'post /api/filler-lists');
+    const response = await handleTunarrApi(post('/filler-lists/from-library', { mediaSourceId: SOURCE, libraryId: LIBRARY, name: 'Ads' }), fake.config);
+    expect(response.status).toBe(501);
+    expect(fake.calls).toEqual([]);
+  });
+
+  describe('with no compatibility check run yet', () => {
+    const checks = (fake: ReturnType<typeof tunarr>) => fake.calls.filter((call) => call.url === '/openapi.json').length;
+
+    it('checks first, and never adds the upload folder when Tunarr lacks it', async () => {
+      const media = await tempDir();
+      const fake = tunarr({ LINEUP_MEDIA_DIR: media, LINEUP_MEDIA_TUNARR_DIR: '/media/lineup', LINEUP_DATA_DIR: await tempDir() }, [
+        { id: SOURCE, type: 'plex', name: 'Plex', libraries: [{ id: id(91), name: 'Commercials', enabled: true, lastScannedAt: SCANNED }] },
+      ]);
+      fake.files[id(91)] = 2;
+      fake.described.paths = describedWithout('post /api/media-sources');
+      const result = await sync(fake.config);
+      expect(checks(fake)).toBe(1);
+      expect(writes(fake, 'POST', '/api/media-sources')).toBe(0);
+      expect(result).toMatchObject({ connected: false, errors: [], created: [expect.objectContaining({ name: 'Commercials – Commercials', count: 2 })] });
+      expect(result.skipped).toEqual([expect.stringContaining('The upload folder wasn’t added to Tunarr')]);
+    });
+
+    it('checks first, and never makes a list when Tunarr lacks creating them', async () => {
+      const fake = tunarr({ LINEUP_DATA_DIR: await tempDir() }, [{ id: SOURCE, type: 'local', name: 'Ads', libraries: [
+        { id: LIBRARY, name: '/media/commercials', enabled: true, lastScannedAt: SCANNED },
+        { id: id(95), name: '/media/promos', enabled: true, lastScannedAt: SCANNED },
+      ] }]);
+      fake.files[LIBRARY] = 1;
+      fake.files[id(95)] = 2;
+      fake.described.paths = describedWithout('post /api/filler-lists');
+      const result = await sync(fake.config);
+      expect(writes(fake, 'POST', '/api/filler-lists')).toBe(0);
+      // Not even the library search a refused list would need, beyond the check's own one-result read.
+      expect(fake.calls.filter((call) => call.url === '/api/programs/search' && (call.body as { limit: number }).limit !== 1)).toHaveLength(0);
+      expect(result).toMatchObject({ created: [], errors: [] });
+      // Two folders, one reason.
+      expect(result.skipped).toEqual([expect.stringContaining('Folders didn’t get new filler lists')]);
+    });
+
+    it('checks first, and never refreshes a list when Tunarr lacks editing them, while still making new ones', async () => {
+      const data = await tempDir();
+      await createFillerRoleStore(data).link(LIST, { mediaSourceId: SOURCE, libraryId: LIBRARY, builtAt: 0 });
+      const fake = tunarr({ LINEUP_DATA_DIR: data }, [{ id: SOURCE, type: 'local', name: 'Ads', libraries: [
+        { id: LIBRARY, name: '/media/commercials', enabled: true, lastScannedAt: SCANNED },
+        { id: id(95), name: '/media/promos', enabled: true, lastScannedAt: SCANNED },
+      ] }]);
+      fake.lists.set(LIST, []);
+      fake.files[LIBRARY] = 3;
+      fake.files[id(95)] = 2;
+      fake.described.paths = describedWithout('put /api/filler-lists/{}');
+      const result = await sync(fake.config);
+      expect(fake.calls.filter((call) => call.method === 'PUT')).toHaveLength(0);
+      expect(fake.calls.filter((call) => call.url === '/api/programs/search' && (call.body as { libraryId: string }).libraryId === LIBRARY && (call.body as { limit: number }).limit !== 1)).toHaveLength(0);
+      expect(result.updated).toEqual([]);
+      expect(result.created).toEqual([expect.objectContaining({ name: 'Promos – promos', count: 2 })]);
+      expect(result.skipped).toEqual([expect.stringContaining('Lists weren’t updated from their folders')]);
+    });
+
+    it('waits for a check already running instead of starting another', async () => {
+      const media = await tempDir();
+      const fake = tunarr({ LINEUP_MEDIA_DIR: media, LINEUP_MEDIA_TUNARR_DIR: '/media/lineup', LINEUP_DATA_DIR: await tempDir() }, [
+        { id: SOURCE, type: 'plex', name: 'Plex', libraries: [{ id: id(91), name: 'Commercials', enabled: true, lastScannedAt: SCANNED }] },
+      ]);
+      fake.files[id(91)] = 2;
+      fake.described.paths = describedWithout('post /api/media-sources', 'post /api/filler-lists');
+      const running = compatibility(fake.config);
+      const result = await sync(fake.config);
+      await running;
+      expect(checks(fake)).toBe(1);
+      expect(writes(fake, 'POST', '/api/media-sources')).toBe(0);
+      expect(writes(fake, 'POST', '/api/filler-lists')).toBe(0);
+      // Each step left out is named once.
+      expect(result.skipped).toEqual([
+        expect.stringContaining('The upload folder wasn’t added to Tunarr'),
+        expect.stringContaining('Folders didn’t get new filler lists'),
+      ]);
+      expect(new Set(result.skipped).size).toBe(result.skipped.length);
+      expect(result.errors).toEqual([]);
+    });
   });
 
   it('finds each role folder’s library by path', () => {

@@ -159,6 +159,9 @@ Edits mark the lineup unsaved:
   - **Reset and remove schedule** clears both for good. Tunarr can't remove a schedule from a channel, so Lineup makes a new channel with the same number, name, logo and settings and deletes the old one. Its internal Tunarr id changes, and the dialog names any channels that redirect to it, because Tunarr turns those redirects into off-air time.
   - **Empty lineup only** keeps the channel and its schedule. Tunarr rebuilds the lineup from the schedule at its next library scan or start-time change.
 - **Setup → Media Sources…:** add Plex (address and token), Jellyfin or Emby (address, user name and password; Tunarr signs in), or local folders; turn libraries on or off, refresh and scan them; remove sources. Addresses, tokens and folder paths are never shown back.
+- **Setup → Server Settings… → Compatibility:** Tunarr's version (with a warning when it isn't one Lineup was validated against, 1.x, or when Tunarr doesn't say), the connection, and each capability the desk uses: available, answering unexpectedly, not available, not checked, or unknown, each with the reason. The checks only read Tunarr; saving is checked against Tunarr's own API description, and live streams are never started to check them. **Check again** re-runs them (otherwise they're kept 5 minutes); **Export diagnostics** saves the report as JSON without Tunarr's address or credentials. **Test connection** in setup and Server Settings also shows the version and how many features would be missing.
+- **Setup → Server Settings… → Notifications:** off until a webhook address is saved. Choose the events (a scheduled change went in, was skipped, failed or was missed; a save was refused because the channel changed; a Control Room check found errors; a channel plays programs Tunarr no longer has; the guide couldn't be read; a batch finished with conflicts or failures). The address must be `https://` to a public address on the standard port, unless **private network** is ticked (then private addresses work, and `http://` or another port too as long as the host resolves to private addresses only; a public one stays `https://` on 443; never this machine or link-local); it's never shown again, only its host. Messages are small JSON with the event, a sentence, the channel's number and counts; names only with **Include names**. **Send a test** reports how it went; recent deliveries are listed.
+- **Features Tunarr doesn't offer fail closed:** choosing one (from a menu or its key) shows why instead of opening it; only that feature is refused. A check that failed, or that couldn't be made, refuses nothing.
 - **Setup → Server Settings…:** everything from setup, applied at once: Tunarr's address (with **Find Tunarr** and **Test connection**), the AI provider, key, model and address, the upload folder, and the sign-in (needs the current password). Keys and passwords are never shown, only whether they're set. Below, the tuning settings (Tunarr timeouts, public logos, scheduled changes, the AI timeout, the largest upload) with where each value comes from (setup, saved here, or the default); saved values win until **Reset**. Where the server listens, its data folder and allowed host names only show as set or not.
 - **Setup → Transcode Profiles…:** resolution, codecs, bit depth, bitrates and buffers, hardware acceleration, threads, audio channels, sample rate, volume and loudness, error screen and audio, frame-rate and deinterlace options; duplicate or delete profiles.
 - **Logos:** channel logos appear in the channel list and the schedule header. Channels without a usable logo show their number.
@@ -237,6 +240,22 @@ and first names any channels that redirect to it.
   - **The cable guide** (`G` / **GUIDE**): the on-screen guide of an early-2000s cable box, inside the picture. The picture keeps playing in a window at the top right, beside the focused program's details; below, five channels at a time and ninety minutes across. ← → move between programs and page the time (forward only, about half a day), ↑ ↓ move between channels, PgUp/PgDn or CH± page them, digits jump to a channel, OK tunes, Back closes it.
 - **Viewer counts**: a red badge on each channel with viewers (rail and guide), refreshed every 30 seconds while the desk is visible.
 
+### 5a′. Control Room
+
+**View → Control Room** (`O`): every channel in one list, for running a whole station.
+
+- **Each channel:** number and name, what's on now (with minutes left) and next from Tunarr's guide, viewers, scheduled changes waiting, and the last health check with its time. The status is **Not checked** until the channel is checked; it's never called healthy without a check.
+- **Checks:** **Check all** (or `A` for the channels shown, `C` for one) reads each channel's programming, three at a time, and finds programs Tunarr no longer has, items with no length, redirects to the channel itself, to a channel that's gone or round a loop across channels, breaks filled from deleted filler lists, flex time with no filler (the offline screen), and Tunarr's guide showing a different program than a manual lineup has on air. One channel failing doesn't stop the others; it says why. Checks are kept until the Lineup server restarts.
+- **Guide:** a channel with nothing in Tunarr's guide for the next three hours is a warning. If the guide or viewer counts can't be read, the list still shows and says which part is missing.
+- **Stream check** (`S`, opt-in): asks for the channel's playlist, never video. Tunarr starts the channel for a moment to answer, so it only runs when asked.
+- **Filters:** all, errors, warnings, watched, scheduled (`F` cycles them).
+- **Actions** (OK or →): open the channel in the desk, the guide grid, Watch Live, its lineup check, snapshots, scheduled changes, check it, check its stream. Back steps out of the actions, then closes.
+- It refreshes every minute while the page is visible, and not at all while it's hidden.
+
+### 5a″. Guide preview
+
+**View → Guide Preview (XMLTV)…**: pick a channel and 3, 6, 12 or 24 hours. It lists them as a guide app would (start, end, title, sub-title, category), from Tunarr's own guide, and checks them: time with nothing listed, entries that overlap, entries too short to read (under the channel's minimum guide entry), entries over six hours, untitled entries, and flex time listed under the channel's name (set a guide title for flex in Channel Settings). **Download XMLTV preview** saves the listing as XMLTV to inspect. It's a preview: Tunarr builds and serves the guide guide apps read, and Lineup doesn't change it.
+
 ### 5b. Check the lineup
 
 **View → Check Lineup** (`C`, or the toolbar badge, which counts the day's problems and warnings): problems, warnings and notes for this day or 7 days. Each jumps to where it airs and selects the item. It finds:
@@ -261,6 +280,33 @@ With AI set up, **Ask AI for a review** sends the next 7 days and the findings t
 
 **File → Snapshots, Export and Import…** lists the snapshots the companion took before each save, reset and scheduled change (newest first, 15 per channel). **Restore…** loads one into the desk as an edit; nothing reaches Tunarr until it's saved. **Take a snapshot now**, **Export to a file** (the lineup on screen, as JSON) and **Import a file…** (also loaded as an edit).
 
+### 5d′. Batch operations, media repair and packages
+
+**Channel → Batch Operations…** (also **Repair Missing Media…**, and **File → Export / Import Programming Package…**):
+
+1. **What to do:** copy filler settings from a channel; change the group title; change the transcode profile; renumber channels; change options (hidden, on demand, subtitles, stream format, guide title for flex, minimum guide entry); repair missing media; export or import a programming package.
+2. **Channels:** tick them, or **All**, **None**, or a network (group title). Channels with unsaved desk work are marked when a batch would change their lineup.
+3. **Preview:** each channel says **Will change** (with every field's before → after, or the lineup's items and length before → after), **No change**, or **Blocked** with why (a number another channel keeps, a channel generated from a slot schedule, a channel Tunarr no longer has). Nothing is saved yet.
+4. **Apply…** asks once more, then saves channel by channel. Each channel is read again first: if it changed since the preview it's left alone and reported as a **Conflict**, and the rest still go in. There is no way to force a conflict. If Tunarr stops answering, the channels not reached are **Not tried**.
+5. **Report:** every channel's outcome and why. Tick channels and **Roll back** to put them back as they were, each only if it hasn't changed since the batch.
+6. **Recent batches** lists the last 30 with their outcomes, and reopens any of them to roll back.
+
+- **Renumbering** never puts two channels on the same number, even in the middle (a swap goes through a spare number). It goes in as a whole: if any of its channels changed since the preview, nothing moves. Tunarr is read again before every move; if someone changes a number there meanwhile, the rest stops (their change is never overwritten), and the report says which channels moved, which was left on a spare number (roll it back or fix it by hand) and which weren't tried. **Number them in order** fills consecutive numbers from a start.
+- **Repair missing media:** the preview lists every program Tunarr no longer has on the channels picked, where it is (`#position` on each channel) and when it airs next. For each choose **Leave it**, **Remove**, **Flex (keep times)** or **Replace…** with a program from the library (the Lineup server looks it up in Tunarr and uses Tunarr's length; one Tunarr doesn't have is refused, and one that disappears or changes length before applying leaves the channel untouched); **Update preview** shows the result, and applying is only possible once the preview matches the choices. A snapshot of each lineup is kept first.
+- **Packages:** a versioned JSON file of lineups (items exactly as in Tunarr, with program titles; no addresses, tokens, media paths or settings). Importing reads and checks the file in the browser, maps each lineup onto a channel (same id, else same number, by default), and goes through the same preview and apply. Tunarr refuses programs it doesn't index.
+
+### 5d″. Advanced planner
+
+**Edit → Advanced Planner…** (live, on the channel open in the desk):
+
+- **Sources:** shows (all their episodes), picked programs, custom shows. Each has a **weight**, an **order** (episode order, a whole season at a time, or shuffled by the seed), where to **start** (S01E01 by default, or a season and episode), how many times a program may **air at most**, and the **hours before a repeat**.
+- **Weights share out** airtime (a weight of 2 gets twice the hours) or programs (twice the airings, whatever their length). Shows alternate while each keeps its own episode order.
+- **Dayparts:** parts of the day, on every day, weekdays or weekends, each with its own weights (0 keeps a source out), read in the plan's time zone.
+- **Plan:** a start, 1–31 days, a zone and a **seed**. The same seed always gives the same plan; **New seed** tries another.
+- **Preview:** each source's airings, airtime and share next to its weight's share; airtime by genre and type; warnings when a source runs out (repeat limit), goes round more than once, or a daypart has nothing to air (flex time); the airings themselves. Dayparts change at their exact minute in the plan's zone, clock changes included, and flex never runs into the next daypart (a gap shorter than five minutes before one is filled only up to it). A plan holds at most 50,000 programs: one that reaches that before its last day says **This plan is incomplete and can't be saved**, with where it stopped, and both saves are off.
+- **Save to CH n…** replaces the channel's whole lineup with exactly what was previewed (nothing is worked out again) and moves its start time to the plan's start; it's a conditional save with a snapshot, refused with unsaved desk edits or on a slot-scheduled channel. **Save to the schedule library** keeps it for the calendar instead.
+- A plan is a fixed lineup: it doesn't change when the library does. Plan again to include new episodes.
+
 ### 5e. Changes on a date
 
 With scheduled changes on (setup or Server Settings):
@@ -269,6 +315,13 @@ With scheduled changes on (setup or Server Settings):
 - **Premiere** (program bin, **At a time…** → **Just before they start**): the programs go in shortly before they start, at whatever spot in the lineup airs then, keeping what's on air in place. Skipped if the channel runs on a slot schedule by then, or if it couldn't go in before it starts.
 - **Schedule Event → Air once**: the event goes in shortly before it starts and what it replaced comes back when it ends. Only for "Replace what was on", and only when the desk has no unsaved edits.
 - **File → Scheduled Changes…** lists waiting and recent changes on every channel, with why any was skipped, and cancels them.
+- **File → Save to Schedule Library…** keeps the desk's lineup (or a slot preview) by name, with a description and tags, apart from any channel. **File → Schedule Library & Calendar…** lists them and the calendar:
+  - **Repeat:** once (a date, or a date range, or from a date and kept), every year (start and end month, day and time; it may run past New Year), or every week (days and times; an end earlier than the start runs past midnight). Always in a chosen time zone. A date skipped by the clock (the hour clocks jump) moves forward; a repeated hour takes the first. 29 February falls on the 28th in other years.
+  - **Skip dates**, **channels**, and a **priority**: two entries overlapping on a channel at the same priority can't be saved; otherwise the higher priority wins there and the other is skipped on that channel, even if the other was planned first. Adding, editing (its name and how early it's planned included), turning off or removing an entry plans again every occurrence that hasn't started (one already on air carries on unchanged). If equal priorities meet anyway, the older entry wins. If the Lineup server can't check what was planned against the calendar (its files can't be read or written), nothing from the calendar goes in until it can, and a save says so instead of failing, so it's never saved twice.
+  - **How it starts:** as the cycle lands (like Save Later), from its first item at the start time, or from a chosen position. Continuing where the last occurrence stopped isn't offered (shown, with why): Tunarr keeps no episode progress for a manual lineup between activations.
+  - **When it ends:** restore exactly (the old lineup and start time, so it carries on as if it had kept airing), resume (the old lineup picks up where it was interrupted), or keep (only for a one-time entry with no end).
+  - **Check** lists the next occurrences in the entry's zone, conflicts and warnings, and is needed again after any change before saving.
+  - Each occurrence is planned a few hours before it starts (six by default, adjustable) against the channel as it is then, and appears in Scheduled Changes; an edit to the channel after that skips it, and the old lineup comes back at the end only if nothing changed during it. An occurrence that restores or resumes goes in only after a snapshot of what it replaces has been saved; if one can't be, it fails and nothing changes. Channels generated from a slot schedule are skipped. **End now** brings the end forward; **Remove** ends what's on now and cancels what was planned. Nothing happens while scheduled changes are off.
 
 Each change goes in only if the channel is as it was when planned (for an event: the programs it replaces are still there); otherwise it's skipped, never forced.
 
@@ -290,6 +343,7 @@ or a month.
 | Back / Esc | Cancel a move, or close a dialog |
 | `N` / `T` / `M` / `?` | Now / today / Move dialog / shortcuts |
 | `G` / `W` / `C` / `L` | Guide grid / week view / check lineup / watch live |
+| `O` | Control Room (in it: ↑ ↓ PgUp PgDn, OK actions, `F` filter, `R` refresh, `C` check, `A` check shown, `S` stream) |
 | While watching: CH± or ↑ ↓, digits, `R`, `G`, `I`, `M`, `+`/`−`, `F` | Change channel, tune by number, last channel, cable guide, info banner, mute, volume, full screen |
 | ⌘ or Ctrl + Z, Shift+Z (or Y), S | Undo, redo, save |
 
@@ -335,7 +389,7 @@ skins. If the browser blocks storage, the skin still applies but isn't remembere
 - **Network topology:** Tunarr usually runs on a private address over HTTP. The browser therefore can't call it from an HTTPS hosted page, and real use requires the companion running where it can reach Tunarr (`README.md`).
 - **Sign-in is always on after setup:** HTTP Basic with the account made in the wizard protects everything but `/healthz`; the password is kept only as a scrypt hash. Before setup, only someone with the setup code from the server's log can configure it.
 - **Host names:** with sign-in, any name works (the browser only sends the password to the address it signed in on, which stops DNS rebinding). A server without setup and without a password answers only to IP addresses, `localhost` and the names in `LINEUP_ALLOWED_HOSTS`.
-- **Tunarr API compatibility:** Lineup depends on Tunarr's channel, programming, lineup, schedule, artwork, search, filler-list, custom-show, smart-collection, transcode-config and media-source endpoints and their payload shapes (see `docs/ARCHITECTURE.md`). The code doesn't detect Tunarr versions.
+- **Tunarr API compatibility:** Lineup depends on Tunarr's channel, programming, lineup, schedule, artwork, search, filler-list, custom-show, smart-collection, transcode-config and media-source endpoints and their payload shapes (see `docs/ARCHITECTURE.md`). The companion detects Tunarr's version and, more importantly, which of these it actually offers, with read-only checks (Server Settings → Compatibility, D63); versions outside 1.x get a warning, not a block. A feature is turned off only on evidence that Tunarr lacks it (a route answering "no such route", or Tunarr's API description leaving out a route the feature requires); then its Save is disabled before any edit, with the missing route named. The same evidence turns off single actions of a manager (creating, editing or deleting lists, collections, sources or profiles; adding, scanning or refreshing sources; new and deleted channels) while the rest of it keeps working, and the dialog says which and why. A timeout, an error or an API description that fails to load never turns anything off.
 - **Generated schedules:** saving manually can detach a channel from its generated schedule. Tunarr may also regenerate over manual edits.
 - **TV readability and remote operation:** text must stay large and anti-aliased in every skin, and every action must work without a mouse. The UI scales with the viewport (width, capped by height), and phones and tablets get a compact layout with a Menu sheet and a collapsible Program Info sheet.
 - **Conflict check window:** the companion checks and writes under a per-channel lock, so two Lineup sessions can't overwrite each other. Tunarr's API has no conditional save, so an edit made in Tunarr's own UI in the milliseconds between check and write would still be overwritten.
@@ -346,7 +400,9 @@ skins. If the browser blocks storage, the skin still applies but isn't remembere
 The code does not implement:
 - uploading logo or media files (logos are set by address), Plex OAuth sign-in (a token is entered), and Tunarr's global settings (FFmpeg, HDHomeRun, XMLTV)
 - events that cut into a program mid-way (an event airs once only through the scheduler, with scheduled changes on)
-- seasonal overlays that repeat every year
+- a guide (XMLTV) served by Lineup, title or sub-title templates, and names for marathons, events or dayparts in the guide: Tunarr is the guide's authority and has no API for them (D69); Lineup previews and checks Tunarr's guide only
+- slot schedules in the schedule library or calendar (a schedule save needs its preview's seed, so only manual lineups are kept and scheduled)
+- batch changes to a slot schedule, or a manual lineup saved over one by a batch
 - previewing a library program's video before inserting it (Tunarr has no per-program stream)
 - AI-written lineups that bypass preview (the AI only writes templates)
 - time-slot per-slot padding/lateness overrides

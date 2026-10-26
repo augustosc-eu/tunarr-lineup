@@ -53,3 +53,31 @@ describe('FillerFoldersDialog with uploads off', () => {
     expect(window.getSelection()?.toString()).toBe(MEDIA_COMPOSE_SNIPPET);
   });
 });
+
+describe('FillerFoldersDialog on a Tunarr that lacks some of pickup', () => {
+  const syncs = () => (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.filter(([url]) => String(url).endsWith('/filler-folders/sync')).length;
+
+  it('says which steps pickup left out', async () => {
+    const skipped = 'The upload folder wasn’t added to Tunarr: This Tunarr’s API doesn’t offer adding media sources (also filler folders).';
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      const body = String(url).endsWith('/filler-folders/sync') ? { connected: false, created: [], updated: [], errors: [], skipped: [skipped] } : companion(url);
+      return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+    }));
+    render(<FillerFoldersDialog roles={{}} blocked={(id, part) => (id === 'media-sources' && part === 'create' ? 'No adding.' : null)} onClose={() => undefined} onChanged={() => undefined} />);
+    expect(await screen.findByText(skipped)).toBeTruthy();
+    expect(screen.queryByText('Pickup')).toBeNull();
+  });
+
+  it('doesn’t ask for pickup at all, now or every few seconds, when every step of it is refused', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const off = new Set(['media-sources/create', 'filler-lists/create', 'filler-lists/edit']);
+      render(<FillerFoldersDialog roles={{}} blocked={(id, part) => (off.has(`${id}/${part}`) ? 'Not here.' : null)} onClose={() => undefined} onChanged={() => undefined} />);
+      await screen.findByLabelText('docker-compose.yml lines for the upload folder');
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(syncs()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

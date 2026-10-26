@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import { refusedParts, type PartBlocker } from '../../lib/compatibility';
 import type { NamedItem, SmartCollectionView } from '../../lib/library';
 import { tunarrApi } from '../../lib/tunarrClient';
 import { DATE_OPS, DATE_UNITS, NUMERIC_OPS, RULE_FIELDS, STRING_OPS, type Rule } from '../../server/smartCollection';
@@ -9,6 +10,8 @@ type Props = {
   onClose: () => void;
   /** Called after a collection is created, changed or deleted. */
   onChanged?: () => void;
+  /** Why this Tunarr refuses one of the dialog's actions, from the compatibility report. */
+  blocked?: PartBlocker;
 };
 
 type Editing = { id: string | null; name: string; match: 'all' | 'any'; rules: Rule[]; keywords: string; unsupported: string; loaded: boolean; hadFilter: boolean };
@@ -58,7 +61,10 @@ function RuleRow({ rule, index, onChange, onRemove }: { rule: Rule; index: numbe
   );
 }
 
-export function SmartCollectionsManager({ onClose, onChanged }: Props) {
+export function SmartCollectionsManager({ onClose, onChanged, blocked }: Props) {
+  // Actions this Tunarr's API doesn't offer are turned off, and the note says why.
+  const refused = (part: 'create' | 'edit' | 'delete' | 'preview') => !!blocked?.('smart-collections', part);
+  const refusals = refusedParts(blocked, [['smart-collections', 'create'], ['smart-collections', 'edit'], ['smart-collections', 'delete'], ['smart-collections', 'preview']]);
   const [collections, setCollections] = useState<NamedItem[] | null>(null);
   const [editing, setEditing] = useState<Editing | null>(null);
   const [dirty, setDirty] = useState(false);
@@ -160,14 +166,15 @@ export function SmartCollectionsManager({ onClose, onChanged }: Props) {
         <p className="eyebrow">SMART COLLECTIONS</p>
         <h2 id="smart-title">Smart collections</h2>
         <p className="subtle">A smart collection is a saved search, like “comedies from the 90s” or “movies added in the last month”. Slots can play one, and it keeps up with your libraries.</p>
+        {refusals.length > 0 && <div className="warning" role="note"><b>Not on this Tunarr</b>{refusals.map((reason) => <span key={reason}>{reason}</span>)}</div>}
         <div className="lists-layout">
           <div className="lists-index">
-            <button className="wide primary" onClick={() => { setEditing({ id: null, name: '', match: 'all', rules: [blankRule('genre')], keywords: '', unsupported: '', loaded: true, hadFilter: false }); setDirty(true); setPreview(null); setConfirmDelete(false); }}>New smart collection</button>
+            <button className="wide primary" disabled={refused('create')} onClick={() => { setEditing({ id: null, name: '', match: 'all', rules: [blankRule('genre')], keywords: '', unsupported: '', loaded: true, hadFilter: false }); setDirty(true); setPreview(null); setConfirmDelete(false); }}>New smart collection</button>
             <div className="candidate-list" role="listbox" aria-label="Smart collections">
               {collections === null && <p className="subtle candidate-empty">Loading…</p>}
               {collections?.length === 0 && <p className="subtle candidate-empty">None yet.</p>}
               {collections?.map((item) => (
-                <button key={item.id} role="option" aria-selected={editing?.id === item.id} className={`list-entry ${editing?.id === item.id ? 'active' : ''}`} onClick={() => void select(item)}><b>{item.name}</b></button>
+                <button key={item.id} role="option" aria-selected={editing?.id === item.id} className={`list-entry ${editing?.id === item.id ? 'active' : ''}`} disabled={refused('edit')} onClick={() => void select(item)}><b>{item.name}</b></button>
               ))}
             </div>
           </div>
@@ -190,7 +197,7 @@ export function SmartCollectionsManager({ onClose, onChanged }: Props) {
               <div className="list-toolbar">
                 <button onClick={() => change({ rules: [...editing.rules, blankRule('genre')] })}>Add rule</button>
                 <label className="grow">Keywords <input aria-label="Keywords" placeholder="Optional free-text search" value={editing.keywords} onChange={(event) => change({ keywords: event.target.value })} /></label>
-                <button disabled={busy || !hasCriteria} onClick={() => void runPreview()}>Preview matches</button>
+                <button disabled={busy || !hasCriteria || refused('preview')} onClick={() => void runPreview()}>Preview matches</button>
               </div>
               {preview && <div className="smart-preview" role="status">
                 <b>{preview.totalHits.toLocaleString('en')} {preview.totalHits === 1 ? 'match' : 'matches'}</b>
@@ -201,9 +208,9 @@ export function SmartCollectionsManager({ onClose, onChanged }: Props) {
               <div className="dialog-actions">
                 {editing.id && (confirmDelete
                   ? <><span className="subtle">Delete “{editing.name}”? Slots that play it will need a new source.</span><button onClick={() => setConfirmDelete(false)}>Keep</button><button className="primary" disabled={busy} onClick={() => void remove()}>Delete</button></>
-                  : <button disabled={busy} onClick={() => setConfirmDelete(true)}>Delete…</button>)}
+                  : <button disabled={busy || refused('delete')} onClick={() => setConfirmDelete(true)}>Delete…</button>)}
                 <span className="spacer" />
-                <button className="primary" disabled={!canSave} onClick={() => void save()}>{busy ? 'Saving…' : editing.id ? 'Save changes' : 'Create collection'}</button>
+                <button className="primary" disabled={!canSave || refused(editing.id ? 'edit' : 'create')} onClick={() => void save()}>{busy ? 'Saving…' : editing.id ? 'Save changes' : 'Create collection'}</button>
               </div>
             </>}
           </div>

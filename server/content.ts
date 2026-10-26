@@ -3,6 +3,7 @@
 // and a channel's programming-related settings. Like the rest of the proxy,
 // each route is explicit, inputs are validated before any upstream call, and
 // responses are trimmed to what the interface needs.
+import { cachedCompatibility, unavailableReason } from './compatibility.js';
 import { isFillerRole, type FillerRole } from './fillerRoles.js';
 import type { FillerRoleStore } from './fillerRoleStore.js';
 import { StoreError } from './jsonFile.js';
@@ -279,6 +280,8 @@ function validateOffline(value: unknown, current: unknown): Json | string {
   }
   return base;
 }
+/** The highest channel number Lineup accepts (and so the highest a renumbering may park a channel on). */
+export const MAX_CHANNEL_NUMBER = 99_999;
 // Read-only or response-only fields Tunarr's save schema does not accept.
 /** Fields Tunarr returns on a channel but refuses in a channel update. */
 export const NOT_SAVEABLE = ['programCount', 'sessions', 'fallback', 'transcoding'];
@@ -321,7 +324,7 @@ export function validateChannelSettings(body: unknown, current: Json = {}): { ch
         changes.name = (value as string).trim();
         break;
       case 'number':
-        if (!Number.isInteger(value) || (value as number) < 1 || (value as number) > 99_999) return { error: 'Channel number must be a whole number from 1.' };
+        if (!Number.isInteger(value) || (value as number) < 1 || (value as number) > MAX_CHANNEL_NUMBER) return { error: 'Channel number must be a whole number from 1.' };
         changes.number = value;
         break;
       case 'groupTitle':
@@ -399,6 +402,10 @@ const LIST_NOT_FOUND = 'Tunarr could not find that list.';
  * Null when the library has nothing playable yet (Tunarr refuses empty lists).
  */
 export async function buildFromLibrary(config: ProxyConfig, target: TunarrTarget, request: FromLibrary): Promise<{ id: string; count: number; storeError?: string } | null> {
+  // Refused before reading when the last check shows Tunarr lacks the search or the list write (a sync checks first, step by step).
+  const report = cachedCompatibility(config);
+  const refused = unavailableReason(report, 'library-search') ?? unavailableReason(report, 'filler-lists', request.listId ? 'edit' : 'create');
+  if (refused) throw new UpstreamError(501, 'tunarr_unsupported', refused);
   const call = (verb: 'POST' | 'PUT', path: string, payload: unknown, notFound?: string) => callTunarr(config, target, verb, path, JSON.stringify(payload), notFound);
   // Read the whole library; listings without search text page from 0.
   const programs: Json[] = [];
