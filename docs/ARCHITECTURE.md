@@ -122,7 +122,7 @@ server implements those paths.
 | `server/compression.ts` | `pickEncoding` (Brotli, else gzip, from Accept-Encoding), `isCompressible`, `compress` (async zlib), `compressionEnabled` (`LINEUP_COMPRESSION`). |
 | `server/lineupItems.ts` | `lineupItemsError` (shared item validation), `slimPrograms`. |
 | `server/upstream.ts` | Shared upstream plumbing: `fetchUpstream`, `callTunarr` (GET/POST/PUT/DELETE), `UpstreamError`, `json`, `fail`, `routeMissing` (Tunarr's own "Route … not found" 404, answered as `501 tunarr_unsupported`). |
-| `server/compatibility.ts` | What this Tunarr can do (D63): `CAPABILITY_MATRIX` (each capability's label, what uses it, the operations it needs from Tunarr's API description, its `parts` (a manager's create, edit, delete and the like, each with its own operations) and its read-only probe), `detectCompatibility` (version, `/openapi.json`, probes, four at a time), `decide` (one capability from the evidence, with each part's state from `decideParts`; pure), `checkVersion` (`VALIDATED_VERSIONS` 1.x), `describedOperations`, `failureReason` (Lineup's own words, never upstream messages), `compatibility` (per-config cache, `COMPATIBILITY_TTL_MS` 5 min, shared runs, keyed by Tunarr's address), `unavailableReason` (a capability, or one of its parts), `compatibilitySummary`. |
+| `server/compatibility.ts` | What this Tunarr can do (D63): `CAPABILITY_MATRIX` (each capability's label, what uses it, the operations it needs from Tunarr's API description, its `parts` (a manager's create, edit, delete and the like, each with its own operations) and its read-only probe), `detectCompatibility` (version, `/openapi.json`, probes, four at a time), `decide` (one capability from the evidence, with each part's state from `decideParts`; pure), `checkVersion` (`VALIDATED_VERSIONS` 1.x and 2026.9–2026.10), `describedOperations`, `scheduleSlotTypes` (the slot types the schedule routes' request schemas accept), `failureReason` (Lineup's own words, never upstream messages), `compatibility` (per-config cache, `COMPATIBILITY_TTL_MS` 5 min, shared runs, keyed by Tunarr's address), `unavailableReason` (a capability, or one of its parts), `compatibilitySummary`. |
 | `server/channelHealth.ts` | A channel's health (pure): `channelFindings` (programs Tunarr no longer has, zero lengths, redirects to itself or to a channel that's gone, breaks from deleted filler lists, flex with no filler when the channel's lists are known to be empty, guide drift on manual lineups only when both sides name different programs), `loopFindings`/`findLoop` (loops across channels, or a note that the check is partial), `positionAt`, `healthStatus`, `sortFindings`. |
 | `server/controlRoom.ts` | The Control Room routes: `controlRoomSummary` (channels, a three-hour guide, sessions, pending scheduled changes, last diagnostics; each part `ok`, `error` or `unsupported`), `checkChannels` (programming and channel document per channel, `CHECK_CONCURRENCY` 3, `MAX_CHECK_CHANNELS` 25 per request, findings computed as each reply arrives, loops from every channel's known redirects; results kept in memory, at most 2,000), `validateCheck`. |
 | `lib/controlRoom.ts` | `channelStatus` (the last check made worse, never better, by an empty guide or a failed stream check; never healthy without a check), `summaryNotes`, filters (`ROOM_FILTERS`, `matchesFilter`, `filterCounts`, `nextFilter`), `stepRow` (arrows, pages, ends), `checkBatches`, `checkStream` (the playlist only, `STREAM_CHECK_MS` 15 s, cancellable), `ROOM_REFRESH_MS` 60 s. |
@@ -309,6 +309,24 @@ per channel within this process:
 3. **Schedule saves.**
    - The requested type must match the current `schedule.type`, else `409 schedule_type_mismatch`.
    - `buildEditedSchedule(current.schedule, edit)` validates the slots and returns Tunarr's current schedule with only `slots` replaced (plus `timeZoneOffset` if it's a valid offset). Errors give `400 invalid_schedule`.
+   - Movie slots: Tunarr 2026.10.4 removed them. The `movie-slots` part of
+     `slot-schedules` is decided from Tunarr's API description
+     (`scheduleSlotTypes`: `schedule.slots[].type` in the schedule routes'
+     request schemas; not spelled out means not ruled out). Where it's
+     `unavailable`, the desk passes `movieSlots: false` in the slot catalog
+     (`catalogOptions` drops "Movies", template presets of that type are
+     ignored, the editor warns about a movie slot left in a draft), and
+     `refuseMovieSlots` answers 400 `invalid_schedule` in Lineup's words before
+     a preview or save reaches Tunarr (from the cached report only).
+     **Make the custom show in Tunarr** (opt-in, `makeMovieShows` in
+     `page.tsx`) mirrors Tunarr's own upgrade: `channelMovies` (the lineup's
+     movies, each once, not lineup-only filler, plus the editor's added
+     movies), `movieShows` (one show per play order: by date or title, up or
+     down; shuffle takes the first; named "<channel> Movies"), then
+     `POST /api/tunarr/custom-shows` per show (gated on `custom-shows`
+     `create`) and `convertMovieSlots` (custom-show slots, `next` for ordered
+     plays, `direction: 'asc'` since the order is built into the show; every
+     other field kept). A show that isn't made leaves its slots as movie slots.
    - The program list is computed server-side with `programPool(slots, current.lineup, current.programs, extraPrograms)`: content and custom items already in the lineup that some slot draws from, plus validated extra program ids (for example movies for a movie slot).
    - The proxy then posts `{type, schedule, programs, seed, discardCount}`.
 
@@ -573,7 +591,8 @@ version themselves.
    - HLS is never probed (a playlist request starts a stream in Tunarr): it is
      `available` while Tunarr reports live sessions, otherwise `untested`.
 4. **Version:** `/api/version`, else the API description's `info.version`.
-   Inside `VALIDATED_VERSIONS` (≥ 1.0.0, < 2.0.0) is `validated`; other
+   Inside `VALIDATED_VERSIONS` (≥ 1.0.0 and < 2.0.0, or ≥ 2026.9.0 and < 2026.11.0:
+   Tunarr's releases are dated since 2026.9) is `validated`; other
    numbers `unvalidated`; anything else (or none) `unknown`. The version only
    produces a warning: capabilities are always decided by the checks.
 5. **Reasons** are Lineup's own sentences (`failureReason`), never upstream
@@ -1151,6 +1170,7 @@ bundle (`envPrefix`); none are used.
   - `skins.spec.ts`: picking each skin by keyboard, checked through computed styles (desktop, selection, `color-scheme`); persistence across a reload; `skin-init.js` applying the skin with the app bundle blocked; Escape keeping the pick; the desk, guide grid, week view and Watch Live (OSD, cable guide focus and ↓, remote) under every skin without horizontal overflow; and the phone Menu sheet.
   - `large-channel.spec.ts`: synthetic channels from `e2e/syntheticChannel.mjs` (added to the fake with `/__test/large`; `/__test/delay` slows its programming) at 5,000 and 20,000 items, a day of short spots and a throttled 1.6 Mbit/s link; prints `[perf]` JSON and checks budgets for bytes on the wire, time to open, mounted rows, heap, channel and day switches.
   - `operations.spec.ts`: the guide preview (listing, a flex-title check, an XMLTV download without addresses); notifications (loopback refused even with the private exception, a write-only public address, a test failing cleanly on DNS, turning off); the advanced planner (a show, a day, a seed, preview, save checked in the fake); the schedule library and calendar (save, yearly entry, refused overlap, kept after a reload, remove); batch operations by keyboard (group change, rollback, Recent batches), media repair after `/__test/forget-program`, and a package exported and imported; also Compatibility in Server Settings (diagnostics without the address or password; a route the fake Tunarr drops with `/__test/missing-routes` refuses only its feature) and the Control Room by remote (check all, filters, actions, Back) at 1920×1080 and phone width. The fake also answers `/api/version` and `/openapi.json`.
+  - `tunarr-releases.spec.ts`: the fake stands in for another Tunarr release with `/__test/release` (`1.3.13`, the default, or `2026.10.4`: that version from `/api/version`, no `movie` slot type in the schedule routes' request schemas, and movie slots rejected on preview and save; custom shows can be made and are played by custom-show slots). Checks Compatibility (2026.10.4 validated, Slot schedules Limited for movie slots alone), the slot editor's warning and refusal, **Make the custom show in Tunarr** (the show in the fake, the slot saved as a custom-show slot) at 1920×1080 and 1366×768, and that 1.3.13 keeps movie slots.
   - `tools.spec.ts`: viewer counts without addresses, the guide grid by remote, watching through the companion only, the lineup check and snapshot restore, the week view export, and a planned/cancelled dated save. The fake also serves `/api/guide/channels`, `/api/sessions` and `/stream/channels/…`. Each test clears the companion's shared drafts first.
 
 ## 14. Cross-cutting patterns

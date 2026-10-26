@@ -20,7 +20,7 @@ export type CapabilityId =
 /** One part of a capability the desk can refuse on its own (a manager's create, edit or delete button). */
 export type PartId =
   | 'create' | 'edit' | 'delete' | 'contents' | 'copy' | 'preview' | 'lookup' | 'browse'
-  | 'refresh' | 'enable' | 'scan' | 'sign-in-jellyfin' | 'sign-in-emby';
+  | 'refresh' | 'enable' | 'scan' | 'sign-in-jellyfin' | 'sign-in-emby' | 'movie-slots';
 
 /**
  * available: checked and usable, every part of it. degraded: usable, but not
@@ -68,8 +68,15 @@ export type CompatibilityReport = {
   capabilities: Capability[];
 };
 
-/** Versions whose API shape Lineup was written and tested against. */
-export const VALIDATED_VERSIONS = { from: [1, 0, 0], below: [2, 0, 0], label: '1.x' } as const;
+/**
+ * Versions whose API shape Lineup was written and tested against. Tunarr's
+ * releases moved from 1.x to dates (YEAR.MONTH.N, 2026.9 onwards); 2026.10.4
+ * dropped movie slots, which the API description shows (`movie-slots` below).
+ */
+export const VALIDATED_VERSIONS = {
+  ranges: [{ from: [1, 0, 0], below: [2, 0, 0] }, { from: [2026, 9, 0], below: [2026, 11, 0] }],
+  label: '1.x and 2026.9–2026.10',
+} as const;
 export const COMPATIBILITY_TTL_MS = 5 * 60_000;
 const PROBE_CONCURRENCY = 4;
 
@@ -93,8 +100,9 @@ type Spec = {
    * capability degraded, never unavailable, so reading stays on. A capability
    * with no required routes is unavailable only when every part is.
    * `label` finishes "… won't work" ("deleting filler lists").
+   * `slotType`: the part also needs that slot type in the schedule routes' request schema.
    */
-  parts?: Array<{ id: PartId; label: string; ops: Op[] }>;
+  parts?: Array<{ id: PartId; label: string; ops: Op[]; slotType?: string }>;
   /** The read-only request that proves it, when there is one. */
   probe?: ProbeKey;
 };
@@ -104,7 +112,13 @@ export const CAPABILITY_MATRIX: readonly Spec[] = [
   { id: 'connection', label: 'Connection', uses: 'Everything', ops: [['get', '/api/channels']], probe: 'channels' },
   { id: 'programming', label: 'Programming', uses: 'The desk’s lineup, snapshots, the lineup check, Control Room checks', ops: [['get', '/api/channels/{}/programming']], probe: 'programming' },
   { id: 'manual-saves', label: 'Saving lineups', uses: 'Save, Reset Channel, scheduled changes, batch repairs and imports', ops: [['post', '/api/channels/{}/programming']] },
-  { id: 'slot-schedules', label: 'Slot schedules', uses: 'Edit and preview slot schedules, programming templates', ops: [['post', '/api/channels/{}/schedule-slots'], ['post', '/api/channels/{}/schedule-time-slots']] },
+  {
+    id: 'slot-schedules', label: 'Slot schedules', uses: 'Edit and preview slot schedules, programming templates', ops: [['post', '/api/channels/{}/schedule-slots'], ['post', '/api/channels/{}/schedule-time-slots']],
+    parts: [
+      // Tunarr 2026.10.4 removed movie slots (movies go in a custom show); the routes stay, the slot type goes.
+      { id: 'movie-slots', label: 'movie slots (schedule movies with a custom-show slot)', ops: [['post', '/api/channels/{}/schedule-slots'], ['post', '/api/channels/{}/schedule-time-slots']], slotType: 'movie' },
+    ],
+  },
   { id: 'guide', label: 'Guide', uses: 'Guide grid, now and next, the desk’s guide times, Control Room', ops: [['get', '/api/guide/channels']], probe: 'guide' },
   { id: 'sessions', label: 'Viewer counts', uses: 'Viewer badges, Control Room viewers', ops: [['get', '/api/sessions']], probe: 'sessions' },
   { id: 'channel-settings', label: 'Channel settings', uses: 'Channel Settings, batch group, transcode, filler and number changes', ops: [['get', '/api/channels/{}'], ['put', '/api/channels/{}']], probe: 'channel' },
@@ -200,7 +214,7 @@ export function checkVersion(version: string | null, source: VersionCheck['sourc
   const match = SEMVER.exec(version);
   if (!match) return { tunarr: version, source, status: 'unknown', note: `“${version}” isn’t a version number Lineup can compare (a development build?). Features are checked one by one below.` };
   const parts = [Number(match[1]), Number(match[2]), Number(match[3])];
-  const inside = compare(parts, VALIDATED_VERSIONS.from) >= 0 && compare(parts, VALIDATED_VERSIONS.below) < 0;
+  const inside = VALIDATED_VERSIONS.ranges.some(({ from, below }) => compare(parts, from) >= 0 && compare(parts, below) < 0);
   return inside
     ? { tunarr: version, source, status: 'validated', note: `Lineup is built for Tunarr ${VALIDATED_VERSIONS.label}.` }
     : { tunarr: version, source, status: 'unvalidated', note: `Lineup is built for Tunarr ${VALIDATED_VERSIONS.label}; this version hasn’t been validated. Features that answer as expected stay on.` };
@@ -218,6 +232,54 @@ export function describedOperations(document: unknown): Set<string> | null {
     for (const method of Object.keys(item)) ops.add(`${method.toLowerCase()} ${path}`);
   }
   return ops;
+}
+
+const SCHEDULE_ROUTES = ['/api/channels/{}/schedule-slots', '/api/channels/{}/schedule-time-slots'];
+
+/**
+ * The slot types Tunarr's schedule routes accept, read from their request
+ * schemas in its API description (`schedule.slots[].type`), or null when the
+ * description doesn't spell them out (then nothing is ruled out).
+ */
+export function scheduleSlotTypes(document: unknown): Set<string> | null {
+  if (!isObject(document) || !isObject(document.paths)) return null;
+  const components = isObject(document.components) ? document.components : {};
+  // Follows local references (#/components/<kind>/<name>), a few levels deep.
+  const resolve = (value: unknown, depth = 0): Json | null => {
+    if (!isObject(value)) return null;
+    if (typeof value.$ref !== 'string') return value;
+    const match = /^#\/components\/([^/]+)\/([^/]+)$/.exec(value.$ref);
+    const kind = match && components[match[1]];
+    return depth < 8 && match && isObject(kind) ? resolve(kind[match[2]], depth + 1) : null;
+  };
+  // A schema's alternatives (oneOf, anyOf, allOf), flattened.
+  const variants = (value: unknown, depth = 0): Json[] => {
+    const schema = resolve(value);
+    if (!schema || depth > 4) return [];
+    const list = [schema.oneOf, schema.anyOf, schema.allOf].find(Array.isArray) as unknown[] | undefined;
+    return list ? list.flatMap((item) => variants(item, depth + 1)) : [schema];
+  };
+  const property = (schema: Json, name: string) => (isObject(schema.properties) ? schema.properties[name] : undefined);
+
+  const types = new Set<string>();
+  let found = false;
+  for (const [route, item] of Object.entries(document.paths)) {
+    if (!SCHEDULE_ROUTES.includes(route.replace(/\{[^}]*\}/g, '{}').replace(/\/+$/, '')) || !isObject(item) || !isObject(item.post)) continue;
+    const body = resolve(item.post.requestBody);
+    const content = body && isObject(body.content) && isObject(body.content['application/json']) ? body.content['application/json'] : undefined;
+    for (const request of variants(content?.schema)) {
+      for (const schedule of variants(property(request, 'schedule'))) {
+        const slots = resolve(property(schedule, 'slots'));
+        for (const slot of variants(slots?.items)) {
+          const type = resolve(property(slot, 'type'));
+          if (!type) continue;
+          const values = Array.isArray(type.enum) ? type.enum : type.const !== undefined ? [type.const] : [];
+          for (const value of values) if (typeof value === 'string') { types.add(value); found = true; }
+        }
+      }
+    }
+  }
+  return found ? types : null;
 }
 
 // ------------------------------------------------------------------- probes
@@ -287,6 +349,8 @@ async function bounded<T>(tasks: Array<() => Promise<T>>, limit: number): Promis
 
 type Evidence = {
   ops: Set<string> | null;
+  /** Slot types the schedule routes accept, from the API description (null: not spelled out). */
+  slotTypes?: Set<string> | null;
   /** How reading Tunarr's API description went: read, missing (an older Tunarr without one), or failed (it may pass). */
   description?: CompatibilityReport['apiDescription'];
   probes: Partial<Record<ProbeKey, ProbeResult>>;
@@ -296,10 +360,23 @@ type Evidence = {
 
 const list = (items: string[]) => (items.length > 1 ? `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}` : items[0] ?? '');
 
-/** Each part's state: only Tunarr's API description, read successfully, can say a write route is missing. */
-export function decideParts(spec: Spec, ops: Set<string> | null): CapabilityPart[] {
-  return (spec.parts ?? []).map(({ id, label, ops: needs }) => ({ id, label, status: !ops ? 'unchecked' : needs.every((op) => ops.has(`${op[0]} ${op[1]}`)) ? 'available' : 'unavailable' }));
+/**
+ * Each part's state: only Tunarr's API description, read successfully, can say
+ * a write route (or a slot type it accepts) is missing.
+ */
+export function decideParts(spec: Spec, ops: Set<string> | null, slotTypes: Set<string> | null = null): CapabilityPart[] {
+  return (spec.parts ?? []).map(({ id, label, ops: needs, slotType }) => ({
+    id, label,
+    status: !ops ? 'unchecked'
+      : needs.every((op) => ops.has(`${op[0]} ${op[1]}`)) && (!slotType || !slotTypes || slotTypes.has(slotType)) ? 'available' : 'unavailable',
+  }));
 }
+
+/** What the description lacks for one part: its routes, or (when they're listed) its slot type. */
+const lacking = (part: NonNullable<Spec['parts']>[number], listed: (op: Op) => boolean) => {
+  const routes = part.ops.filter((op) => !listed(op)).map(opLabel);
+  return routes.length || !part.slotType ? routes : [`the “${part.slotType}” slot type`];
+};
 
 /**
  * Decides one capability from what the checks showed. Pure, so every
@@ -316,12 +393,12 @@ export function decide(spec: Spec, evidence: Evidence): Pick<Capability, 'status
   const probeResult = spec.probe ? evidence.probes[spec.probe] : undefined;
   // A route that just answered exists, whatever the description says.
   const absent = spec.ops.filter((op, index) => !listed(op) && !(index === 0 && probeResult?.ok));
-  const parts = decideParts(spec, evidence.ops);
+  const parts = decideParts(spec, evidence.ops, evidence.slotTypes ?? null);
   const withParts = (decided: Pick<Capability, 'status' | 'reason'>): Pick<Capability, 'status' | 'reason' | 'parts'> => (parts.length ? { ...decided, parts } : decided);
   const missing = (spec.parts ?? []).filter(({ id }) => parts.find((part) => part.id === id)?.status === 'unavailable');
   const unchecked = parts.filter((part) => part.status === 'unchecked');
   const partNote = missing.length
-    ? ` Tunarr’s API doesn’t list ${list([...new Set(missing.flatMap(({ ops }) => ops.filter((op) => !listed(op)).map(opLabel)))])}, so ${list(missing.map(({ label }) => label))} won’t work; the rest does.`
+    ? ` Tunarr’s API doesn’t list ${list([...new Set(missing.flatMap((part) => lacking(part, listed)))])}, so ${list(missing.map(({ label }) => label))} won’t work; the rest does.`
     : unchecked.length ? ` ${unchecked.length === parts.length ? 'Its changes' : list(unchecked.map(({ label }) => label))} couldn’t be checked (${evidence.description === 'failed' ? 'Tunarr’s API description didn’t load just now' : 'Tunarr doesn’t describe its API'}), so ${unchecked.length === 1 ? 'it’s' : 'they’re'} tried when used.` : '';
   // A read that worked, with parts missing or unchecked, is usable but not whole.
   const readWorks = (status: CapabilityStatus, reason: string): Pick<Capability, 'status' | 'reason' | 'parts'> => withParts(partNote && status === 'available' ? { status: 'degraded', reason: `${reason}${partNote}` } : { status, reason: `${reason}${partNote}` });
@@ -337,7 +414,7 @@ export function decide(spec: Spec, evidence: Evidence): Pick<Capability, 'status
   }
   // Nothing required of its own (only parts): off when every part is.
   if (!spec.ops.length && parts.length && missing.length === parts.length) {
-    return withParts({ status: 'unavailable', reason: `This Tunarr’s API doesn’t list ${list([...new Set(missing.flatMap(({ ops }) => ops.filter((op) => !listed(op)).map(opLabel)))])}, so ${list(missing.map(({ label }) => label))} ${missing.length === 1 ? 'is' : 'are'} turned off instead of failing when used.` });
+    return withParts({ status: 'unavailable', reason: `This Tunarr’s API doesn’t list ${list([...new Set(missing.flatMap((part) => lacking(part, listed)))])}, so ${list(missing.map(({ label }) => label))} ${missing.length === 1 ? 'is' : 'are'} turned off instead of failing when used.` });
   }
   if (probeResult) {
     if (probeResult.ok) return readWorks('available', 'Checked with a read-only request.');
@@ -425,7 +502,7 @@ export async function detectCompatibility(config: ProxyConfig, target: TunarrTar
   const liveStreams = sessions.ok && isObject(sessions.data)
     ? Object.values(sessions.data).reduce((sum: number, list) => sum + (Array.isArray(list) ? list.filter((session) => isObject(session) && session.state !== 'stopped' && session.state !== 'error').length : 0), 0)
     : 0;
-  const evidence: Evidence = { ops, description: apiDescription, liveStreams, probes: { channels, channel, programming, guide, sessions, fillerLists, customShows, smartCollections, mediaSources, search, transcodeConfigs } };
+  const evidence: Evidence = { ops, slotTypes: ops ? scheduleSlotTypes(description) : null, description: apiDescription, liveStreams, probes: { channels, channel, programming, guide, sessions, fillerLists, customShows, smartCollections, mediaSources, search, transcodeConfigs } };
   return {
     checkedAt: now, configured: true, connected: true, version, apiDescription,
     capabilities: CAPABILITY_MATRIX.map((spec) => ({ id: spec.id, label: spec.label, uses: spec.uses, ...decide(spec, evidence) })),

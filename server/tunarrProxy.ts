@@ -27,6 +27,7 @@ import { createProgrammingCache, DEFAULT_PROGRAMMING_CACHE_MS, etagMatches, toVi
 import { lineupItemsError } from './lineupItems.js';
 import { callTunarr, fail, fetchUpstream, json, jsonHeaders, UpstreamError } from './upstream.js';
 import { buildSchedule, programPool, validateExtraPrograms, validateSeed } from './slotSchedule.js';
+import { cachedCompatibility, unavailableReason } from './compatibility.js';
 import { findRedirectsTo, recreateChannel, validateRecreate, type RecreateMode } from './recreateChannel.js';
 
 // Narrow backend-for-frontend for Tunarr.
@@ -327,6 +328,17 @@ async function fetchArtwork(config: ProxyConfig, target: TunarrTarget, programId
   };
 }
 
+/**
+ * Tunarr 2026.10.4 rejects movie slots; once the compatibility check has shown
+ * this Tunarr doesn't take them, say so in Lineup's words instead of passing
+ * Tunarr's schema error on. Without a fresh report, Tunarr still decides.
+ */
+function refuseMovieSlots(config: ProxyConfig, schedule: Record<string, unknown>) {
+  if (!Array.isArray(schedule.slots) || !schedule.slots.some((slot) => (slot as { type?: unknown })?.type === 'movie')) return;
+  const refused = unavailableReason(cachedCompatibility(config), 'slot-schedules', 'movie-slots');
+  if (refused) throw new UpstreamError(400, 'invalid_schedule', 'This Tunarr no longer plays movie slots. Put the movies in a custom show and change those slots to a custom-show slot.');
+}
+
 function notConfigured(config: ProxyConfig) {
   return config.configError
     ? { code: 'invalid_config', message: config.configError }
@@ -527,6 +539,7 @@ export async function handleTunarrApi(request: ProxyRequest, config: ProxyConfig
               // schedule's other fields when the type is unchanged.
               const built = buildSchedule(current?.schedule, pending.edit);
               if ('error' in built) throw new UpstreamError(400, 'invalid_schedule', built.error);
+              refuseMovieSlots(config, built.schedule);
               const programs = programPool(built.schedule.slots as Array<Record<string, unknown>>, current?.lineup, current?.programs, pending.extra);
               body = { type: pending.type, schedule: built.schedule, programs, seed: pending.seed, discardCount: pending.discardCount };
             }
@@ -575,6 +588,7 @@ export async function handleTunarrApi(request: ProxyRequest, config: ProxyConfig
           const current = (await callTunarr(config, target, 'GET', `/api/channels/${route.channelId}/programming`)) as CurrentProgramming;
           const built = buildSchedule(current?.schedule, previewEdit);
           if ('error' in built) throw new UpstreamError(400, 'invalid_schedule', built.error);
+          refuseMovieSlots(config, built.schedule);
           const endpoint = built.schedule.type === 'time' ? 'schedule-time-slots' : 'schedule-slots';
           // A POST, so generation gets the longer save timeout.
           return json(200, await callTunarr(config, target, 'POST', `/api/channels/${route.channelId}/${endpoint}`, JSON.stringify({ schedule: built.schedule })));

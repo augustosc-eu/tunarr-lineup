@@ -8,6 +8,12 @@ were renamed 2026.10.1 and 2026.10.2.
 
 ## [Unreleased]
 
+### Changed
+
+- **Tunarr 2026.10.4:** Tunarr's dated releases (2026.9 and 2026.10) now count as validated; Compatibility used to call every current Tunarr "not validated" because it only knew 1.x.
+- **Movie slots on Tunarr 2026.10.4 and later:** that release removed movie slots (movies go in a custom show, and Tunarr converts existing ones itself). Lineup reads this from Tunarr's API description: the slot editor and programming templates stop offering "Movies", a template's saved "Movies" choice is left for you to pick again, a schedule that still has a movie slot says what to change and offers **Make the custom show in Tunarr** (only when you choose it: the custom shows Tunarr's own upgrade makes, one per play order, from the channel's movies and any you add, with those slots changed to play them and their times, commercials and links kept), and the companion refuses it in plain words instead of passing on Tunarr's error. Compatibility shows Slot schedules as Limited, with why. Older Tunarr keeps movie slots.
+- The e2e fake Tunarr can stand in for Tunarr 2026.10.4 (`/__test/release`), with a browser test for movie slots there.
+
 ## [2026.10.20] - 2026-10-26
 
 ### Added

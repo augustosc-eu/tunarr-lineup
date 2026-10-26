@@ -617,6 +617,7 @@ h1 { margin:0; font-size:1.5rem; line-height:1.2; letter-spacing:0; }
 .unsaved-mark { color:var(--unsaved); font-style:normal; font-weight:700; }
 .channel.active .unsaved-mark { color:var(--warn-bg); }
 .warning .wide { margin-top:0.375rem; }
+.warning .warning-actions { display:flex; flex-wrap:wrap; gap:0.375rem; margin-top:0.25rem; }
 .preview-bar { position:sticky; z-index:6; top:0.375rem; margin:0 0 0.625rem; padding:0.5rem 0.625rem; display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:0.5rem; background:var(--warn-bg); border:1px solid var(--warn-border); box-shadow:inset 1px 1px var(--bevel-hi); }
 .preview-bar b { margin-right:0.375rem; }
 .preview-actions { display:flex; gap:0.375rem; }

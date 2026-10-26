@@ -5,7 +5,11 @@ import { rebaseHistory, record, type History } from '../lib/history';
 import type { LineupItem } from '../lib/lineup';
 import {
   addShowSlots,
+  catalogOptions,
   changeSlotSource,
+  channelMovies,
+  convertMovieSlots,
+  movieShows,
   clockToOffset,
   DEFAULT_SETTINGS,
   newSlotId,
@@ -469,5 +473,72 @@ describe('shows from the program bin in a time-slot schedule', () => {
     expect(addShowSlots(random, [show('1', 'A')], plan)).toHaveProperty('error');
     expect(addShowSlots(daily([]), [], plan)).toHaveProperty('error');
     expect(addShowSlots(daily([]), [show('1', 'A')], { ...plan, weekdays: [] })).toHaveProperty('error');
+  });
+});
+
+describe('slot sources on a Tunarr without movie slots', () => {
+  const catalog = { customShows: [{ id: CUSTOM, name: 'Movie night' }], fillerLists: [], smartCollections: [], channels: [] };
+  it('offers "Movies" only where Tunarr still has movie slots', () => {
+    expect(catalogOptions([], catalog).some((option) => option.key === 'movie')).toBe(true);
+    const keys = catalogOptions([], { ...catalog, movieSlots: false }).map((option) => option.key);
+    expect(keys).not.toContain('movie');
+    expect(keys).toContain(`custom-show:${CUSTOM}`);
+    expect(catalogOptions([{ id: newSlotId(), type: 'movie', order: 'shuffle' }], { ...catalog, movieSlots: false }).map((option) => option.key)).not.toContain('movie');
+  });
+});
+
+describe('making custom shows for movie slots (Tunarr 2026.10.4)', () => {
+  const M1 = '11111111-1111-4111-8111-111111111111';
+  const M2 = '22222222-2222-4222-8222-222222222222';
+  const M3 = '33333333-3333-4333-8333-333333333333';
+  const lineup = [
+    { type: 'content', id: M1, duration: 100 },
+    { type: 'content', id: 'ep-a', duration: 30 },
+    { type: 'content', id: M2, duration: 200 },
+    { type: 'content', id: M1, duration: 100 },
+    { type: 'content', id: 'ad', duration: 30, fillerListId: 'f' },
+    { type: 'flex', duration: 10 },
+  ];
+  const programs = {
+    [M1]: { program: { type: 'movie', title: 'Zodiac', date: '2007-03-02' } },
+    [M2]: { type: 'movie', title: 'Alien', year: 1979 },
+    'ep-a': { program: { type: 'episode', title: 'Pilot' } },
+    ad: { program: { type: 'movie', title: 'Ad' } },
+  };
+  const slot = (order: string, direction = 'asc', extra: Record<string, unknown> = {}): Slot => ({ id: newSlotId(), type: 'movie', order, direction, startTime: 0, ...extra });
+
+  it('takes the channel’s movies once, never its filler, plus the movies added in the editor', () => {
+    const movies = channelMovies(lineup, programs, [{ id: M3, title: 'Heat', duration: 300, date: '1995' }, { id: M1, title: 'dup', duration: 1 }, { id: 'no-length', title: 'x' }]);
+    expect(movies).toEqual([
+      { id: M1, duration: 100, title: 'Zodiac', date: '2007-03-02' },
+      { id: M2, duration: 200, title: 'Alien', date: '1979' },
+      { id: M3, duration: 300, title: 'Heat', date: '1995' },
+    ]);
+  });
+
+  it('makes one show per order the slots play in, sorted as the slot would have played them', () => {
+    const movies = channelMovies(lineup, programs, [{ id: M3, title: 'Heat', duration: 300, date: '1995' }]);
+    const one = movieShows([slot('next'), slot('shuffle'), slot('chronological')], movies, 'CH 5');
+    expect(one.map(({ key, name, slots, movies: list }) => [key, name, slots, list.map((movie) => movie.title)])).toEqual([['date_asc', 'CH 5 Movies', 3, ['Alien', 'Heat', 'Zodiac']]]);
+
+    const two = movieShows([slot('alphanumeric', 'desc'), slot('shuffle'), slot('next', 'desc')], movies, 'CH 5');
+    expect(two.map(({ name, slots, movies: list }) => [name, slots, list.map((movie) => movie.title)])).toEqual([
+      ['CH 5 Movies (Z-A)', 2, ['Zodiac', 'Heat', 'Alien']],
+      ['CH 5 Movies (Newest First)', 1, ['Zodiac', 'Heat', 'Alien']],
+    ]);
+    expect(movieShows([slot('shuffle')], [], 'CH 5')).toEqual([]);
+    expect(movieShows([{ id: newSlotId(), type: 'flex' }], movies, 'CH 5')).toEqual([]);
+  });
+
+  it('points movie slots at their shows, keeping everything else about them', () => {
+    const filler = [{ types: ['pre'], fillerListId: 'f' }];
+    const slots = [slot('alphanumeric', 'desc', { filler, startTime: 3_600_000 }), slot('shuffle'), slot('ordered_shuffle', 'asc', { iterationGroup: 'g' }), { id: newSlotId(), type: 'flex', startTime: 7_200_000 }];
+    const converted = convertMovieSlots(slots, { title_desc: { id: 'show-a', name: 'A' }, date_asc: { id: 'show-b', name: 'B' } });
+    expect(converted[0]).toEqual({ ...slots[0], type: 'custom-show', customShowId: 'show-a', customShow: { name: 'A' }, order: 'next', direction: 'asc' });
+    expect(converted[1]).toMatchObject({ customShowId: 'show-a', order: 'shuffle' });
+    expect(converted[2]).toMatchObject({ customShowId: 'show-b', order: 'ordered_shuffle', iterationGroup: 'g' });
+    expect(converted[3]).toBe(slots[3]);
+    // A slot whose show wasn't made stays as it was.
+    expect(convertMovieSlots(slots, { date_asc: { id: 'show-b', name: 'B' } })[0]).toBe(slots[0]);
   });
 });

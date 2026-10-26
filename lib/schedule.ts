@@ -184,8 +184,8 @@ export type ScheduleDraftState = {
   type: 'time' | 'random';
   settings: Record<string, unknown>;
   slots: Slot[];
-  /** Movies added to the pool movie slots draw from (not already on the channel). */
-  extraMovies: Array<{ id: string; title: string }>;
+  /** Movies added to the pool movie slots draw from (not already on the channel); length and date when picked from the library. */
+  extraMovies: Array<{ id: string; title: string; duration?: number; date?: string }>;
 };
 
 /** Settings Lineup edits per schedule type (the companion validates the same list). */
@@ -243,14 +243,18 @@ export type SlotCatalog = {
   fillerLists: Array<{ id: string; name: string }>;
   smartCollections: Array<{ id: string; name: string }>;
   channels: Array<{ id: string; name: string; number: number }>;
+  /** False when this Tunarr has no movie slots (2026.10.4 and later: movies go in a custom show). */
+  movieSlots?: boolean;
 };
 
 /** Source choices for a slot: existing sources first, then everything in the catalog. */
 export function catalogOptions(slots: Slot[], catalog: SlotCatalog, currentChannelId?: string): SourceOption[] {
   const options = new Map<string, SourceOption>();
   const add = (option: SourceOption) => { if (!options.has(option.key)) options.set(option.key, option); };
-  for (const option of sourceOptions(slots)) if (option.key !== 'flex') add(option);
-  add({ key: 'movie', label: 'Movies', template: { type: 'movie', order: 'shuffle', direction: 'asc' } });
+  // Without movie slots, "Movies" isn't offered even where a slot still has it (that slot's own picker still shows it).
+  const movies = catalog.movieSlots !== false;
+  for (const option of sourceOptions(slots)) if (option.key !== 'flex' && (movies || option.key !== 'movie')) add(option);
+  if (movies) add({ key: 'movie', label: 'Movies', template: { type: 'movie', order: 'shuffle', direction: 'asc' } });
   for (const show of catalog.customShows) add({ key: `custom-show:${show.id}`, label: `Custom show: ${show.name}`, template: { type: 'custom-show', customShowId: show.id, customShow: { name: show.name }, order: 'next', direction: 'asc' } });
   for (const list of catalog.fillerLists) add({ key: `filler:${list.id}`, label: `Filler list: ${list.name}`, template: { type: 'filler', fillerListId: list.id, fillerList: { name: list.name }, order: 'shuffle_prefer_short', durationWeighting: 'linear', decayFactor: 0.5, recoveryFactor: 0.05 } });
   for (const collection of catalog.smartCollections) add({ key: `smart-collection:${collection.id}`, label: `Smart collection: ${collection.name}`, template: { type: 'smart-collection', smartCollectionId: collection.id, smartCollection: { name: collection.name }, order: 'shuffle', direction: 'asc' } });
@@ -489,4 +493,84 @@ export function addShowSlots(draft: ScheduleDraftState, shows: ShowPick[], plan:
     resumed,
     toWeek,
   };
+}
+
+// ------------------------------------------------------- movie slots to shows
+
+/** A movie for a custom show: what it is, how long, and what it sorts by. */
+export type PoolMovie = { id: string; duration: number; title: string; date: string };
+/** One custom show to make for movie slots, and the slots that will play it. */
+export type MovieShow = { key: string; name: string; movies: PoolMovie[]; slots: number };
+
+type MovieSort = { by: 'date' | 'title'; direction: 'asc' | 'desc' };
+const SORT_LABELS: Record<string, string> = { date_asc: 'Oldest First', date_desc: 'Newest First', title_asc: 'A-Z', title_desc: 'Z-A' };
+
+// The same choices as Tunarr's own upgrade (2026.10.4, MovieSlotToCustomShowMigration):
+// shuffle plays any order; next, chronological and ordered shuffle go by date; alphanumeric by title.
+function movieSort(slot: Slot): MovieSort | undefined {
+  const direction = slot.direction === 'desc' ? 'desc' : 'asc';
+  if (slot.order === 'shuffle') return undefined;
+  return { by: slot.order === 'alphanumeric' ? 'title' : 'date', direction };
+}
+const sortKey = (sort: MovieSort) => `${sort.by}_${sort.direction}`;
+// A custom-show slot plays the show in its stored order, so the direction is built into the show.
+const showSlotOrder = (order: unknown) => (order === 'shuffle' || order === 'ordered_shuffle' ? order : 'next');
+
+/**
+ * The movies movie slots drew from: the channel's own movies (each once; not
+ * ones it only plays as filler) and the ones added in the editor.
+ */
+export function channelMovies(lineup: LineupItem[], programs: Programming['programs'], extra: ScheduleDraftState['extraMovies']): PoolMovie[] {
+  const movies = new Map<string, PoolMovie>();
+  for (const item of lineup) {
+    if ((item.type !== 'content' && item.type !== 'custom') || typeof item.id !== 'string' || movies.has(item.id)) continue;
+    if (item.fillerListId !== undefined || item.fillerType !== undefined) continue;
+    const entry = programs[item.id] as { program?: Record<string, unknown> } & Record<string, unknown> | undefined;
+    const program = entry && typeof entry.program === 'object' && entry.program ? entry.program : entry;
+    if (program?.type !== 'movie' || !(item.duration > 0)) continue;
+    const date = typeof program.date === 'string' ? program.date : typeof program.year === 'number' ? String(program.year) : '';
+    movies.set(item.id, { id: item.id, duration: item.duration, title: typeof program.title === 'string' ? program.title : '', date });
+  }
+  for (const movie of extra) {
+    if (movies.has(movie.id) || !movie.duration || movie.duration <= 0) continue;
+    movies.set(movie.id, { id: movie.id, duration: movie.duration, title: movie.title, date: movie.date ?? '' });
+  }
+  return [...movies.values()];
+}
+
+/** The custom shows to make for a draft's movie slots (one per order they play in), or none when it has no movie slots. */
+export function movieShows(slots: Slot[], movies: PoolMovie[], channelName: string): MovieShow[] {
+  const movieSlots = slots.filter((slot) => slot.type === 'movie');
+  if (!movieSlots.length || !movies.length) return [];
+  const sorts = new Map<string, MovieSort>();
+  for (const slot of movieSlots) {
+    const sort = movieSort(slot);
+    if (sort) sorts.set(sortKey(sort), sort);
+  }
+  if (!sorts.size) sorts.set('date_asc', { by: 'date', direction: 'asc' });
+  const [first] = sorts.keys();
+  const count = (key: string) => movieSlots.filter((slot) => { const sort = movieSort(slot); return sort ? sortKey(sort) === key : key === first; }).length;
+  return [...sorts].map(([key, sort]) => {
+    const sign = sort.direction === 'asc' ? 1 : -1;
+    const sorted = [...movies].sort((a, b) => sign * (sort.by === 'title' ? a.title.localeCompare(b.title) : a.date.localeCompare(b.date) || a.title.localeCompare(b.title)));
+    return { key, name: sorts.size === 1 ? `${channelName} Movies` : `${channelName} Movies (${SORT_LABELS[key]})`, movies: sorted, slots: count(key) };
+  });
+}
+
+/**
+ * Turns movie slots into custom-show slots playing the shows made for them
+ * (`made`: show key to its new id and name). Everything else about a slot
+ * (its id, timing, commercials, links, weight, cooldown) stays. A slot whose
+ * show wasn't made stays a movie slot.
+ */
+export function convertMovieSlots(slots: Slot[], made: Record<string, { id: string; name: string }>): Slot[] {
+  const [first] = Object.keys(made);
+  return slots.map((slot) => {
+    if (slot.type !== 'movie') return slot;
+    const sort = movieSort(slot);
+    // Shuffle plays any order, so it takes the first show made (as in movieShows).
+    const show = sort ? made[sortKey(sort)] : first ? made[first] : undefined;
+    if (!show) return slot;
+    return { ...slot, type: 'custom-show', customShowId: show.id, customShow: { name: show.name }, order: showSlotOrder(slot.order), direction: 'asc' };
+  });
 }

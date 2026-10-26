@@ -20,6 +20,7 @@ const OWN_ID_LIST = 'f0000000-0000-4000-8000-0000000000f3';
 const NEWS_ID = 'd0000000-0000-4000-8000-0000000000a4';
 const MOVIES_ID = 'd0000000-0000-4000-8000-0000000000a5';
 const CUSTOM_ID = 'c0000000-0000-4000-8000-0000000000c1';
+const NEW_SHOW_ID = 'c0000000-0000-4000-8000-0000000000c2';
 const PROFILE_ID = 'p0000000-0000-4000-8000-000000000001';
 const PROFILE_720 = 'p0000000-0000-4000-8000-000000000002';
 const SMART_ID = '5a000000-0000-4000-8000-0000000000a1';
@@ -165,6 +166,7 @@ function fakeCompanion(options: { schedule?: { type: string; slots: unknown[]; [
       const body = JSON.parse(String(init!.body)) as { name: string };
       return reply({ status: 201, body: { id: SMART_ID, name: body.name, keywords: '', rules: { match: 'all', rules: [] }, description: '', filterString: '' } });
     }
+    if (url.pathname === '/api/tunarr/custom-shows' && method === 'POST') return reply({ status: 201, body: { id: NEW_SHOW_ID } });
     if (url.pathname === '/api/tunarr/custom-shows') return reply({ status: 200, body: [{ id: CUSTOM_ID, name: 'Marathon', contentCount: 2, synced: false }] });
     if (url.pathname === '/api/tunarr/smart-collections') return reply({ status: 200, body: [] });
     if (url.pathname === '/api/tunarr/filler-lists' && method === 'GET') return reply({ status: 200, body: state.fillerLists });
@@ -810,6 +812,41 @@ describe('slot schedule editing', () => {
     const body = requests.find((r) => r.method === 'POST' && r.path.endsWith('/programming'))!.body as { type: string; schedule: { slots: Array<Record<string, unknown>> } };
     expect(body.type).toBe('time');
     expect(body.schedule.slots).toEqual([expect.objectContaining({ type: 'movie', startTime: 20 * 3_600_000 })]);
+  });
+
+  it('makes a custom show for movie slots on a Tunarr without them, only when asked', async () => {
+    const part = (id: string, status: string) => ({ id, label: id === 'movie-slots' ? 'movie slots (schedule movies with a custom-show slot)' : 'creating custom shows', status });
+    const { requests } = fakeCompanion({ schedule, compatibility: {
+      checkedAt: Date.now(), configured: true, connected: true, apiDescription: 'read', version: { tunarr: '2026.10.4', source: 'api', status: 'validated', note: '' },
+      capabilities: [
+        { id: 'slot-schedules', label: 'Slot schedules', uses: '', status: 'degraded', reason: '', parts: [part('movie-slots', 'unavailable')] },
+        { id: 'custom-shows', label: 'Custom shows', uses: '', status: 'available', reason: '', parts: [part('create', 'available')] },
+      ],
+    } });
+    render(<Home />);
+    await screen.findAllByText('Alpha Movie');
+    await waitFor(() => expect(count(requests, 'GET', '/api/tunarr/compatibility')).toBe(1));
+    fireEvent.click(screen.getByRole('button', { name: 'Edit slot schedule…' }));
+    const dialog = await screen.findByRole('dialog', { name: /Slot schedule ·/ });
+    await waitFor(() => expect(within(within(dialog).getByLabelText('Add a slot')).getByRole('option', { name: 'Custom show: Marathon' })).toBeTruthy());
+    expect(within(within(dialog).getByLabelText('Add a slot')).queryByRole('option', { name: 'Movies' })).toBeNull();
+    expect(within(dialog).getByText('This Tunarr no longer plays movie slots')).toBeTruthy();
+    expect(within(dialog).getByText(/the custom show “Newsroom Movies” with 2 movies \(for 1 slot\)/)).toBeTruthy();
+    // Nothing is made until asked.
+    expect(count(requests, 'POST', '/api/tunarr/custom-shows')).toBe(0);
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Make the custom show in Tunarr' }));
+    await waitFor(() => expect(count(requests, 'POST', '/api/tunarr/custom-shows')).toBe(1));
+    const made = requests.find((r) => r.method === 'POST' && r.path === '/api/tunarr/custom-shows')!.body as { name: string; programs: Array<{ id: string }> };
+    expect(made.name).toBe('Newsroom Movies');
+    expect(made.programs.map((program) => program.id).sort()).toEqual(['prog-alpha', 'prog-custom']);
+    await waitFor(() => expect(within(dialog).queryByText('This Tunarr no longer plays movie slots')).toBeNull());
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Preview lineup' }));
+    fireEvent.click(within(await screen.findByRole('region', { name: 'Schedule preview' })).getByRole('button', { name: 'Save schedule' }));
+    await waitFor(() => expect(count(requests, 'POST', '/api/tunarr/channels/chan-news/programming')).toBe(1));
+    const body = requests.find((r) => r.method === 'POST' && r.path.endsWith('/programming'))!.body as { schedule: { slots: Array<Record<string, unknown>> } };
+    expect(body.schedule.slots[1]).toMatchObject({ id: 's2', type: 'custom-show', customShowId: NEW_SHOW_ID, order: 'shuffle', weight: 1, cooldownMs: 600000 });
   });
 
   it('discards a preview with Back and leaves Tunarr untouched', async () => {

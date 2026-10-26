@@ -142,7 +142,7 @@ opens the wizard with Tunarr's address filled in.
     - **Italy:** Rai 1, Rai 2, Rai 3, Canale 5, Italia 1, Rete 4, La7
 
     Each follows the network's dayparts, weekday and weekend differences (single weekdays too, such as Monday-night football or Fuji's Monday drama) and its market's commercial pattern. They are styles, not official schedules, and use no logos.
-  - **Filling it in:** each role ("Morning news", "Telenovela", "Prime drama"…) takes a show, movies, a custom show, an existing smart collection, or a new smart collection the template suggests (with its match count in your library). Choose a commercials list and a promos list. The result opens in the slot editor, for this channel or a new one, to preview and save.
+  - **Filling it in:** each role ("Morning news", "Telenovela", "Prime drama"…) takes a show, movies (on Tunarr before 2026.10.4, which moved movies into custom shows), a custom show, an existing smart collection, or a new smart collection the template suggests (with its match count in your library). Choose a commercials list and a promos list. The result opens in the slot editor, for this channel or a new one, to preview and save.
   - **Ad levels per block:** every block is "no commercials", "light", "standard" or "heavy". Light spaces breaks out, heavy brings them closer and makes them longer, and "no commercials" keeps only promos.
 - **My templates.** Save your own: **New template**, **Copy and edit…** a built-in one, or **Save this channel's format** (turns a time-slot channel's schedule into a template whose roles are pre-filled with that channel's sources). The editor covers name, day plan (every day, weekdays/Saturday/Sunday, or each day), blocks with ad levels, roles with suggestion genres, start-time grid, lateness and the commercial style. Saved templates live on the Lineup server (`LINEUP_DATA_DIR`), so the TV and every other browser see them.
 - **AI programming.** **Ask AI…** in the template gallery writes a template from a prompt ("a 90s Saturday-morning cartoon channel", "program this like Rai 1"). It can use your library's show and movie titles and genres, what the current channel plays, and any template as a starting point. It fills roles with your actual shows and collections where they fit, picks commercial lists, and explains what your library lacks. You can save the result to My templates, edit it, or apply it, and nothing changes until you preview and save. See [AI setup](#ai-setup).
@@ -506,7 +506,7 @@ ticked; never Tunarr's address, error texts, viewers' addresses or programming.
 **Send a test** shows how the last delivery went.
 
 **Compatibility** (in Server Settings) shows Tunarr's version, whether it is
-one Lineup was validated against (1.x), and every capability the desk uses
+one Lineup was validated against (1.x, 2026.9 and 2026.10), and every capability the desk uses
 (programming, saving, slot schedules, the guide, viewer counts, lists,
 collections, media sources, library search, transcode profiles, channel
 settings, live streams) with its state and why. The checks only read: saving

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { CAPABILITY_MATRIX, checkVersion, cleanVersion, compatibility, decide, describedOperations, detectCompatibility, unavailableReason, type CapabilityId, type ProbeResult } from '../server/compatibility';
+import { CAPABILITY_MATRIX, checkVersion, cleanVersion, compatibility, decide, describedOperations, detectCompatibility, scheduleSlotTypes, unavailableReason, type CapabilityId, type ProbeResult } from '../server/compatibility';
 import { createProxyConfig, handleTunarrApi, type ProxyConfig, type ProxyRequest } from '../server/tunarrProxy';
 import { callTunarr, routeMissing } from '../server/upstream';
 import { blockedCapabilities, blockedReason, diagnosticsFile, partBlocked, versionLine } from '../lib/compatibility';
@@ -230,8 +230,13 @@ describe('compatibility decisions', () => {
 });
 
 describe('Tunarr versions', () => {
-  it('validates 1.x, warns outside it, and reports unrecognized or missing versions', () => {
+  it('validates 1.x and the dated releases, warns outside them, and reports unrecognized or missing versions', () => {
     expect(checkVersion('1.3.13', 'api').status).toBe('validated');
+    // Tunarr's releases are dated now (YEAR.MONTH.N).
+    expect(checkVersion('2026.9.3', 'api').status).toBe('validated');
+    expect(checkVersion('2026.10.4', 'api')).toMatchObject({ status: 'validated', note: 'Lineup is built for Tunarr 1.x and 2026.9–2026.10.' });
+    expect(checkVersion('2026.8.1', 'api').status).toBe('unvalidated');
+    expect(checkVersion('2026.11.0', 'api').status).toBe('unvalidated');
     expect(checkVersion('v1.0.0-beta.2', 'api').status).toBe('validated');
     expect(checkVersion('0.22.4', 'api').status).toBe('unvalidated');
     expect(checkVersion('2.0.0', 'api').status).toBe('unvalidated');
@@ -412,5 +417,87 @@ describe('diagnostics file', () => {
     const file = diagnosticsFile(await detectCompatibility(configFor(fake), target), Date.UTC(2026, 9, 25));
     expect(file).toMatchObject({ format: 'tunarr-lineup-diagnostics', formatVersion: 2, exportedAt: '2026-10-25T00:00:00.000Z', connected: true });
     expect(JSON.stringify(file)).not.toMatch(/secret|token|10\.0\.0\.9/);
+  });
+});
+
+/** The schedule routes as Tunarr's API description spells them out, accepting `types`. */
+const schedulePaths = (types: string[]) => {
+  const slots = { type: 'array', items: { oneOf: types.map((type) => ({ type: 'object', properties: { type: { type: 'string', enum: [type] }, midRoll: { type: 'object', properties: { programTypes: { type: 'array', items: { type: 'string', enum: ['movie', 'episode'] } } } } } })) } };
+  const body = (kind: string) => ({ requestBody: { content: { 'application/json': { schema: { type: 'object', properties: { schedule: { type: 'object', properties: { type: { type: 'string', enum: [kind] }, slots } } } } } } } });
+  return { ...ALL_PATHS, '/api/channels/{channelId}/schedule-slots': { post: body('random') }, '/api/channels/{channelId}/schedule-time-slots': { post: body('time') } };
+};
+const UP_TO_2026_10_3 = ['movie', 'show', 'flex', 'redirect', 'filler', 'custom-show', 'smart-collection'];
+const FROM_2026_10_4 = UP_TO_2026_10_3.filter((type) => type !== 'movie');
+
+describe('movie slots (dropped in Tunarr 2026.10.4)', () => {
+  const spec = CAPABILITY_MATRIX.find((item) => item.id === 'slot-schedules')!;
+  const decideWith = (paths: unknown) => {
+    const document = { paths };
+    return decide(spec, { ops: describedOperations(document), slotTypes: scheduleSlotTypes(document), description: 'read', liveStreams: 0, probes: {} });
+  };
+
+  it('reads the slot types the schedule routes accept, and only those', () => {
+    expect(scheduleSlotTypes({ paths: schedulePaths(UP_TO_2026_10_3) })).toEqual(new Set(UP_TO_2026_10_3));
+    // A mid-roll's program types also say "movie"; they aren't slot types.
+    expect(scheduleSlotTypes({ paths: schedulePaths(FROM_2026_10_4) })?.has('movie')).toBe(false);
+    // Bare routes (or no description) spell nothing out, so nothing is ruled out.
+    expect(scheduleSlotTypes({ paths: ALL_PATHS })).toBeNull();
+    expect(scheduleSlotTypes('<html>')).toBeNull();
+  });
+
+  it('follows references into the components', () => {
+    const document = {
+      paths: { '/api/channels/{id}/schedule-time-slots': { post: { requestBody: { $ref: '#/components/requestBodies/TimeSlots' } } } },
+      components: {
+        requestBodies: { TimeSlots: { content: { 'application/json': { schema: { $ref: '#/components/schemas/Request' } } } } },
+        schemas: {
+          Request: { type: 'object', properties: { schedule: { $ref: '#/components/schemas/Schedule' } } },
+          Schedule: { type: 'object', properties: { slots: { type: 'array', items: { anyOf: [{ $ref: '#/components/schemas/ShowSlot' }, { type: 'object', properties: { type: { const: 'flex' } } }] } } } },
+          ShowSlot: { allOf: [{ type: 'object', properties: { type: { type: 'string', enum: ['show'] } } }] },
+        },
+      },
+    };
+    expect(scheduleSlotTypes(document)).toEqual(new Set(['show', 'flex']));
+  });
+
+  it('turns off only movie slots where Tunarr no longer lists them, saying what to use instead', () => {
+    const before = decideWith(schedulePaths(UP_TO_2026_10_3));
+    expect(before.status).toBe('available');
+    expect(before.parts).toEqual([expect.objectContaining({ id: 'movie-slots', status: 'available' })]);
+
+    const after = decideWith(schedulePaths(FROM_2026_10_4));
+    expect(after.status).toBe('degraded');
+    expect(after.parts).toEqual([expect.objectContaining({ id: 'movie-slots', status: 'unavailable' })]);
+    expect(after.reason).toContain('doesn’t list the “movie” slot type, so movie slots (schedule movies with a custom-show slot) won’t work; the rest does.');
+    const report = { checkedAt: 0, configured: true, connected: true, version: checkVersion('2026.10.4', 'api'), apiDescription: 'read' as const, capabilities: [{ id: 'slot-schedules' as const, label: 'Slot schedules', uses: '', ...after }] };
+    expect(blockedReason(report, 'slot-schedules')).toBeNull();
+    expect(partBlocked(report, 'slot-schedules', 'movie-slots')).toContain('movie slots');
+    expect(unavailableReason(report, 'slot-schedules', 'movie-slots')).toContain('movie slots');
+  });
+
+  it('never rules movie slots out without a description that spells out slot types', () => {
+    expect(decideWith(ALL_PATHS).parts).toEqual([expect.objectContaining({ id: 'movie-slots', status: 'available' })]);
+    expect(decide(spec, { ops: null, description: 'missing', liveStreams: 0, probes: {} }).parts).toEqual([expect.objectContaining({ id: 'movie-slots', status: 'unchecked' })]);
+  });
+
+  it('detects a 2026.10.4 Tunarr as validated, with movie slots off', async () => {
+    const fake = fakeTunarr({ version: { tunarr: '2026.10.4', ffmpeg: '7.1' }, openapi: { info: { version: '1.2.0-dev.1' }, paths: schedulePaths(FROM_2026_10_4) } });
+    const report = await detectCompatibility(configFor(fake), target);
+    expect(report.version).toMatchObject({ tunarr: '2026.10.4', status: 'validated' });
+    expect(report.capabilities.find((item) => item.id === 'slot-schedules')?.parts?.[0]).toMatchObject({ id: 'movie-slots', status: 'unavailable' });
+  });
+
+  it('refuses a movie slot itself, before Tunarr does, once the check showed none', async () => {
+    const fake = fakeTunarr({ version: { tunarr: '2026.10.4', ffmpeg: '7.1' }, openapi: { info: { version: '1.2.0-dev.1' }, paths: schedulePaths(FROM_2026_10_4) } });
+    const config = configFor(fake);
+    const preview = (slot: Record<string, unknown>) => handleTunarrApi({
+      method: 'POST', url: `/api/tunarr/channels/${CHANNEL}/schedule-preview`, headers: { host: 'lineup.local:3000', 'content-type': 'application/json' },
+      body: JSON.stringify({ type: 'time', slots: [{ id: '5a5a5a5a-1a2b-4c3d-8e9f-000000000003', order: 'shuffle', direction: 'asc', startTime: 0, ...slot }] }),
+    }, config);
+    await compatibility(config);
+    const refused = await preview({ type: 'movie' });
+    expect(refused.status).toBe(400);
+    expect(text(refused)).toContain('no longer plays movie slots');
+    expect(fake.calls.some((call) => call.url.includes('schedule-time-slots'))).toBe(false);
   });
 });

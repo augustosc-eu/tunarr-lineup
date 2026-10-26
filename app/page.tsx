@@ -92,7 +92,7 @@ import type { GuideChannel } from '../lib/guideGrid';
 import { logRows, type DayRows } from '../lib/weekLog';
 import { keptStartTime, lineupLength } from '../server/lineupVersion';
 import { lineupEntry, seasonsFromEpisodes, type ContentProgram } from '../lib/library';
-import { addShowSlots, changeSlotSource, draftFromSchedule, newSlot, showOption, type SchedulePreview, type ScheduleDraftState, type SeasonInfo, type ShowPick, type ShowSlotPlan, type Slot, type SlotCatalog, type SlotSchedule } from '../lib/schedule';
+import { addShowSlots, changeSlotSource, channelMovies, convertMovieSlots, draftFromSchedule, movieShows, newSlot, showOption, type SchedulePreview, type ScheduleDraftState, type SeasonInfo, type ShowPick, type ShowSlotPlan, type Slot, type SlotCatalog, type SlotSchedule } from '../lib/schedule';
 import { programmingVersion } from '../server/lineupVersion';
 import { checkHealth, isAborted, tunarrApi, TunarrApiError, type ConnectionState, type PlannedChange, type ViewerCounts } from '../lib/tunarrClient';
 
@@ -545,6 +545,13 @@ export default function Home() {
   // Saving is turned off before anyone tries when Tunarr's API shows the write route is missing (the reason stays visible in the inspector).
   const savesBlocked = live ? blockedReason(compat, 'manual-saves') : null;
   const slotsBlocked = live ? blockedReason(compat, 'slot-schedules') : null;
+  // Tunarr 2026.10.4 dropped movie slots: the editors stop offering them (movies go in a custom show).
+  const movieSlotsBlocked = live ? partBlocked(compat, 'slot-schedules', 'movie-slots') : null;
+  const slotCatalog = useMemo(() => (catalog && movieSlotsBlocked ? { ...catalog, movieSlots: false } : catalog), [catalog, movieSlotsBlocked]);
+  // The custom shows Tunarr's own upgrade would make for the draft's movie slots; made only when asked (makeMovieShows).
+  const movieShowPlan = useMemo(() => (movieSlotsBlocked && slotEditor.open && activeChannel && base?.channelId === slotEditor.channelId
+    ? movieShows(slotEditor.draft.slots, channelMovies(base.lineup, programming.programs, slotEditor.draft.extraMovies), activeChannel.name)
+    : []), [movieSlotsBlocked, slotEditor.open, slotEditor.channelId, slotEditor.draft.slots, slotEditor.draft.extraMovies, activeChannel, base, programming.programs]);
 
   const select = (index: number, start: number | null, extend = false) => {
     if (!extend) setAnchorIndex(index);
@@ -1236,6 +1243,38 @@ export default function Home() {
       });
   };
 
+  /** Makes the custom shows for the draft's movie slots in Tunarr and points those slots at them; the schedule itself is saved as usual. */
+  const makeMovieShows = async () => {
+    const { channelId } = slotEditor;
+    const refused = partRefused('custom-shows', 'create');
+    if (refused) notify(refused);
+    if (!channelId || refused || !movieShowPlan.length) return;
+    setSlotEditor((current) => ({ ...current, busy: true, error: '' }));
+    const made: Record<string, { id: string; name: string }> = {};
+    let failure = '';
+    for (const show of movieShowPlan) {
+      try {
+        const created = await tunarrApi.createCustomShow(show.name, show.movies.map((movie) => ({ type: 'content' as const, id: movie.id, duration: movie.duration, program: {} })));
+        made[show.key] = { id: created.id, name: show.name };
+      } catch (error) {
+        failure = errorMessage(error, 'Tunarr did not create the custom show.');
+        noteFailure(error);
+        break;
+      }
+    }
+    const names = Object.values(made).map((show) => `“${show.name}”`).join(' and ');
+    setSlotEditor((current) => (current.channelId !== channelId ? current : {
+      ...current,
+      busy: false,
+      draft: { ...current.draft, slots: convertMovieSlots(current.draft.slots, made), extraMovies: failure ? current.draft.extraMovies : [] },
+      error: failure ? `${names ? `Made ${names}, but the next custom show wasn’t made: ` : ''}${failure}` : '',
+    }));
+    if (names) {
+      loadCatalog();
+      notify(`Made ${names} in Tunarr. Movie slots now play ${Object.keys(made).length === 1 ? 'it' : 'them'}; preview and save the schedule to use ${Object.keys(made).length === 1 ? 'it' : 'them'}.`);
+    }
+  };
+
   const saveSlots = () => {
     const { channelId, draft, preview } = slotEditor;
     if (!channelId || !preview || !base || slotEditor.previewOf !== draftKey(draft) || refuse('slot-schedules')) return;
@@ -1490,7 +1529,11 @@ export default function Home() {
     } else if (picker.purpose === 'movies' && 'programs' in pick) {
       setSlotEditor((current) => {
         const known = new Set(current.draft.extraMovies.map((movie) => movie.id));
-        const added = pick.programs.filter((program) => !known.has(program.id)).map((program) => ({ id: program.id, title: String((program.program as { title?: string }).title ?? 'Movie') }));
+        const added = pick.programs.filter((program) => !known.has(program.id)).map((program) => {
+          const details = program.program as { title?: string; date?: unknown; year?: unknown };
+          const date = typeof details.date === 'string' ? details.date : typeof details.year === 'number' ? String(details.year) : undefined;
+          return { id: program.id, title: String(details.title ?? 'Movie'), duration: program.duration, ...(date ? { date } : {}) };
+        });
         return { ...current, draft: { ...current.draft, extraMovies: [...current.draft.extraMovies, ...added] } };
       });
     }
@@ -2466,7 +2509,7 @@ export default function Home() {
         isNew={slotEditor.isNew}
         draft={slotEditor.draft}
         changed={slotEditor.saved ? draftKey(slotEditor.draft) !== draftKey(slotEditor.saved) : slotEditor.draft.slots.length > 0}
-        catalog={catalog}
+        catalog={slotCatalog}
         currentChannelId={activeChannelId}
         busy={slotEditor.busy || saving}
         error={slotEditor.error}
@@ -2474,6 +2517,8 @@ export default function Home() {
         onChange={(draft) => setSlotEditor((current) => ({ ...current, draft, error: '' }))}
         onBrowseShow={(index) => setLibraryPicker({ purpose: 'slot-show', index })}
         onBrowseMovies={() => setLibraryPicker({ purpose: 'movies' })}
+        movieShows={movieShowPlan.map(({ name, movies, slots }) => ({ name, movies: movies.length, slots }))}
+        onMakeMovieShows={() => void makeMovieShows()}
         loadSeasons={loadSeasons}
         onPreview={previewSlots}
         onSave={saveSlots}
@@ -2521,7 +2566,7 @@ export default function Home() {
 
       {eventOpen && activeChannel && <EventDialog channel={{ ...activeChannel, startTime: channelStart }} channels={channels} lineup={lineup} programs={programming.programs} date={selectedDate} generated={hasGeneratedSchedule(programming)} onClose={() => setEventOpen(false)} onPlace={placeEventEdit}
         airOnce={live ? { unavailable: !scheduler.enabled ? scheduler.message ?? 'Scheduled changes are off on the Lineup server.' : dirty ? 'Save or revert your edits first: it’s planned against the lineup in Tunarr.' : undefined, onSchedule: scheduleAirOnce } : undefined} />}
-      {templatesOpen && <TemplatesDialog channels={channels} activeChannel={activeChannel} activeHasSchedule={hasGeneratedSchedule(programming)} catalog={catalog} fillerRoles={filler.roles} onClose={() => setTemplatesOpen(false)} onApply={applyTemplate} />}
+      {templatesOpen && <TemplatesDialog channels={channels} activeChannel={activeChannel} activeHasSchedule={hasGeneratedSchedule(programming)} catalog={slotCatalog} fillerRoles={filler.roles} onClose={() => setTemplatesOpen(false)} onApply={applyTemplate} />}
       {setupDialog === 'smart' && <SmartCollectionsManager blocked={partRefused} onClose={() => setSetupDialog(null)} onChanged={() => { if (slotEditor.open || catalog) loadCatalog(); }} />}
       {setupDialog === 'sources' && <MediaSourcesDialog blocked={partRefused} onClose={() => setSetupDialog(null)} />}
       {setupDialog === 'folders' && <FillerFoldersDialog blocked={partRefused} roles={filler.roles} onClose={() => setSetupDialog(null)} onChanged={() => { filler.reload(); if (slotEditor.open || catalog) loadCatalog(); }} />}

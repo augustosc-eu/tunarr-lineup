@@ -62,6 +62,9 @@ type Props = {
   /** Opens the library to pick a show, for slot `index` or a new slot (null). */
   onBrowseShow: (index: number | null) => void;
   onBrowseMovies: () => void;
+  /** Where Tunarr has no movie slots: the custom shows that would replace them (empty without movies to put in them). */
+  movieShows?: Array<{ name: string; movies: number; slots: number }>;
+  onMakeMovieShows?: () => void;
   /** Seasons of a show slot's show, for the season filter. */
   loadSeasons: (slot: Slot) => Promise<SeasonInfo[]>;
   onPreview: () => void;
@@ -218,7 +221,7 @@ function summary(draft: ScheduleDraftState) {
 }
 
 export function ScheduleEditor(props: Props) {
-  const { channelLabel, isNew, draft, changed, catalog, currentChannelId, busy, error, previewReady, onChange, onBrowseShow, onBrowseMovies, loadSeasons, onPreview, onSave, onDetach, onRevert, onClose } = props;
+  const { channelLabel, isNew, draft, changed, catalog, currentChannelId, busy, error, previewReady, onChange, onBrowseShow, onBrowseMovies, movieShows = [], onMakeMovieShows, loadSeasons, onPreview, onSave, onDetach, onRevert, onClose } = props;
   const [expanded, setExpanded] = useState<number | null>(null);
   const [adding, setAdding] = useState('');
   const options = useMemo(() => catalogOptions(draft.slots, catalog ?? { customShows: [], fillerLists: [], smartCollections: [], channels: [] }, currentChannelId), [catalog, currentChannelId, draft.slots]);
@@ -392,9 +395,22 @@ export function ScheduleEditor(props: Props) {
               {options.map((option) => <option key={option.key} value={option.key}>{option.label}</option>)}
             </select>
           </label>
-          {hasMovieSlot && <span className="movie-pool">Movie slots draw from this channel’s movies{draft.extraMovies.length ? ` plus ${draft.extraMovies.length} added` : ''}. <button onClick={onBrowseMovies}>Add movies…</button>{draft.extraMovies.length > 0 && <button onClick={() => onChange({ ...draft, extraMovies: [] })}>Clear added</button>}</span>}
+          {hasMovieSlot && catalog?.movieSlots !== false && <span className="movie-pool">Movie slots draw from this channel’s movies{draft.extraMovies.length ? ` plus ${draft.extraMovies.length} added` : ''}. <button onClick={onBrowseMovies}>Add movies…</button>{draft.extraMovies.length > 0 && <button onClick={() => onChange({ ...draft, extraMovies: [] })}>Clear added</button>}</span>}
         </div>
-        {hasMovieSlot && draft.extraMovies.length > 0 && <p className="subtle">Added movies are included when you save; Tunarr’s preview only uses movies already on the channel.</p>}
+        {hasMovieSlot && catalog?.movieSlots !== false && draft.extraMovies.length > 0 && <p className="subtle">Added movies are included when you save; Tunarr’s preview only uses movies already on the channel.</p>}
+        {hasMovieSlot && catalog?.movieSlots === false && (
+          <div className="warning" role="alert">
+            <b>This Tunarr no longer plays movie slots</b>
+            {movieShows.length
+              ? <span>Lineup can make what Tunarr’s own upgrade makes: {movieShows.map((show) => `the custom show “${show.name}” with ${show.movies} ${show.movies === 1 ? 'movie' : 'movies'} (for ${show.slots} ${show.slots === 1 ? 'slot' : 'slots'})`).join(' and ')}, then change those slots to play it, keeping their times, commercials and links. Or change each “Movies” slot yourself.</span>
+              : <span>This channel has no movies for them yet. Add movies, then make a custom show from them, or change each “Movies” slot to another source.</span>}
+            <span className="warning-actions">
+              {movieShows.length > 0 && onMakeMovieShows && <button disabled={busy} onClick={onMakeMovieShows}>Make {movieShows.length === 1 ? 'the custom show' : `${movieShows.length} custom shows`} in Tunarr</button>}
+              <button disabled={busy} onClick={onBrowseMovies}>Add movies…</button>
+              {draft.extraMovies.length > 0 && <button disabled={busy} onClick={() => onChange({ ...draft, extraMovies: [] })}>Clear {draft.extraMovies.length} added</button>}
+            </span>
+          </div>
+        )}
 
         {error && <div className="warning" role="alert"><b>Tunarr didn’t accept this schedule</b><span>{error}</span></div>}
         <div className="dialog-actions schedule-actions">

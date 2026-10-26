@@ -147,10 +147,15 @@ export function TemplatesDialog({ channels, activeChannel, activeHasSchedule, ca
 
   const usage = roleUsage(template);
   const options = useMemo(() => catalogOptions([], catalog ?? { customShows: [], fillerLists: [], smartCollections: [], channels: [] }, activeChannel?.id).filter((option) => option.key !== 'flex'), [catalog, activeChannel]);
+  // A saved "Movies" source can't be used where Tunarr has no movie slots; the role is then chosen afresh.
+  const presetFor = (roleId: string) => {
+    const preset = template.defaults?.[roleId];
+    return preset && (preset.template.type !== 'movie' || catalog?.movieSlots !== false) ? preset : undefined;
+  };
   const choiceFor = (roleId: string) => {
     const chosen = choices[`${template.id}:${roleId}`];
     if (chosen !== undefined) return chosen;
-    const preset = template.defaults?.[roleId];
+    const preset = presetFor(roleId);
     if (preset) return preset.key;
     return counts[`${template.id}:${roleId}`] ? SUGGEST : '';
   };
@@ -169,7 +174,7 @@ export function TemplatesDialog({ channels, activeChannel, activeHasSchedule, ca
       const sources: Record<string, SourceOption | undefined> = {};
       for (const item of filledRoles) {
         const choice = choiceFor(item.id);
-        const preset = template.defaults?.[item.id];
+        const preset = presetFor(item.id);
         if (choice === SUGGEST && item.suggest) {
           // Reuse a collection made by an earlier run of the same template.
           const name = `${template.name} · ${item.label}`;
@@ -375,7 +380,7 @@ export function TemplatesDialog({ channels, activeChannel, activeHasSchedule, ca
                 const count = counts[key];
                 const choice = choiceFor(item.id);
                 const show = shows[key];
-                const preset = template.defaults?.[item.id];
+                const preset = presetFor(item.id);
                 return (
                   <div className="candidate role-row" key={key}>
                     <span><b>{item.label}</b><small>{item.hint ? `${item.hint} · ` : ''}{usage.get(item.id)} {usage.get(item.id) === 1 ? 'block' : 'blocks'}{isWeekly(template) ? ' a week' : ' a day'} · {ORDER_LABELS[item.order]}</small></span>

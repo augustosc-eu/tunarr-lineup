@@ -104,10 +104,23 @@ function initialState() {
     programmingDelayMs: 0,
     // Routes this Tunarr "doesn't have" (/__test/missing-routes), answered like Fastify's unknown route.
     missingRoutes: [],
+    // Which Tunarr release this stands in for (/__test/release): see RELEASES.
+    release: '1.3.13',
+    customShows: [],
   };
 }
 
 let state = initialState();
+
+// Tunarr releases the fake can stand in for. 2026.10.4 removed movie slots: its
+// API description no longer lists the "movie" slot type and it rejects one.
+// (The real upgrade also converts saved movie slots; the fake leaves Desk
+// Rotation's, standing in for a draft that still has one.)
+const RELEASES = {
+  '1.3.13': { slotTypes: ['movie', 'show', 'flex', 'redirect', 'filler', 'custom-show', 'smart-collection'] },
+  '2026.10.4': { slotTypes: ['show', 'flex', 'redirect', 'filler', 'custom-show', 'smart-collection'] },
+};
+const release = () => RELEASES[state.release];
 
 // The routes Lineup's compatibility check looks for, as Tunarr's OpenAPI document lists them.
 const API_PATHS = {
@@ -123,10 +136,20 @@ const API_PATHS = {
   '/api/programs/search': ['post'], '/api/programs/{id}': ['get'], '/api/programs/{id}/descendants': ['get'],
   '/api/transcode_configs': ['get'], '/api/transcode_configs/{id}': ['get', 'put', 'delete'], '/api/transcode_configs/{id}/copy': ['post'],
 };
-const openApi = () => ({
-  openapi: '3.1.0', info: { title: 'Tunarr', version: '1.3.13' },
-  paths: Object.fromEntries(Object.entries(API_PATHS).filter(([route]) => !state.missingRoutes.includes(route.replace(/\{[^}]+\}/g, '*'))).map(([route, methods]) => [route, Object.fromEntries(methods.map((method) => [method, {}]))])),
+// The schedule routes' request body, shaped like Tunarr's (schedule.slots[] is a oneOf by slot type).
+const scheduleBody = (kind) => ({
+  requestBody: { content: { 'application/json': { schema: { type: 'object', properties: { schedule: { type: 'object', properties: {
+    type: { type: 'string', enum: [kind] },
+    slots: { type: 'array', items: { oneOf: release().slotTypes.map((type) => ({ type: 'object', properties: { type: { type: 'string', enum: [type] } } })) } },
+  } } } } } } },
 });
+const openApi = () => ({
+  // Tunarr's document keeps its package version; /api/version reports the release.
+  openapi: '3.1.0', info: { title: 'Tunarr', version: state.release === '1.3.13' ? '1.3.13' : '1.2.0-dev.1' },
+  paths: Object.fromEntries(Object.entries(API_PATHS).filter(([route]) => !state.missingRoutes.includes(route.replace(/\{[^}]+\}/g, '*'))).map(([route, methods]) => [route, Object.fromEntries(methods.map((method) => [method, route.endsWith('/schedule-slots') ? scheduleBody('random') : route.endsWith('/schedule-time-slots') ? scheduleBody('time') : {}]))])),
+});
+/** Tunarr's schema check on a schedule: a slot type this release doesn't have is refused. */
+const rejectedSlot = (schedule) => (schedule?.slots ?? []).find((slot) => !release().slotTypes.includes(slot?.type));
 
 function guide(channel, lineup, from, to) {
   // Tunarr only keeps a guide around "now"; mimic that window.
@@ -203,13 +226,19 @@ http.createServer(async (req, res) => {
     return send(res, 200, { ok: true });
   }
   if (state.missingRoutes.includes(path)) return send(res, 404, { message: `Route ${req.method}:${path} not found`, error: 'Not Found', statusCode: 404 });
-  if (path === '/api/version') return send(res, 200, { tunarr: '1.3.13', ffmpeg: '7.1-fake', nodejs: process.version });
+  if (path === '/__test/release' && req.method === 'POST') {
+    const wanted = JSON.parse(await readBody(req)).release;
+    if (!RELEASES[wanted]) return send(res, 400, { message: `Unknown release ${wanted}` });
+    state.release = wanted;
+    return send(res, 200, { ok: true });
+  }
+  if (path === '/api/version') return send(res, 200, { tunarr: state.release, ffmpeg: '7.1-fake', ...(state.release === '1.3.13' ? { nodejs: process.version } : {}) });
   if (path === '/openapi.json') return send(res, 200, openApi());
   if (path === '/__test/delay' && req.method === 'POST') {
     state.programmingDelayMs = JSON.parse(await readBody(req)).ms;
     return send(res, 200, { ok: true });
   }
-  if (path === '/__test/state') return send(res, 200, { streamRequests: state.streamRequests, lineups: state.lineups, saves: state.saves, schedules: state.schedules, lastScheduleSave: state.lastScheduleSave, fillerLists: state.fillerLists, smartCollections: state.smartCollections, mediaSources: state.mediaSources, transcodeConfigs: state.transcodeConfigs, channels: state.channels.map((channel) => ({ ...channel, ...state.channelExtras[channel.id] })) });
+  if (path === '/__test/state') return send(res, 200, { customShows: state.customShows, streamRequests: state.streamRequests, lineups: state.lineups, saves: state.saves, schedules: state.schedules, lastScheduleSave: state.lastScheduleSave, fillerLists: state.fillerLists, smartCollections: state.smartCollections, mediaSources: state.mediaSources, transcodeConfigs: state.transcodeConfigs, channels: state.channels.map((channel) => ({ ...channel, ...state.channelExtras[channel.id] })) });
 
   // Tunarr setup: uploaded images, channels, transcode profiles, media sources, smart collections.
   if (/^\/images\/uploads\/[^/]+$/.test(path)) return send(res, 200, PNG, 'image/png');
@@ -297,7 +326,14 @@ http.createServer(async (req, res) => {
     const known = state.programs[oneProgram[1]] ?? libraryMovies.find((movie) => movie.id === oneProgram[1] || movie.uuid === oneProgram[1]);
     return known ? send(res, 200, { ...(known.program ?? {}), ...known, id: oneProgram[1] }) : send(res, 404, { message: 'Program not found' });
   }
-  if (path === '/api/custom-shows') return send(res, 200, []);
+  if (path === '/api/custom-shows' && req.method === 'POST') {
+    const body = JSON.parse(await readBody(req));
+    if (!body.name || !Array.isArray(body.programs)) return send(res, 400, 'Invalid custom show');
+    const id = `7c7c7c7c-1a2b-4c3d-8e9f-${String(state.customShows.length + 1).padStart(12, '0')}`;
+    state.customShows.push({ id, name: body.name, programs: body.programs.map(({ id: programId, duration }) => ({ id: programId, duration })) });
+    return send(res, 201, { id });
+  }
+  if (path === '/api/custom-shows') return send(res, 200, state.customShows.map(({ id, name, programs }) => ({ id, name, contentCount: programs.length })));
   if (path === '/api/filler-lists' && req.method === 'GET') return send(res, 200, state.fillerLists.map(({ id, name, programs }) => ({ id, name, contentCount: programs.length })));
   if (path === '/api/filler-lists' && req.method === 'POST') {
     const body = JSON.parse(await readBody(req));
@@ -396,7 +432,9 @@ http.createServer(async (req, res) => {
   const generate = (schedule, pool) => {
     const showWeight = Math.max(1, Math.round(schedule.slots.find((slot) => slot.type === 'show')?.weight ?? 1));
     const lineup = [];
-    for (const id of pool) {
+    // Tunarr expands custom shows itself; their programs join the pool.
+    const fromShows = schedule.slots.filter((slot) => slot.type === 'custom-show').flatMap((slot) => state.customShows.find((show) => show.id === slot.customShowId)?.programs.map((item) => item.id) ?? []);
+    for (const id of [...new Set([...pool, ...fromShows])]) {
       const copies = state.programs[id]?.program?.type === 'episode' ? showWeight : 1;
       for (let i = 0; i < copies; i += 1) lineup.push({ type: 'content', id, duration: state.programs[id].duration });
     }
@@ -411,12 +449,16 @@ http.createServer(async (req, res) => {
   }
   if (match[2] === 'schedule-slots' || match[2] === 'schedule-time-slots') {
     const { schedule } = JSON.parse(await readBody(req));
+    const rejected = rejectedSlot(schedule);
+    if (rejected) return send(res, 400, { message: `Invalid input: slot type "${rejected.type}"` });
     return send(res, 200, { startTime: channel.startTime, lineup: generate(schedule, poolFor(channel.id)), programs: state.programs, seed: [42], discardCount: 0 });
   }
   if (match[2] === 'programming' && req.method === 'POST') {
     const body = JSON.parse(await readBody(req));
     if (body.type === 'random' || body.type === 'time') {
       if (!Array.isArray(body.programs) || !body.schedule?.slots?.length) return send(res, 400, 'Invalid schedule');
+      const rejected = rejectedSlot(body.schedule);
+      if (rejected) return send(res, 400, { message: `Invalid input: slot type "${rejected.type}"` });
       state.schedules[channel.id] = body.schedule;
       state.lineups[channel.id] = generate(body.schedule, [...new Set(body.programs)]);
       state.lastScheduleSave = { programs: body.programs, seed: body.seed, discardCount: body.discardCount };
