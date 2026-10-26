@@ -8,6 +8,8 @@ were renamed 2026.10.1 and 2026.10.2.
 
 ## [Unreleased]
 
+## [2026.10.20] - 2026-10-26
+
 ### Added
 
 - **Compatibility** (Setup → Server Settings): Tunarr's version, whether it's one Lineup was validated against, and every capability the desk uses, decided by read-only checks (Tunarr's own API description for saves; live streams are never started to check them). A feature this Tunarr doesn't offer (a route answering "no such route", or a required route missing from its API description, such as channel settings that can be read but not saved) explains itself and its Save is turned off up front; managers are checked action by action (create, edit, delete, scan, refresh, sign in, new and deleted channels), so a missing write turns off just that button, with why, and reading keeps working; a timeout, an error or an API description that fails to load never turns anything off; the rest keeps working. **Export diagnostics** saves the report without Tunarr's address or credentials. Test Connection shows the version too.
@@ -290,7 +292,8 @@ First public release.
   reaches Tunarr through a narrow allowlisted proxy. Optional HTTP Basic
   sign-in and host-name checks against DNS rebinding.
 
-[Unreleased]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.19...HEAD
+[Unreleased]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.20...HEAD
+[2026.10.20]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.19...v2026.10.20
 [2026.10.19]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.18...v2026.10.19
 [2026.10.18]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.17...v2026.10.18
 [2026.10.17]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.16...v2026.10.17
