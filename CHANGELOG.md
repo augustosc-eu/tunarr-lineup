@@ -8,6 +8,17 @@ were renamed 2026.10.1 and 2026.10.2.
 
 ## [Unreleased]
 
+## [2026.10.22] - 2026-10-27
+
+### Added
+
+- **Local videos** (Setup → Local Videos…): music videos and downloaded videos that aren't in Plex, Jellyfin or Emby. **Make folder** creates a named folder under `music-videos/` or `videos/` in Lineup's media folder to upload, play and delete videos in; **Add folder** adds a folder already on the Tunarr server. Each folder is its own Tunarr library and can keep a **custom show** of its videos, made after Tunarr's first scan and refreshed after every newer one (other videos in file-name order, "Part 2" before "Part 10"; music videos by artist, then title). These folders are never taken for filler lists.
+- **Music-video blocks in the program bin:** clean titles for loose videos ("Abba – SOS", not "Abba - SOS (Official Video) [1080p]"), **Group by artist** with **+ All** per artist (artists read from "Artist - Title" file names, or the media server's), **Shuffle, artists apart** (no artist again within up to 3 videos, across passes too), **Fill a length** instead of a number of passes, and breaks or flex time after **every N** programs.
+
+### Changed
+
+- A local folder's library is listed by its folder name, not the path Tunarr names it after.
+
 ## [2026.10.21] - 2026-10-26
 
 ### Changed
@@ -300,7 +311,8 @@ First public release.
   reaches Tunarr through a narrow allowlisted proxy. Optional HTTP Basic
   sign-in and host-name checks against DNS rebinding.
 
-[Unreleased]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.21...HEAD
+[Unreleased]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.22...HEAD
+[2026.10.22]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.21...v2026.10.22
 [2026.10.21]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.20...v2026.10.21
 [2026.10.20]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.19...v2026.10.20
 [2026.10.19]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.18...v2026.10.19
