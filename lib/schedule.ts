@@ -1,6 +1,6 @@
 // Slot-schedule editing helpers (Tunarr "time" and "random" schedules):
 // sources, settings, conversion, commercials, season filters and linked slots.
-import { slotSourceKey } from '../server/slotSchedule';
+import { slotOrderFor, slotSourceKey } from '../server/slotSchedule';
 import type { LineupItem, Programming } from './lineup';
 
 export { slotSourceKey };
@@ -514,7 +514,7 @@ function movieSort(slot: Slot): MovieSort | undefined {
 }
 const sortKey = (sort: MovieSort) => `${sort.by}_${sort.direction}`;
 // A custom-show slot plays the show in its stored order, so the direction is built into the show.
-const showSlotOrder = (order: unknown) => (order === 'shuffle' || order === 'ordered_shuffle' ? order : 'next');
+const showSlotOrder = (order: unknown) => slotOrderFor('custom-show', typeof order === 'string' ? order : 'next');
 
 /**
  * The movies movie slots drew from: the channel's own movies (each once; not

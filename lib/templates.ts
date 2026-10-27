@@ -8,6 +8,7 @@ import type { RuleSet } from '../server/smartCollection';
 import { WEEKDAY_KEYS, type AdLevel, type AdStyle, type Block, type PlayOrder, type Template, type TemplateRole } from '../server/templateSchema';
 import { changeSlotSource, DAY_MS, DEFAULT_SETTINGS, newSlotId, slotCanHaveCommercials, slotLabel, slotSourceKey, sortTimeSlots, type MidRoll, type ScheduleDraftState, type Slot, type SlotFiller, type SourceOption } from './schedule';
 import type { RoleDefault, TemplateDays } from '../server/templateSchema';
+import { slotOrderFor } from '../server/slotSchedule';
 
 export type { AdLevel, AdStyle, Block, Template, TemplateRole } from '../server/templateSchema';
 export { AD_LEVELS } from '../server/templateSchema';
@@ -224,7 +225,8 @@ export function templateToDraft(template: Template, sources: Record<string, Sour
       const source = sources[roleId];
       if (!source) continue;
       const slot = changeSlotSource({ type: 'flex' }, source);
-      if (typeof slot.order === 'string') slot.order = roles.get(roleId)?.order ?? slot.order;
+      // A custom show can't play chronologically or alphabetically in Tunarr: it plays in its own order instead.
+      if (typeof slot.order === 'string') slot.order = slotOrderFor(slot.type, roles.get(roleId)?.order ?? slot.order);
       if ('id' in slot) slot.id = newSlotId();
       slot.startTime = day * DAY_MS + clock(at);
       if (slotCanHaveCommercials(slot)) {

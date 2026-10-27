@@ -99,6 +99,15 @@ describe('slot schedule validation (server)', () => {
     expect(buildSchedule(current, { slots: [{ ...current.slots[0], order: 'random' }] })).toEqual({ error: 'Slot 1 needs a play order.' });
   });
 
+  it('refuses chronological or alphabetical custom-show slots, which Tunarr’s scheduler throws on', () => {
+    const current = randomSchedule();
+    const custom = current.slots[1];
+    expect(custom.type).toBe('custom-show');
+    for (const order of ['next', 'shuffle', 'ordered_shuffle']) expect(buildSchedule(current, { slots: [{ ...custom, order }] })).not.toHaveProperty('error');
+    expect(buildSchedule(current, { slots: [{ ...custom, order: 'chronological' }] })).toEqual({ error: expect.stringMatching(/^Slot 1 plays a custom show, which Tunarr plays only in order, shuffled or as an ordered shuffle, not chronologically/) });
+    expect(buildSchedule(current, { slots: [{ ...custom, order: 'alphanumeric' }] })).toEqual({ error: expect.stringMatching(/not alphabetically/) });
+  });
+
   it('creates and converts schedules from Tunarr’s defaults', () => {
     const created = buildSchedule(undefined, { type: 'time', settings: { period: 'week' }, slots: [{ ...timeSchedule().slots[0], startTime: 6 * DAY_MS }] });
     if ('error' in created) throw new Error(created.error);

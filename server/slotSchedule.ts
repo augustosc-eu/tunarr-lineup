@@ -15,6 +15,16 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SLOT_TYPES = new Set(['movie', 'show', 'flex', 'redirect', 'custom-show', 'filler', 'smart-collection']);
 const LINKABLE = new Set(['movie', 'show', 'custom-show', 'smart-collection']);
 const ORDERS = new Set(['next', 'shuffle', 'ordered_shuffle', 'alphanumeric', 'chronological']);
+/**
+ * Tunarr plays a custom show in its stored order, shuffled, or as an ordered
+ * shuffle. Its API description lists all five orders for custom-show slots, but
+ * its scheduler throws on the others (HTTP 500, seen on 2026.10.3).
+ */
+export const CUSTOM_SHOW_ORDERS = ['next', 'shuffle', 'ordered_shuffle'];
+/** The order a slot can really use: a custom show asked to play chronologically or alphabetically plays in its stored order. */
+export function slotOrderFor(type: unknown, order: string): string {
+  return type === 'custom-show' && !CUSTOM_SHOW_ORDERS.includes(order) ? 'next' : order;
+}
 const FILLER_ORDERS = new Set(['shuffle_prefer_short', 'shuffle_prefer_long', 'uniform']);
 const FILLER_TYPES = new Set(['head', 'pre', 'post', 'tail', 'fallback', 'mid']);
 // Fields Tunarr adds when it "materializes" a schedule for display. They are
@@ -208,6 +218,7 @@ export function buildSchedule(current: unknown, edit: unknown): { schedule: Json
     if (LINKABLE.has(raw.type)) {
       if (typeof raw.id !== 'string' || !UUID.test(raw.id)) return { error: `Slot ${index + 1} is missing its id.` };
       if (!ORDERS.has(raw.order as string)) return { error: `Slot ${index + 1} needs a play order.` };
+      if (raw.type === 'custom-show' && !CUSTOM_SHOW_ORDERS.includes(raw.order as string)) return { error: `Slot ${index + 1} plays a custom show, which Tunarr plays only in order, shuffled or as an ordered shuffle, not ${raw.order === 'alphanumeric' ? 'alphabetically' : 'chronologically'}. Choose one of those (In order follows the show's own order).` };
       if (raw.direction !== undefined && raw.direction !== 'asc' && raw.direction !== 'desc') return { error: `Slot ${index + 1} has an invalid direction.` };
     }
     const fillerProblem = validateFiller(raw.filler, index) ?? validateMidRoll(raw.midRoll, index) ?? validateEpisodesAndLinks(raw, index);

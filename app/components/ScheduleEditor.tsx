@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { CUSTOM_SHOW_ORDERS } from '../../server/slotSchedule';
 import { roleOf, ROLE_LABELS, type FillerRoles } from '../../lib/fillerRoles';
 import {
   catalogOptions,
@@ -333,7 +334,8 @@ export function ScheduleEditor(props: Props) {
                 // Linked slots share one episode list, so they change play order together.
                 const group = groups.get(String(slot.iterationGroup));
                 setSlots(draft.slots.map((item, position) => (position === index || group?.members.includes(position) ? { ...item, order: event.target.value } : item)));
-              }}>{Object.entries(ORDER_LABELS).map(([value, text]) => <option key={value} value={value}>{text}</option>)}</select>
+              }}>{Object.entries(ORDER_LABELS).filter(([value]) => slot.type !== 'custom-show' || CUSTOM_SHOW_ORDERS.includes(value) || value === slot.order)
+                .map(([value, text]) => <option key={value} value={value} disabled={slot.type === 'custom-show' && !CUSTOM_SHOW_ORDERS.includes(value)}>{slot.type === 'custom-show' && !CUSTOM_SHOW_ORDERS.includes(value) ? `${text} (not for custom shows)` : text}</option>)}</select>
               : <span className="subtle">—</span>;
             const actions = (
               <span className="slot-actions">

@@ -70,6 +70,17 @@ describe('built-in templates', () => {
     }
   });
 
+  it('plays a custom show in its own order when its role asks for chronological or alphabetical', () => {
+    // The music template's Countdown role is chronological; Tunarr can't play a custom show that way.
+    const template = BUILT_IN_TEMPLATES.find((item) => item.roles.some((role) => role.order === 'chronological'))!;
+    const show: SourceOption = { key: 'custom-show:c0000000-0000-4000-8000-000000000001', label: 'Countdown show', template: { type: 'custom-show', customShowId: 'c0000000-0000-4000-8000-000000000001', customShow: { name: 'Countdown show' }, order: 'next', direction: 'asc' } };
+    const sources = Object.fromEntries(template.roles.map((role) => [role.id, role.order === 'chronological' ? show : undefined]));
+    const draft = templateToDraft(template, sources, {});
+    expect(draft.slots.length).toBeGreaterThan(0);
+    expect(new Set(draft.slots.map((slot) => slot.order))).toEqual(new Set(['next']));
+    expect(buildSchedule(null, { type: draft.type, settings: draft.settings, slots: draft.slots })).not.toHaveProperty('error');
+  });
+
   it('places weekday overrides on their own day (Sunday is day 0)', () => {
     // Fuji TV's Monday 21:00 drama.
     const fuji = byId('jp-fuji');
