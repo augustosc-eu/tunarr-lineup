@@ -74,8 +74,15 @@ export function sanitizeMediaSources(sources: unknown) {
     libraries: (Array.isArray(source.libraries) ? source.libraries : [])
       .filter(isObject)
       .filter((library) => library.enabled !== false)
-      .map((library) => ({ id: str(library.id), name: str(library.name) ?? 'Library', mediaType: str(library.mediaType) })),
+      .map((library) => ({ id: str(library.id), name: libraryName(source, library), mediaType: str(library.mediaType) })),
   }));
+}
+
+/** Tunarr names a local folder's library after its path; only the folder's own name is passed on. */
+function libraryName(source: Json, library: Json) {
+  const name = str(library.name) ?? 'Library';
+  if (source.type !== 'local' || !/[\\/]/.test(name)) return name;
+  return name.split(/[\\/]/).filter(Boolean).pop() ?? 'Folder';
 }
 
 const typeFilter = (type: string) => ({ type: 'value', fieldSpec: { key: 'type', name: 'Type', op: '=', type: 'string', value: [type] } });
@@ -396,6 +403,20 @@ type Context = {
 
 const LIST_NOT_FOUND = 'Tunarr could not find that list.';
 
+/** Every playable program Tunarr indexed in one library (up to MAX_LIST_ITEMS), as full program entries. */
+export async function readLibrary(config: ProxyConfig, target: TunarrTarget, mediaSourceId: string, libraryId: string): Promise<Json[]> {
+  // Listings without search text page from 0.
+  const programs: Json[] = [];
+  for (let page = 0; programs.length < MAX_LIST_ITEMS; page += 1) {
+    const result = (await callTunarr(config, target, 'POST', '/api/programs/search', JSON.stringify({ mediaSourceId, libraryId, query: {}, page, limit: PAGE_SIZE }), 'Tunarr could not find that folder.')) as Json | null;
+    const results = Array.isArray(result?.results) ? result!.results : [];
+    programs.push(...libraryEntries(results));
+    const total = finite(result?.totalHits) ? result!.totalHits : 0;
+    if (results.length < PAGE_SIZE || (page + 1) * PAGE_SIZE >= total) break;
+  }
+  return programs.slice(0, MAX_LIST_ITEMS);
+}
+
 /**
  * Creates (name) or refreshes (listId) a filler list from everything Tunarr
  * indexed in one library, then stores its role and the list↔library link.
@@ -407,17 +428,8 @@ export async function buildFromLibrary(config: ProxyConfig, target: TunarrTarget
   const refused = unavailableReason(report, 'library-search') ?? unavailableReason(report, 'filler-lists', request.listId ? 'edit' : 'create');
   if (refused) throw new UpstreamError(501, 'tunarr_unsupported', refused);
   const call = (verb: 'POST' | 'PUT', path: string, payload: unknown, notFound?: string) => callTunarr(config, target, verb, path, JSON.stringify(payload), notFound);
-  // Read the whole library; listings without search text page from 0.
-  const programs: Json[] = [];
-  for (let page = 0; programs.length < MAX_LIST_ITEMS; page += 1) {
-    const result = (await call('POST', '/api/programs/search', { mediaSourceId: request.mediaSourceId, libraryId: request.libraryId, query: {}, page, limit: PAGE_SIZE }, 'Tunarr could not find that folder.')) as Json | null;
-    const results = Array.isArray(result?.results) ? result!.results : [];
-    programs.push(...libraryEntries(results));
-    const total = finite(result?.totalHits) ? result!.totalHits : 0;
-    if (results.length < PAGE_SIZE || (page + 1) * PAGE_SIZE >= total) break;
-  }
-  if (!programs.length) return null;
-  const list = programs.slice(0, MAX_LIST_ITEMS);
+  const list = await readLibrary(config, target, request.mediaSourceId, request.libraryId);
+  if (!list.length) return null;
   let id = request.listId;
   if (id) await call('PUT', `/api/filler-lists/${id}`, { programs: list }, LIST_NOT_FOUND);
   else id = str(((await call('POST', '/api/filler-lists', { name: request.name, programs: list })) as Json | null)?.id);

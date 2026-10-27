@@ -17,6 +17,7 @@ arrange, insert and remove programs, build and edit slot schedules (season filte
 linked slots), start channels from programming templates (general, network-inspired for
 Japan, Argentina, the US, Spain, the UK and Italy, the user's own, or AI-written), place
 events on dates, and manage commercials, filler lists, custom shows, smart collections,
+local videos (music-video and video folders that keep custom shows, D70),
 channels (create, duplicate, delete, logos, streaming), media sources and transcode
 profiles; and run a whole station: Tunarr compatibility checks (D63), a multichannel
 Control Room (D64), and previewed, conditional batch operations with media repair,
@@ -92,7 +93,7 @@ Chromium with `npx playwright install chromium`. CI runs all of them
      `server/admin.ts` (`matchAdminRoute`). The setup wizard and server configuration
      live in `server/setup.ts` (`matchSetupRoute`): before setup only they answer
      (everything else is `503 setup_required`), and the wizard's need the setup code.
-     Lineup's own routes (saved templates, filler-list roles, the media folder, AI)
+     Lineup's own routes (saved templates, filler-list roles, the media folder, local videos, AI)
      live in `server/lineupRoutes.ts` (`matchLineupRoute`); templates are always checked
      with `validateTemplate` (`server/templateSchema.ts`). Every route is explicit, IDs are validated,
      and no raw Tunarr request is accepted: search filters and smart-collection filters
@@ -135,7 +136,10 @@ Chromium with `npx playwright install chromium`. CI runs all of them
      The one exception (owner decision, 2026-10-07): video uploads into the companion's
      own media folder (`LINEUP_MEDIA_DIR`, `server/mediaFolder.ts`), which Tunarr reads
      as a local source. Files there can be moved between role folders or deleted;
-     nothing is overwritten, and nothing is written anywhere else.
+     nothing is overwritten, and nothing is written anywhere else. Since the owner
+     decision of 2026-10-27 (D70) that includes music videos and videos in its named
+     `music-videos/<folder>` and `videos/<folder>` folders (one level, never through a
+     symlink), each added to Tunarr as its own local source.
 4. **Every save is conditional.**
    - The client sends `If-Match` with `programmingVersion(lineup, schedule)` of what it
      loaded (`server/lineupVersion.ts`, shared with the browser).
@@ -163,7 +167,9 @@ Chromium with `npx playwright install chromium`. CI runs all of them
    wizard (`config.json`, `server/configStore.ts`, owner decision 2026-10-25, D62:
    owner-only, the password only as a scrypt hash, keys never sent back), saved templates (`templates.json`,
    `server/templateStore.ts`), filler-list roles (`filler-roles.json`,
-   `server/fillerRoleStore.ts`, owner decision 2026-10-07), and since the owner decision
+   `server/fillerRoleStore.ts`, owner decision 2026-10-07), local-video kinds and followed
+   custom shows (`local-videos.json`, `server/localVideoStore.ts`, owner decision
+   2026-10-27, D70), and since the owner decision
    of 2026-10-19 snapshots (`snapshots/<channel>.json`, `server/snapshotStore.ts`),
    shared drafts (`drafts/`, `server/sharedDraftStore.ts`) and scheduled changes
    (`scheduled.json`, `server/scheduler.ts`); since the owner decision of 2026-10-19
@@ -218,6 +224,7 @@ Chromium with `npx playwright install chromium`. CI runs all of them
   labels, defaults, what can be rolled back), `calendar.ts` (calendar labels, zones and the entry form),
   `planner.ts` (the advanced planner: seeded, fair-queued rotations materialized as a lineup),
   `epg.ts` (the guide preview and its checks; Lineup never serves a guide, D69),
+  `localVideos.ts` (music videos in the bin: artists, clean titles, grouping, `spreadArtists`),
   `lineupCheck.ts` (the lineup check), `weekLog.ts` (several days: week view, logs, AI
   summary), `guideGrid.ts` (guide grid layout and focus), `skins.ts` (the skin catalog and its validator), `tvRemote.ts` (watching like a cable box: remote keys, tuning, retries), `loading.ts` (load phases, time limits, bounded waits), `rowWindow.ts` (which of a long day's rows are mounted), `lastChannel.ts` (`?channel=` and the last channel opened), and `programInfo.ts` for titles,
   artwork and logo URLs.
@@ -227,16 +234,17 @@ Chromium with `npx playwright install chromium`. CI runs all of them
   `watch.ts`, `programmingCache.ts`, `compression.ts`, `settings.ts`, `stationIdStore.ts`, `snapshotStore.ts`, `sharedDraftStore.ts`, `scheduler.ts`, `channelLock.ts`, `lineupItems.ts`,
   `slotSchedule.ts`, `recreateChannel.ts`, `lineupVersion.ts`, `auth.ts`, `hosts.ts`, `app.ts`,
   `compatibility.ts`, `channelHealth.ts`, `controlRoom.ts`, `batch.ts`, `batchStore.ts`, `notify.ts`,
-  `programmingPackage.ts`, `calendar.ts`, `calendarStore.ts` and `calendarArm.ts`. `lib/` and
+  `programmingPackage.ts`, `calendar.ts`, `calendarStore.ts`, `calendarArm.ts`, `videoTitles.ts`,
+  `localVideos.ts` and `localVideoStore.ts`. `lib/` and
   `app/` may import pure modules from `server/` (`lineupVersion`, `slotSchedule`,
-  `smartCollection`, `templateSchema`, `fillerRoles`, `programmingPackage`, `calendar`; types from any module) but never Node
+  `smartCollection`, `templateSchema`, `fillerRoles`, `programmingPackage`, `calendar`, `videoTitles`; types from any module) but never Node
   APIs (`logos.ts`, `jsonFile.ts`, `mediaFolder.ts`, the stores, `setup.ts`, `boot.ts`,
-  `notify.ts`, `batch.ts`, `calendarArm.ts` and the scheduler use Node built-ins or import them;
-  `app/` imports only types from `setup.ts`, `batch.ts` and `calendarArm.ts`).
+  `notify.ts`, `batch.ts`, `calendarArm.ts`, `localVideos.ts` and the scheduler use Node built-ins or import them;
+  `app/` imports only types from `setup.ts`, `batch.ts`, `calendarArm.ts` and `localVideos.ts`).
 - **Keep `app/page.tsx` for UI state and rendering,** and `app/components/` for larger
   UI pieces: `MenuBar`, `MoveDialog`, `ScheduleEditor`, `InsertDialog`,
   `LibraryBrowser`, `ProgramBin` (the poster bin docked beside the lineup), `ListsManager`, `ChannelSettingsDialog`, `NewChannelDialog`,
-  `SmartCollectionsManager`, `MediaSourcesDialog`, `FillerFoldersDialog`, `TranscodeProfilesDialog`, `ServerSettingsDialog`,
+  `SmartCollectionsManager`, `MediaSourcesDialog`, `FillerFoldersDialog`, `LocalVideosDialog` (Setup → Local Videos), `TranscodeProfilesDialog`, `ServerSettingsDialog`,
   `TemplatesDialog` (gallery, AI panel), `TemplateEditor`, `EventDialog`, `DayStrip`,
   `GuideGrid`, `WeekView`, `LineupCheckDialog`, `AlignDialog`, `MarathonDialog`,
   `NetworkDialog` (copy, simulcast, shared commercials), `WatchDialog` (with `TvRemote` and `CableGuide`), `SnapshotsDialog`,

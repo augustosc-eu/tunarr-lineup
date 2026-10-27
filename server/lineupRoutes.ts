@@ -5,13 +5,15 @@ import { aiFailure, buildUserMessage, callModel, gatherContext, MAX_PROMPT_CHARS
 import { isChangeId, summarize, validatePlan } from './scheduler.js';
 import { validateDraft } from './sharedDraftStore.js';
 import { buildFromLibrary } from './content.js';
-import { compatibility, unavailableReason, type CapabilityId, type PartId } from './compatibility.js';
+import { cachedCompatibility, compatibility, unavailableReason, type CapabilityId, type PartId } from './compatibility.js';
 import { checkCalendar, endOccurrences, entryView, reconcileAfterEdit, runEnding, withCalendarLock } from './calendarArm.js';
 import { isStoreId, librarySummary, validateDetails, validateLibraryEntry } from './calendarStore.js';
 import { validateMediaSourceAdd } from './admin.js';
 import { FILLER_ROLES, folderRole, isFillerRole, ROLE_LABELS, type FillerRole } from './fillerRoles.js';
 import type { FillerRoleStore } from './fillerRoleStore.js';
 import { mediaFileName, ROLE_FOLDERS, type MediaFolder } from './mediaFolder.js';
+import { addFolderToTunarr, buildShowFromFolder, isProgramPath, localLibraries, localVideoFolders, showName, syncLocalVideos } from './localVideos.js';
+import { isVideoKind, videoFolderName, type VideoKind } from './videoTitles.js';
 import { applySettings, settingsView } from './settings.js';
 import { validatePicks } from './stationIdStore.js';
 import { validateTemplate } from './templateSchema.js';
@@ -30,6 +32,12 @@ export type LineupRoute =
   | { name: 'filler-folder-add'; methods: string[] }
   | { name: 'media-file'; methods: string[]; role: FillerRole; file: string }
   | { name: 'media-file-move'; methods: string[]; role: FillerRole; file: string }
+  | { name: 'local-videos'; methods: string[] }
+  | { name: 'local-video-sync'; methods: string[] }
+  | { name: 'local-video-folders'; methods: string[] }
+  | { name: 'local-video-add'; methods: string[] }
+  | { name: 'local-video-library'; methods: string[]; id: string }
+  | { name: 'local-video-file'; methods: string[]; kind: VideoKind; folder: string; file: string }
   | { name: 'ai-status'; methods: string[] }
   | { name: 'ai-template'; methods: string[] }
   | { name: 'ai-review'; methods: string[] }
@@ -77,6 +85,29 @@ export function matchLineupRoute(path: string): LineupRoute | { invalid: string 
     if (!file) return { invalid: 'File names need a video extension (.mp4, .mkv, .mov…) and no slashes or leading dots.' };
     // Uploads (PUT) never get here: nodeAdapter.ts streams them to disk before any body is read.
     return media[3] ? { name: 'media-file-move', methods: ['POST'], role: media[1], file } : { name: 'media-file', methods: ['DELETE'], role: media[1], file };
+  }
+  if (path === '/local-videos') return { name: 'local-videos', methods: ['GET'] };
+  if (path === '/local-videos/sync') return { name: 'local-video-sync', methods: ['POST'] };
+  if (path === '/local-videos/folders') return { name: 'local-video-folders', methods: ['POST'] };
+  if (path === '/local-videos/add') return { name: 'local-video-add', methods: ['POST'] };
+  const localLibrary = /^\/local-videos\/libraries\/([^/]+)$/.exec(path);
+  if (localLibrary) return UUID.test(localLibrary[1]) ? { name: 'local-video-library', methods: ['PUT'], id: localLibrary[1] } : { invalid: 'Library id is not valid.' };
+  const localFile = /^\/local-videos\/files\/([^/]+)\/([^/]+)\/([^/]+)$/.exec(path);
+  if (localFile) {
+    if (!isVideoKind(localFile[1])) return { invalid: 'Choose music-videos or videos.' };
+    const decode = (raw: string) => {
+      try {
+        return decodeURIComponent(raw);
+      } catch {
+        return null;
+      }
+    };
+    const folder = videoFolderName(decode(localFile[2]));
+    if (!folder) return { invalid: 'Folder names need no slashes, leading dots or characters like : * ? " < > |.' };
+    const file = mediaFileName(decode(localFile[3]));
+    if (!file) return { invalid: 'File names need a video extension (.mp4, .mkv, .mov…) and no slashes or leading dots.' };
+    // Uploads (PUT) and playback (GET) never get here: nodeAdapter.ts streams them before the proxy.
+    return { name: 'local-video-file', methods: ['DELETE'], kind: localFile[1], folder, file };
   }
   if (path === '/ai') return { name: 'ai-status', methods: ['GET'] };
   if (path === '/ai/template') return { name: 'ai-template', methods: ['POST'] };
@@ -206,9 +237,12 @@ async function runSync(config: ProxyConfig, target: TunarrTarget): Promise<SyncR
 
   type Library = { id: string; mediaSourceId: string; name: string; enabled: boolean; lastScannedAt?: number; scanning: boolean };
   const libraries: Library[] = [];
+  // Local-video folders hold programs, not filler, even when one is named "Commercials" (D70).
+  const programs = new Set(Object.keys((await config.localVideos?.state().catch(() => undefined))?.kinds ?? {}));
   for (const source of Array.isArray(sources) ? sources.filter(isObject) : []) {
     for (const library of Array.isArray(source.libraries) ? source.libraries.filter(isObject) : []) {
       if (typeof source.id !== 'string' || typeof library.id !== 'string') continue;
+      if (programs.has(library.id) || isProgramPath(media, typeof library.externalKey === 'string' ? library.externalKey : undefined)) continue;
       libraries.push({ id: library.id, mediaSourceId: source.id, name: typeof library.name === 'string' ? library.name : '', enabled: library.enabled !== false, lastScannedAt: typeof library.lastScannedAt === 'number' ? library.lastScannedAt : undefined, scanning: !!library.isLocked });
     }
   }
@@ -269,6 +303,7 @@ type Context = { config: ProxyConfig; target: TunarrTarget | null; method: strin
 export async function handleLineupRoute(route: LineupRoute, { config, target, method, body }: Context): Promise<ProxyResponse> {
   const store = config.templates as TemplateStore | undefined;
   const roles = config.fillerRoles as FillerRoleStore | undefined;
+  const videos = config.localVideos;
   const media = config.mediaFolder && !('off' in config.mediaFolder) ? config.mediaFolder : undefined;
   const mediaOff = () => fail(503, 'media_folder_off', config.mediaFolder && 'off' in config.mediaFolder ? config.mediaFolder.off : 'The media folder is off. Choose one under Setup → Server Settings to upload files.');
   try {
@@ -328,6 +363,104 @@ export async function handleLineupRoute(route: LineupRoute, { config, target, me
         if (!isFillerRole(to)) return fail(400, 'invalid_request', 'Send { "role" } with the folder to move the file to.');
         await media.move(route.role, route.file, to);
         return json(200, { moved: true, role: to });
+      }
+      case 'local-videos': {
+        const state = videos ? await videos.state() : { kinds: {}, shows: {}, pending: {} };
+        let sources: unknown | null = null;
+        let tunarrError: string | undefined;
+        if (target) {
+          try {
+            sources = await callTunarr(config, target, 'GET', '/api/media-sources');
+          } catch (error) {
+            tunarrError = error instanceof UpstreamError ? error.message : 'Tunarr could not be reached.';
+          }
+        } else tunarrError = 'Tunarr’s address is not set up on the Lineup server.';
+        return json(200, {
+          media: media ? { enabled: true, maxBytes: media.maxBytes } : { enabled: false, message: config.mediaFolder && 'off' in config.mediaFolder ? config.mediaFolder.off : 'Uploads are off: no media folder is set up. Choose one under Setup → Server Settings.' },
+          folders: await localVideoFolders(config, sources, state),
+          ...(tunarrError ? { tunarrError } : {}),
+        });
+      }
+      case 'local-video-sync':
+        return json(200, await syncLocalVideos(config, target!));
+      case 'local-video-folders': {
+        if (!media) return mediaOff();
+        if (!videos) return fail(503, 'store_off', 'Local videos are not available on this server.');
+        const kind = isObject(body) ? body.kind : undefined;
+        if (!isVideoKind(kind)) return fail(400, 'invalid_request', 'Choose music-videos or videos.');
+        const folder = videoFolderName(isObject(body) ? body.name : undefined);
+        if (!folder) return fail(400, 'invalid_request', 'Name the folder (up to 100 characters, no slashes or characters like : * ? " < > |).');
+        const follow = !isObject(body) || body.follow !== false;
+        await media.programs.make(kind, folder);
+        // Tunarr reads it from now on; without Tunarr (or its route), the next pickup adds it.
+        const path = media.programs.tunarrPath(kind, folder);
+        let tunarrError: string | undefined;
+        const refused = unavailableReason(cachedCompatibility(config), 'media-sources', 'create');
+        if (!target) tunarrError = 'Tunarr’s address is not set up, so Tunarr will read the folder once it is.';
+        else if (refused) tunarrError = refused;
+        else {
+          try {
+            if (!localLibraries(await callTunarr(config, target, 'GET', '/api/media-sources')).some((library) => library.path === path)) {
+              const added = await addFolderToTunarr(config, target, showName(kind, folder), path);
+              await videos.setKind(added.libraryId, kind);
+              if (follow) await videos.addPending(added.libraryId, { mediaSourceId: added.mediaSourceId, name: showName(kind, folder), kind });
+            }
+          } catch (error) {
+            tunarrError = error instanceof UpstreamError || error instanceof StoreError ? error.message : 'Tunarr could not be reached.';
+          }
+        }
+        return json(201, { kind, folder, ...(tunarrError ? { tunarrError } : {}) });
+      }
+      case 'local-video-add': {
+        if (!videos) return fail(503, 'store_off', 'Local videos are not available on this server.');
+        const kind = isObject(body) ? body.kind : undefined;
+        if (!isVideoKind(kind)) return fail(400, 'invalid_request', 'Choose music-videos or videos.');
+        const raw = isObject(body) && typeof body.path === 'string' ? body.path.trim() : '';
+        const name = showName(kind, lastSegment(raw));
+        const checked = validateMediaSourceAdd({ type: 'local', name, mediaType: 'other_videos', paths: [raw] });
+        if ('error' in checked) return fail(400, 'invalid_request', checked.error);
+        if (checked.kind !== 'insert') return fail(400, 'invalid_request', 'Enter a folder on the Tunarr server.');
+        const path = (checked.body.paths as string[])[0];
+        const follow = !isObject(body) || body.follow !== false;
+        // A folder Tunarr already reads is marked, not added twice.
+        const existing = localLibraries(await callTunarr(config, target!, 'GET', '/api/media-sources')).find((library) => library.path === path);
+        let added = existing ? { mediaSourceId: existing.mediaSourceId, libraryId: existing.libraryId } : undefined;
+        if (!added) {
+          const refused = unavailableReason(cachedCompatibility(config), 'media-sources', 'create');
+          if (refused) return fail(501, 'tunarr_unsupported', refused);
+          added = await addFolderToTunarr(config, target!, name, path);
+        }
+        await videos.setKind(added.libraryId, kind);
+        const state = await videos.state();
+        const followed = Object.values(state.shows).some((link) => link.libraryId === added!.libraryId);
+        if (follow && !followed) await videos.addPending(added.libraryId, { mediaSourceId: added.mediaSourceId, name, kind });
+        return json(existing ? 200 : 201, { ...added, name, existing: !!existing });
+      }
+      case 'local-video-library': {
+        if (!videos) return fail(503, 'store_off', 'Local videos are not available on this server.');
+        if (!isObject(body)) return fail(400, 'invalid_request', 'Send { "kind"?, "follow"? }.');
+        if (body.kind !== undefined && body.kind !== null && !isVideoKind(body.kind)) return fail(400, 'invalid_request', 'Choose music-videos or videos.');
+        if (body.follow !== undefined && typeof body.follow !== 'boolean') return fail(400, 'invalid_request', '"follow" is true or false.');
+        const library = localLibraries(await callTunarr(config, target!, 'GET', '/api/media-sources')).find((item) => item.libraryId === route.id);
+        if (!library) return fail(404, 'not_found', 'Tunarr has no local folder with that id.');
+        if (body.kind !== undefined) await videos.setKind(route.id, body.kind as VideoKind | null);
+        if (body.follow === false) await videos.unfollowLibrary(route.id);
+        let state = await videos.state();
+        const kind: VideoKind = state.kinds[route.id] ?? (library.mediaType === 'music_videos' ? 'music-videos' : 'videos');
+        let created: { id: string; count: number; storeError?: string } | null = null;
+        if (body.follow === true && !Object.values(state.shows).some((link) => link.libraryId === route.id)) {
+          const name = showName(kind, lastSegment(library.path ?? library.name));
+          // Made now when Tunarr has the folder's videos; otherwise after its next scan.
+          created = library.lastScannedAt && !library.scanning ? await buildShowFromFolder(config, target!, { mediaSourceId: library.mediaSourceId, libraryId: route.id, kind, name }) : null;
+          if (!created) await videos.addPending(route.id, { mediaSourceId: library.mediaSourceId, name, kind });
+          state = await videos.state();
+        }
+        return json(200, { kind, pending: route.id in state.pending, ...(created ? { show: created } : {}) });
+      }
+      case 'local-video-file': {
+        if (!media) return mediaOff();
+        await media.programs.remove(route.kind, route.folder, route.file);
+        return json(200, { deleted: true });
       }
       case 'station-ids': {
         if (!config.stationIds) return json(200, {});

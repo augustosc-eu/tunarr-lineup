@@ -16,6 +16,7 @@ import { ListsManager } from './components/ListsManager';
 import { MenuBar, type Menu } from './components/MenuBar';
 import { MediaSourcesDialog } from './components/MediaSourcesDialog';
 import { FillerFoldersDialog } from './components/FillerFoldersDialog';
+import { LocalVideosDialog } from './components/LocalVideosDialog';
 import { MoveDialog } from './components/MoveDialog';
 import { NewChannelDialog } from './components/NewChannelDialog';
 import { ProgramBin } from './components/ProgramBin';
@@ -352,7 +353,7 @@ export default function Home() {
   // Station-log view: each commercial break expanded into its (estimated) spots.
   const [showRundowns, setShowRundowns] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [setupDialog, setSetupDialog] = useState<'sources' | 'folders' | 'transcode' | 'smart' | 'server' | null>(null);
+  const [setupDialog, setSetupDialog] = useState<'sources' | 'folders' | 'videos' | 'transcode' | 'smart' | 'server' | null>(null);
   const [newChannel, setNewChannel] = useState<{ copyFrom: string } | null>(null);
   const [templatesOpen, setTemplatesOpen] = useState(false);
   const [eventOpen, setEventOpen] = useState(false);
@@ -2095,6 +2096,7 @@ export default function Home() {
     { title: 'Setup', items: [
       { label: 'Media Sources…', disabled: !live, onSelect: gate('media-sources', () => setSetupDialog('sources')) },
       { label: 'Filler Folders…', disabled: !live, onSelect: () => setSetupDialog('folders') },
+      { label: 'Local Videos…', disabled: !live, onSelect: () => setSetupDialog('videos') },
       { label: 'Transcode Profiles…', disabled: !live, onSelect: gate('transcode-profiles', () => setSetupDialog('transcode')) },
       'separator',
       { label: 'Server Settings…', disabled: mode === 'demo', onSelect: () => setSetupDialog('server') },
@@ -2570,6 +2572,7 @@ export default function Home() {
       {setupDialog === 'smart' && <SmartCollectionsManager blocked={partRefused} onClose={() => setSetupDialog(null)} onChanged={() => { if (slotEditor.open || catalog) loadCatalog(); }} />}
       {setupDialog === 'sources' && <MediaSourcesDialog blocked={partRefused} onClose={() => setSetupDialog(null)} />}
       {setupDialog === 'folders' && <FillerFoldersDialog blocked={partRefused} roles={filler.roles} onClose={() => setSetupDialog(null)} onChanged={() => { filler.reload(); if (slotEditor.open || catalog) loadCatalog(); }} />}
+      {setupDialog === 'videos' && <LocalVideosDialog blocked={partRefused} onClose={() => setSetupDialog(null)} onChanged={() => { if (slotEditor.open || catalog) loadCatalog(); }} />}
       {setupDialog === 'transcode' && <TranscodeProfilesDialog blocked={partRefused} onClose={() => setSetupDialog(null)} />}
       {setupDialog === 'server' && <ServerSettingsDialog onClose={() => setSetupDialog(null)} onCompatibility={(report) => { if (live) setCompat(report); }} />}
       {live && connection.status === 'setup_required' && <SetupWizard onDemo={switchToDemo} />}

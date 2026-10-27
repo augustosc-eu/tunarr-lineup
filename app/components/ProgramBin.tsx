@@ -20,6 +20,8 @@ import {
   arrangedDuration,
   arrangePrograms,
   BIN_ORDER_LABELS,
+  MAX_BIN_EVERY,
+  MAX_BIN_FILL,
   MAX_BIN_REPEAT,
   slotWindow,
   WEEKDAYS,
@@ -30,12 +32,13 @@ import {
   type SlotPlacement,
   type SlotPlan,
 } from '../../lib/programBin';
+import { groupByArtist, LOOSE_VIDEO_TYPES, videoLabel, type ArtistGroup } from '../../lib/localVideos';
 import { libraryArtwork } from '../../lib/programInfo';
 import type { ShowPick, ShowSlotPlan } from '../../lib/schedule';
 import { tunarrApi } from '../../lib/tunarrClient';
 import { errorText, useLibraryListing } from '../useLibraryListing';
 
-/** One pick: a single program, or everything in a show, season or album. */
+/** One pick: a single program, or everything in a show, season or album (or an artist's videos). */
 type Pick = { key: string; item: LibraryItem; programs: ContentProgram[] };
 type Spot = 'after' | 'before' | 'end' | 'time' | 'slots' | 'schedule';
 type AfterKind = BinAfter['kind'];
@@ -115,8 +118,13 @@ export function ProgramBin({ live, anchorLabel, emptyLineup, date, time: initial
   const [adding, setAdding] = useState('');
   const [binOrder, setBinOrder] = useState<BinOrder>('picked');
   const [repeat, setRepeat] = useState(1);
+  // A length to fill instead of a number of passes (a one-hour music-video block).
+  const [lengthKind, setLengthKind] = useState<'passes' | 'fill'>('passes');
+  const [fillMinutes, setFillMinutes] = useState(60);
   const [afterKind, setAfterKind] = useState<AfterKind>('none');
   const [afterLength, setAfterLength] = useState(2 * MINUTE);
+  const [every, setEvery] = useState(1);
+  const [byArtist, setByArtist] = useState(false);
   const [withId, setWithId] = useState(true);
   const [spot, setSpot] = useState<Spot>(anchorLabel ? 'after' : 'end');
   const [day, setDay] = useState(date);
@@ -144,17 +152,22 @@ export function ProgramBin({ live, anchorLabel, emptyLineup, date, time: initial
   const wide = shown.filter((item) => WIDE_TYPES.has(item.type)).length > shown.length / 2;
   const listKey = commercialLists.map((list) => list.id).join(',');
   const listIds = useMemo(() => (listKey ? listKey.split(',') : []), [listKey]);
-  const after: BinAfter = useMemo(() => (afterKind === 'flex' ? { kind: 'flex', duration: afterLength }
-    : afterKind === 'break' && listIds.length ? { kind: 'break', duration: afterLength, fillerListIds: listIds, stationIds: withId ? stationIds : [] }
-    : { kind: 'none' }), [afterKind, afterLength, listIds, stationIds, withId]);
-  const arrange = (programs: ContentProgram[]) => arrangePrograms(programs, { order: binOrder, repeat, after });
+  const after: BinAfter = useMemo(() => (afterKind === 'flex' ? { kind: 'flex', duration: afterLength, every }
+    : afterKind === 'break' && listIds.length ? { kind: 'break', duration: afterLength, fillerListIds: listIds, stationIds: withId ? stationIds : [], every }
+    : { kind: 'none' }), [afterKind, afterLength, every, listIds, stationIds, withId]);
+  const fill = lengthKind === 'fill' ? fillMinutes * MINUTE : undefined;
+  const arrange = (programs: ContentProgram[]) => arrangePrograms(programs, { order: binOrder, repeat, after, fill });
+  // Music videos and other loose videos: grouped by the artist in their file names, when asked.
+  const looseVideos = shown.some((item) => LOOSE_VIDEO_TYPES.has(item.type));
+  const groups: ArtistGroup[] | null = useMemo(() => (byArtist && looseVideos ? groupByArtist(shown) : null), [byArtist, looseVideos, shown]);
+  const ordered = groups ? groups.flatMap((group) => group.items) : shown;
   // Picks may overlap (a season and one of its episodes): each program airs once per pass.
   const pickedPrograms = useMemo(() => {
     const seen = new Set<string>();
     return picks.flatMap((pick) => pick.programs).filter((program) => !seen.has(program.id) && !!seen.add(program.id));
   }, [picks]);
   // Arranged once, so what's previewed (a shuffle, the slots) is what gets placed.
-  const arranged = useMemo(() => arrangePrograms(pickedPrograms, { order: binOrder, repeat, after }), [pickedPrograms, binOrder, repeat, after]);
+  const arranged = useMemo(() => arrangePrograms(pickedPrograms, { order: binOrder, repeat, after, fill }), [pickedPrograms, binOrder, repeat, after, fill]);
   const length = arrangedDuration(arranged);
 
   const at = new Date(`${day}T${time}:00`).getTime();
@@ -194,6 +207,14 @@ export function ProgramBin({ live, anchorLabel, emptyLineup, date, time: initial
     } finally {
       setAdding('');
     }
+  };
+  /** Every video of one artist as one pick (or unpicks them). */
+  const toggleGroup = (group: ArtistGroup) => {
+    const key = `artist:${group.key}`;
+    if (pickedKeys.has(key)) { setPicks((current) => current.filter((pick) => pick.key !== key)); return; }
+    const programs = group.items.filter(isPlayable).map(toContentProgram);
+    if (!programs.length) return;
+    setPicks((current) => [...current, { key, item: { uuid: key, type: 'artist-group', title: group.artist || 'Videos with no artist' }, programs }]);
   };
   const pickAllHere = async () => {
     if (folder) await togglePick(folder);
@@ -249,7 +270,7 @@ export function ProgramBin({ live, anchorLabel, emptyLineup, date, time: initial
       next.scrollIntoView?.({ block: 'nearest' });
     } else if (event.key === ' ') {
       event.preventDefault();
-      const item = shown[current];
+      const item = ordered[current];
       if (item && (isPlayable(item) || childType(item.type))) void togglePick(item);
     }
   };
@@ -258,6 +279,26 @@ export function ProgramBin({ live, anchorLabel, emptyLineup, date, time: initial
     event.preventDefault();
     if (path.length) listing.goUp(path.length - 1);
     else onClose();
+  };
+
+  const card = (item: LibraryItem, withArtist: boolean) => {
+    const folderType = childType(item.type);
+    const playable = isPlayable(item);
+    const pickedAt = pickedKeys.get(item.uuid);
+    const label = LOOSE_VIDEO_TYPES.has(item.type) ? videoLabel(item, withArtist) : itemLabel(item);
+    const meta = [TYPE_LABELS[item.type] ?? item.type, item.duration ? durationTimecode(item.duration) : '', item.childCount ? `${item.childCount} ${folderType ?? 'item'}s` : ''].filter(Boolean).join(' · ');
+    return (
+      <div key={item.uuid} className={`bin-card ${pickedAt !== undefined ? 'picked' : ''}`} draggable={playable || !!folderType} onDragStart={(event) => dragStart(event, item)} onDragEnd={onDragEnd}>
+        <button className="bin-card-main" title={item.title} aria-label={`${folderType ? 'Open' : pickedAt !== undefined ? 'Unpick' : 'Pick'} ${label}`} aria-pressed={folderType ? undefined : pickedAt !== undefined}
+          onClick={() => (folderType ? listing.open(item) : playable ? void togglePick(item) : undefined)}>
+          <BinArt item={item} live={live} wide={wide} />
+          {pickedAt !== undefined && <em className="bin-check" aria-hidden="true">{pickedAt + 1}</em>}
+          <b>{label}</b>
+          <small>{meta}</small>
+        </button>
+        {folderType && <button className="bin-add" disabled={adding === item.uuid} aria-label={`${pickedAt !== undefined ? 'Unpick' : 'Pick'} all of ${label}`} onClick={() => void togglePick(item)}>{adding === item.uuid ? '…' : pickedAt !== undefined ? '✓ All' : '+ All'}</button>}
+      </div>
+    );
   };
 
   const spots: Array<[Spot, string, boolean]> = [
@@ -314,6 +355,7 @@ export function ProgramBin({ live, anchorLabel, emptyLineup, date, time: initial
         {complete && <select aria-label="Order" value={order} onChange={(event) => listing.setSort(event.target.value as LibrarySort)}>
           {(Object.keys(LIBRARY_SORT_LABELS) as LibrarySort[]).map((value) => <option key={value} value={value}>{LIBRARY_SORT_LABELS[value]}</option>)}
         </select>}
+        {looseVideos && <button aria-pressed={byArtist} className={byArtist ? 'primary' : ''} onClick={() => setByArtist((current) => !current)}>Group by artist</button>}
         {(folder || shown.some(isPlayable)) && <button disabled={!!adding} onClick={() => void pickAllHere()}>{folder ? (pickedKeys.has(folder.uuid) ? `Unpick all of ${itemLabel(folder)}` : `Pick all of ${itemLabel(folder)}`) : 'Pick all shown'}</button>}
       </nav>
 
@@ -321,32 +363,26 @@ export function ProgramBin({ live, anchorLabel, emptyLineup, date, time: initial
       <div ref={gridRef} className={`bin-grid ${wide ? 'wide' : ''}`} aria-busy={loading} onKeyDown={gridKeys}>
         {error && <div className="warning" role="alert"><b>Library unavailable</b><span>{error}</span></div>}
         {!loading && !error && !shown.length && <p className="subtle candidate-empty">{query ? `Nothing matches “${query}”.` : 'Nothing here.'}</p>}
-        {shown.map((item) => {
-          const folderType = childType(item.type);
-          const playable = isPlayable(item);
-          const pickedAt = pickedKeys.get(item.uuid);
-          const label = itemLabel(item);
-          const meta = [TYPE_LABELS[item.type] ?? item.type, item.duration ? durationTimecode(item.duration) : '', item.childCount ? `${item.childCount} ${folderType ?? 'item'}s` : ''].filter(Boolean).join(' · ');
+        {groups ? groups.map((group) => {
+          const key = `artist:${group.key}`;
+          const label = group.artist || 'No artist in the file name';
           return (
-            <div key={item.uuid} className={`bin-card ${pickedAt !== undefined ? 'picked' : ''}`} draggable={playable || !!folderType} onDragStart={(event) => dragStart(event, item)} onDragEnd={onDragEnd}>
-              <button className="bin-card-main" aria-label={`${folderType ? 'Open' : pickedAt !== undefined ? 'Unpick' : 'Pick'} ${label}`} aria-pressed={folderType ? undefined : pickedAt !== undefined}
-                onClick={() => (folderType ? listing.open(item) : playable ? void togglePick(item) : undefined)}>
-                <BinArt item={item} live={live} wide={wide} />
-                {pickedAt !== undefined && <em className="bin-check" aria-hidden="true">{pickedAt + 1}</em>}
-                <b>{label}</b>
-                <small>{meta}</small>
-              </button>
-              {folderType && <button className="bin-add" disabled={adding === item.uuid} aria-label={`${pickedAt !== undefined ? 'Unpick' : 'Pick'} all of ${label}`} onClick={() => void togglePick(item)}>{adding === item.uuid ? '…' : pickedAt !== undefined ? '✓ All' : '+ All'}</button>}
-            </div>
+            <section key={key} className="bin-group" aria-label={label}>
+              <div className="bin-group-head">
+                <b>{label}</b><small>{group.items.length} {group.items.length === 1 ? 'video' : 'videos'}</small>
+                <button className="bin-add" aria-label={`${pickedKeys.has(key) ? 'Unpick' : 'Pick'} all of ${label}`} onClick={() => toggleGroup(group)}>{pickedKeys.has(key) ? '✓ All' : '+ All'}</button>
+              </div>
+              {group.items.map((item) => card(item, !group.artist))}
+            </section>
           );
-        })}
+        }) : shown.map((item) => card(item, true))}
         {listing.canLoadMore && <button className="wide bin-more" disabled={loading} onClick={listing.loadMore}>{loading ? 'Loading…' : 'Load more'}</button>}
       </div>
 
       <section className="bin-tray" aria-label="Picked programs">
         <div className="bin-tray-head">
           <span draggable={pickedPrograms.length > 0} onDragStart={(event) => dragStart(event)} onDragEnd={onDragEnd} className={`bin-grip ${pickedPrograms.length ? '' : 'empty'}`} title="Drag onto the schedule">
-            {pickedPrograms.length ? <><span aria-hidden="true">⠿ </span><b>{pickedPrograms.length.toLocaleString('en')}</b> picked · {durationTimecode(length)}{repeat > 1 ? ` with ${repeat} passes` : ''}</> : 'Pick programs above: OK on a program, + All (or Space) on a show.'}
+            {pickedPrograms.length ? <><span aria-hidden="true">⠿ </span><b>{pickedPrograms.length.toLocaleString('en')}</b> picked · {durationTimecode(length)}{fill ? ` filling ${fillMinutes} min (${arranged.programs.length.toLocaleString('en')} airings)` : repeat > 1 ? ` with ${repeat} passes` : ''}</> : 'Pick programs above: OK on a program, + All (or Space) on a show or artist.'}
           </span>
           {picks.length > 0 && <button className="quiet" onClick={() => setPicks([])}>Clear</button>}
         </div>
@@ -360,9 +396,19 @@ export function ProgramBin({ live, anchorLabel, emptyLineup, date, time: initial
               {(Object.keys(BIN_ORDER_LABELS) as BinOrder[]).map((value) => <option key={value} value={value}>{BIN_ORDER_LABELS[value]}</option>)}
             </select>
           </label>
-          <label className="field"><span>Passes</span>
-            <input type="number" aria-label="Passes" min={1} max={MAX_BIN_REPEAT} step={1} value={repeat} onChange={(event) => setRepeat(Math.min(MAX_BIN_REPEAT, Math.max(1, Math.round(Number(event.target.value)) || 1)))} />
+          <label className="field"><span>Length</span>
+            <select aria-label="Length" value={lengthKind} onChange={(event) => setLengthKind(event.target.value as 'passes' | 'fill')}>
+              <option value="passes">A number of passes</option>
+              <option value="fill">Fill a length</option>
+            </select>
           </label>
+          {lengthKind === 'passes'
+            ? <label className="field"><span>Passes</span>
+              <input type="number" aria-label="Passes" min={1} max={MAX_BIN_REPEAT} step={1} value={repeat} onChange={(event) => setRepeat(Math.min(MAX_BIN_REPEAT, Math.max(1, Math.round(Number(event.target.value)) || 1)))} />
+            </label>
+            : <label className="field"><span>Fill (minutes)</span>
+              <input type="number" aria-label="Fill minutes" min={1} max={MAX_BIN_FILL / MINUTE} step={5} value={fillMinutes} onChange={(event) => setFillMinutes(Math.min(MAX_BIN_FILL / MINUTE, Math.max(1, Math.round(Number(event.target.value)) || 60)))} />
+            </label>}
           <label className="field"><span>After each program</span>
             <select aria-label="After each program" value={afterKind} onChange={(event) => setAfterKind(event.target.value as AfterKind)}>
               <option value="none">Nothing</option>
@@ -372,6 +418,9 @@ export function ProgramBin({ live, anchorLabel, emptyLineup, date, time: initial
           </label>
           {afterKind !== 'none' && <label className="field"><span>Length (minutes)</span>
             <input type="number" aria-label="Length after each program in minutes" min={0.25} max={60} step={0.25} value={afterLength / MINUTE} onChange={(event) => setAfterLength(Math.max(0, Number(event.target.value)) * MINUTE)} />
+          </label>}
+          {afterKind !== 'none' && <label className="field"><span>Every (programs)</span>
+            <input type="number" aria-label="After every so many programs" min={1} max={MAX_BIN_EVERY} step={1} value={every} onChange={(event) => setEvery(Math.min(MAX_BIN_EVERY, Math.max(1, Math.round(Number(event.target.value)) || 1)))} />
           </label>}
         </div>
         {afterKind === 'break' && listIds.length > 0 && <p className="subtle bin-note">Filled from {commercialLists.map((list) => list.name).join(', ')}.

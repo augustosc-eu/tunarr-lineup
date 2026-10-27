@@ -616,6 +616,43 @@ test('picks up uploaded station IDs and added folders as filler lists by itself'
   await expect(dialog.getByRole('status')).toContainText('(3 videos)');
 });
 
+test('keeps a custom show of an uploaded music-video folder and groups it by artist in the bin', async ({ page }) => {
+  const folder = `Hits ${Date.now()}`;
+  const show = `Music videos – ${folder}`;
+  const upload = (name: string) => ({ name, mimeType: 'video/mp4', buffer: Buffer.from('not really a video') });
+  await page.getByRole('menuitem', { name: 'Setup' }).click();
+  await page.getByRole('menuitem', { name: /Local Videos/ }).click();
+  const dialog = page.getByRole('dialog', { name: 'Local videos' });
+  await dialog.getByLabel('New folder holds').selectOption('music-videos');
+  await dialog.getByLabel('New folder name').fill(folder);
+  await dialog.getByRole('button', { name: 'Make folder' }).click();
+  const row = dialog.locator('.source-block', { hasText: folder });
+  await expect(row).toContainText('Lineup media folder · 0 videos');
+  await row.getByLabel(`Upload to ${folder}`).setInputFiles([upload('Zed - Two.mp4'), upload('Abba - SOS (Official Video).mp4')]);
+  // Tunarr's scan reaches the pickup, which makes the show in artist order without a click.
+  await expect(row).toContainText(`→ “${show}” (2 videos)`);
+  let made = (await (await page.request.get(`${FAKE}/__test/state`)).json()).customShows.find((item: { name: string }) => item.name === show);
+  expect(made.programs).toHaveLength(2);
+  await row.getByLabel(`Upload to ${folder}`).setInputFiles([upload('Abba - Waterloo.mp4')]);
+  await expect(row).toContainText(`→ “${show}” (3 videos)`);
+  made = (await (await page.request.get(`${FAKE}/__test/state`)).json()).customShows.find((item: { name: string }) => item.name === show);
+  expect(made.programs).toHaveLength(3);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0);
+  await dialog.getByRole('button', { name: 'Done' }).click();
+
+  // The program bin reads artists from the file names.
+  await page.keyboard.press('a');
+  const bin = page.getByRole('complementary', { name: 'Program bin' });
+  await bin.getByLabel('Media source').selectOption({ label: show });
+  await expect(bin.getByRole('button', { name: 'Pick Abba – SOS' })).toBeVisible();
+  await bin.getByRole('button', { name: 'Group by artist' }).click();
+  const abba = bin.getByRole('region', { name: 'Abba' });
+  await expect(abba).toContainText('2 videos');
+  await abba.getByRole('button', { name: 'Pick all of Abba' }).click();
+  await expect(bin.locator('.bin-picks')).toContainText('Abba · 2 programs');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0);
+});
+
 test('picks posters in the program bin and places them with flex after each, at the end of the lineup', async ({ page }) => {
   await page.keyboard.press('a');
   const bin = page.getByRole('complementary', { name: 'Program bin' });

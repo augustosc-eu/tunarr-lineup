@@ -24,6 +24,8 @@ import type { ProgrammingPackage } from '../server/programmingPackage';
 import type { CalendarEntry, LibraryEntry, LibrarySummary } from '../server/calendarStore';
 import type { CalendarCheck } from '../server/calendarArm';
 import type { Occurrence } from '../server/calendar';
+import type { LocalVideoFolderView, LocalVideoSync } from '../server/localVideos';
+import type { VideoKind } from '../server/videoTitles';
 
 export type ScheduleDraft = { type: SlotSchedule['type']; settings?: Record<string, unknown>; slots: Slot[]; extraPrograms?: string[] };
 export type AiStatus = { enabled: true; provider: string; model: string } | { enabled: false; message: string };
@@ -32,6 +34,9 @@ export type MediaFile = { name: string; size: number; modifiedAt: number };
 /** A role folder in the media folder, and its library in Tunarr once added. */
 export type MediaRoleFolder = { role: FillerRole; folder: string; files: MediaFile[]; tunarr: { mediaSourceId: string; libraryId: string; lastScannedAt?: number; scanning: boolean } | null };
 export type MediaFolderStatus = { enabled: true; maxBytes: number; folders: MediaRoleFolder[]; tunarrError?: string } | { enabled: false; message: string };
+/** Local Videos (server/localVideos.ts): the media folder's music-video and video folders, and the Tunarr server's own. */
+export type LocalVideosStatus = { media: { enabled: true; maxBytes: number } | { enabled: false; message: string }; folders: LocalVideoFolderView[]; tunarrError?: string };
+export type { LocalVideoFolderView, LocalVideoSync };
 export type FillerSync = { connected: boolean; created: Array<{ id: string; name: string; count: number; role: FillerRole }>; updated: Array<{ id: string; count: number }>; errors: string[]; skipped?: string[] };
 export type { ChangeSummary, ChannelDiagnostic, CompatibilityReport, ControlRoomSummary, ConfigView, Probe, Review, SettingsView, Snapshot, SnapshotSummary, StationIdPicks };
 export type ScheduledList = { enabled: boolean; message?: string; changes: ChangeSummary[] };
@@ -178,12 +183,23 @@ async function readJson(response: Response): Promise<unknown> {
 }
 
 const mediaPath = (role: FillerRole, name: string) => `/api/tunarr/media-folder/${encodeURIComponent(role)}/${encodeURIComponent(name)}`;
+/** A music video or video in one of the media folder's named folders (uploads, deletes, previews). */
+export const localVideoUrl = (kind: VideoKind, folder: string, name: string) => `/api/tunarr/local-videos/files/${encodeURIComponent(kind)}/${encodeURIComponent(folder)}/${encodeURIComponent(name)}`;
 
 /** Uploads one video into a role folder. XHR, because fetch can't report upload progress. */
 export function uploadMediaFile(role: FillerRole, file: File, onProgress?: (fraction: number) => void): Promise<MediaFile> {
+  return uploadTo(mediaPath(role, file.name), file, onProgress);
+}
+
+/** Uploads one video into a music-video or video folder. */
+export function uploadLocalVideo(kind: VideoKind, folder: string, file: File, onProgress?: (fraction: number) => void): Promise<MediaFile> {
+  return uploadTo(localVideoUrl(kind, folder, file.name), file, onProgress);
+}
+
+function uploadTo(path: string, file: File, onProgress?: (fraction: number) => void): Promise<MediaFile> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    xhr.open('PUT', mediaPath(role, file.name));
+    xhr.open('PUT', path);
     xhr.setRequestHeader('content-type', 'application/octet-stream');
     xhr.setRequestHeader('accept', 'application/json');
     xhr.upload.onprogress = (event) => { if (event.lengthComputable) onProgress?.(event.loaded / event.total); };
@@ -332,6 +348,14 @@ export const tunarrApi = {
   mediaFolder: () => request<MediaFolderStatus>('/api/tunarr/media-folder'),
   /** Adds the upload folder to Tunarr and refreshes or makes folder-built filler lists (server/lineupRoutes.ts). */
   syncFillerFolders: () => request<FillerSync>('/api/tunarr/filler-folders/sync', jsonBody('POST', {})),
+  localVideos: () => request<LocalVideosStatus>('/api/tunarr/local-videos'),
+  /** Adds new media-folder folders to Tunarr and makes or refreshes the custom shows that follow folders. */
+  syncLocalVideos: () => request<LocalVideoSync>('/api/tunarr/local-videos/sync', jsonBody('POST', {})),
+  makeVideoFolder: (kind: VideoKind, name: string, follow: boolean) => request<{ kind: VideoKind; folder: string; tunarrError?: string }>('/api/tunarr/local-videos/folders', jsonBody('POST', { kind, name, follow })),
+  addVideoFolder: (kind: VideoKind, path: string, follow: boolean) => request<{ mediaSourceId: string; libraryId: string; name: string; existing: boolean }>('/api/tunarr/local-videos/add', jsonBody('POST', { kind, path, follow })),
+  setVideoLibrary: (libraryId: string, change: { kind?: VideoKind | null; follow?: boolean }) =>
+    request<{ kind: VideoKind; pending: boolean; show?: { id: string; count: number; storeError?: string } }>(`/api/tunarr/local-videos/libraries/${encodeURIComponent(libraryId)}`, jsonBody('PUT', change)),
+  deleteLocalVideo: (kind: VideoKind, folder: string, name: string) => request<unknown>(localVideoUrl(kind, folder, name), { method: 'DELETE' }),
   moveMediaFile: (role: FillerRole, name: string, to: FillerRole) => request<unknown>(`${mediaPath(role, name)}/move`, jsonBody('POST', { role: to })),
   deleteMediaFile: (role: FillerRole, name: string) => request<unknown>(mediaPath(role, name), { method: 'DELETE' }),
   setFillerRole: (listId: string, role: FillerRole | null) => request<FillerRoles>(`/api/tunarr/filler-roles/${encodeURIComponent(listId)}`, role ? jsonBody('PUT', { role }) : { method: 'DELETE' }),

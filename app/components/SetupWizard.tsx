@@ -148,7 +148,7 @@ export function MediaFieldsEditor({ value, onChange }: { value: MediaDraft; onCh
       {value.dir.trim() && <label className="field"><span>The same folder as Tunarr sees it (empty: the same path)</span>
         <input aria-label="Media folder as Tunarr sees it" value={value.tunarrDir} placeholder="/media/lineup" spellCheck={false} onChange={(event) => onChange({ ...value, tunarrDir: event.target.value })} />
       </label>}
-      <p className="subtle">Station IDs, commercials and promos uploaded from Setup → Filler Folders go here. The folder must already exist.</p>
+      <p className="subtle">Station IDs, commercials and promos uploaded from Setup → Filler Folders, and music videos and other videos uploaded from Setup → Local Videos, go here. The folder must already exist.</p>
     </div>
   );
 }

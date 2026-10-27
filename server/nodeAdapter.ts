@@ -7,6 +7,7 @@ import { matchLineupRoute } from './lineupRoutes.js';
 import { setupRequired } from './setup.js';
 import type { FillerRole } from './fillerRoles.js';
 import type { MediaFolder } from './mediaFolder.js';
+import type { VideoKind } from './videoTitles.js';
 import { API_PREFIX, handleTunarrApi, isCrossOrigin, type ProxyConfig, type ProxyResponse } from './tunarrProxy.js';
 import { fail, json } from './upstream.js';
 
@@ -55,11 +56,23 @@ async function sendCompressed(req: IncomingMessage, res: ServerResponse, config:
 }
 
 const MEDIA_PREFIX = `${API_PREFIX}/media-folder/`;
+const LOCAL_FILES_PREFIX = `${API_PREFIX}/local-videos/files/`;
 const UPLOAD_TYPE = /^(application\/octet-stream|video\/[a-z0-9.+-]+)$/i;
+/** A media-folder file: a filler clip in a role folder, or a program video in a named folder (D70). */
+const isMediaFile = (url: string) => url.startsWith(MEDIA_PREFIX) || url.startsWith(LOCAL_FILES_PREFIX);
 
-export type UploadPlan = { media: MediaFolder; role: FillerRole; file: string; length: number };
+/** Where a file goes: a filler role folder, or a music-video or video folder. */
+export type MediaPlace = { role: FillerRole } | { kind: VideoKind; folder: string };
+export type UploadPlan = { media: MediaFolder; file: string; length: number } & MediaPlace;
 
-/** Checks an upload (PUT /api/tunarr/media-folder/:role/:file) before any of its body is read. */
+/** The media-folder file a route names, or null for any other route. */
+function placeOf(route: ReturnType<typeof matchLineupRoute>): (MediaPlace & { file: string }) | null {
+  if (route && !('invalid' in route) && route.name === 'media-file') return { role: route.role, file: route.file };
+  if (route && !('invalid' in route) && route.name === 'local-video-file') return { kind: route.kind, folder: route.folder, file: route.file };
+  return null;
+}
+
+/** Checks an upload (PUT /api/tunarr/media-folder/:role/:file or /local-videos/files/:kind/:folder/:file) before any of its body is read. */
 export function planUpload(url: string, headers: IncomingMessage['headers'], config: ProxyConfig): UploadPlan | ProxyResponse {
   const media = config.mediaFolder;
   if (!media || 'off' in media) return fail(503, 'media_folder_off', media && 'off' in media ? media.off : 'The media folder is off. Choose one under Setup → Server Settings to upload files.');
@@ -68,7 +81,8 @@ export function planUpload(url: string, headers: IncomingMessage['headers'], con
   if (query !== undefined) return fail(400, 'invalid_query', 'This route does not accept query parameters.');
   const route = matchLineupRoute(pathname.slice(API_PREFIX.length));
   if (route && 'invalid' in route) return fail(400, 'invalid_parameter', route.invalid);
-  if (!route || route.name !== 'media-file') return fail(405, 'method_not_allowed', 'PUT is not allowed on this route.');
+  const place = placeOf(route);
+  if (!place) return fail(405, 'method_not_allowed', 'PUT is not allowed on this route.');
   const type = (headers['content-type'] ?? '').split(';')[0].trim();
   if (!UPLOAD_TYPE.test(type)) return fail(415, 'unsupported_media_type', 'Send the video file itself (application/octet-stream or video/*).');
   const raw = headers['content-length'];
@@ -76,7 +90,7 @@ export function planUpload(url: string, headers: IncomingMessage['headers'], con
   const length = Number(raw);
   if (length < 1) return fail(400, 'invalid_request', 'The file is empty.');
   if (length > media.maxBytes) return fail(413, 'file_too_large', `Files can be up to ${Math.round(media.maxBytes / 1024 / 1024)} MB (LINEUP_MEDIA_MAX_MB).`);
-  return { media, role: route.role, file: route.file, length };
+  return { media, ...place, length };
 }
 
 /** Streams one upload into the media folder. Refusals close the connection so an unread body isn't waited for. */
@@ -85,8 +99,8 @@ async function handleUpload(req: IncomingMessage, res: ServerResponse, config: P
   const plan = planUpload(req.url ?? '/', req.headers, config);
   if (!('media' in plan)) return reply(plan, true);
   try {
-    const saved = await plan.media.save(plan.role, plan.file, req, plan.length);
-    reply(json(201, { role: plan.role, ...saved }), false);
+    const saved = 'role' in plan ? await plan.media.save(plan.role, plan.file, req, plan.length) : await plan.media.programs.save(plan.kind, plan.folder, plan.file, req, plan.length);
+    reply(json(201, { ...('role' in plan ? { role: plan.role } : { kind: plan.kind, folder: plan.folder }), ...saved }), false);
   } catch (error) {
     // A stream error has already closed the socket; there is no one left to answer.
     if (res.destroyed) return;
@@ -119,7 +133,8 @@ export function parseRange(header: string | undefined, size: number): { start: n
 }
 
 /**
- * Plays back a video from the media folder (GET /api/tunarr/media-folder/:role/:file),
+ * Plays back a video from the media folder (GET /api/tunarr/media-folder/:role/:file
+ * or /local-videos/files/:kind/:folder/:file),
  * so a filler clip can be watched before it's tagged. Streamed with byte ranges
  * for seeking; only files that pass `mediaFileName` in a role folder.
  */
@@ -132,10 +147,11 @@ async function handlePlayback(req: IncomingMessage, res: ServerResponse, config:
   if (query !== undefined) return reply(fail(400, 'invalid_query', 'This route does not accept query parameters.'));
   const route = matchLineupRoute(pathname.slice(API_PREFIX.length));
   if (route && 'invalid' in route) return reply(fail(400, 'invalid_parameter', route.invalid));
-  if (!route || route.name !== 'media-file') return reply(fail(405, 'method_not_allowed', 'Only files can be played.'));
+  const place = placeOf(route);
+  if (!place) return reply(fail(405, 'method_not_allowed', 'Only files can be played.'));
   let file: { path: string; size: number };
   try {
-    file = await media.open(route.role, route.file);
+    file = 'role' in place ? await media.open(place.role, place.file) : await media.programs.open(place.kind, place.folder, place.file);
   } catch (error) {
     return reply(error instanceof StoreError ? fail(error.status, error.code, error.message) : fail(500, 'internal_error', 'The file could not be read.'));
   }
@@ -169,14 +185,14 @@ async function handlePlayback(req: IncomingMessage, res: ServerResponse, config:
 export async function handleNodeApiRequest(req: IncomingMessage, res: ServerResponse, config: ProxyConfig) {
   const method = req.method ?? 'GET';
   // Uploads and playback skip the proxy below, so the setup gate is repeated here.
-  if (config.setup?.needed() && (req.url ?? '').startsWith(MEDIA_PREFIX)) {
+  if (config.setup?.needed() && isMediaFile(req.url ?? '')) {
     const result = setupRequired(false);
     send(res, result.status, result.headers, result.body);
     return;
   }
-  if (method === 'PUT' && (req.url ?? '').startsWith(MEDIA_PREFIX)) return handleUpload(req, res, config);
+  if (method === 'PUT' && isMediaFile(req.url ?? '')) return handleUpload(req, res, config);
   // Playing a media-folder file back; /move and the folder listing go to the proxy as usual.
-  if ((method === 'GET' || method === 'HEAD') && (req.url ?? '').startsWith(MEDIA_PREFIX) && !(req.url ?? '').split('?')[0].endsWith('/move')) return handlePlayback(req, res, config);
+  if ((method === 'GET' || method === 'HEAD') && isMediaFile(req.url ?? '') && !(req.url ?? '').split('?')[0].endsWith('/move')) return handlePlayback(req, res, config);
   let body: string | undefined;
   if (method === 'POST' || method === 'PUT') {
     const raw = await readBody(req, MAX_BODY_BYTES);

@@ -3,30 +3,41 @@
 import { makeBreakWithId, makeCommercialBreak, makeFlex } from './broadcast';
 import { exactBoundary, passesBefore, type InsertWhere } from './events';
 import type { ContentProgram } from './library';
+import { spreadArtists } from './localVideos';
 import type { LineupItem } from './lineup';
 
 /** Where placed programs go: the Insert dialog's places, the end of the lineup, or a lineup position (a drop on a row, near that row's airing). */
 export type PlaceWhere = InsertWhere | 'end' | { index: number; near: number };
 
-export type BinOrder = 'picked' | 'episode' | 'shuffle' | 'mix';
+export type BinOrder = 'picked' | 'episode' | 'shuffle' | 'mix' | 'spread';
 
 export const BIN_ORDER_LABELS: Record<BinOrder, string> = {
   picked: 'As picked',
   episode: 'Episode order',
   shuffle: 'Shuffle',
   mix: 'Shuffle shows, episodes in order',
+  spread: 'Shuffle, artists apart',
 };
 
-/** What airs after each program: nothing, open airtime, or a commercial break (optionally opened by a station ID). */
+/**
+ * What airs after programs: nothing, open airtime, or a commercial break
+ * (optionally opened by a station ID), after each one or after every `every`
+ * (a music-video block breaks every few videos).
+ */
 export type BinAfter =
   | { kind: 'none' }
-  | { kind: 'flex'; duration: number }
-  | { kind: 'break'; duration: number; fillerListIds: string[]; stationIds?: Array<{ id: string; duration: number }> };
+  | { kind: 'flex'; duration: number; every?: number }
+  | { kind: 'break'; duration: number; fillerListIds: string[]; stationIds?: Array<{ id: string; duration: number }>; every?: number };
 
-export type BinOptions = { order: BinOrder; repeat: number; after: BinAfter };
+/** `fill`: instead of a number of passes, as many passes as it takes to fill that long (ms), stopping once it's full. */
+export type BinOptions = { order: BinOrder; repeat: number; after: BinAfter; fill?: number };
 
 export const DEFAULT_BIN_OPTIONS: BinOptions = { order: 'picked', repeat: 1, after: { kind: 'none' } };
 export const MAX_BIN_REPEAT = 20;
+export const MAX_BIN_EVERY = 50;
+/** Filling a length stops here (a day), however short the programs. */
+export const MAX_BIN_FILL = 24 * 3_600_000;
+const MAX_FILL_PROGRAMS = 5000;
 
 /** `units`: each program with what airs after it, the pieces time slots are filled with. */
 export type Arranged = { items: LineupItem[]; meta: Record<string, ContentProgram>; programs: ContentProgram[]; units: LineupItem[][] };
@@ -102,29 +113,40 @@ export function mixedInOrder(programs: ContentProgram[], random: () => number = 
 /**
  * Lineup items for the picked programs. Zero-length programs are left out.
  * Each repeat is a new pass in the chosen order (a shuffle is reshuffled), and
- * station IDs rotate from one break to the next.
+ * station IDs rotate from one break to the next. Filling a length takes
+ * passes until it's full; the last program may run past it, so nothing is cut.
  */
 export function arrangePrograms(picked: ContentProgram[], options: BinOptions, random: () => number = Math.random): Arranged {
   const playable = picked.filter((program) => program.duration > 0);
-  const repeat = Math.min(MAX_BIN_REPEAT, Math.max(1, Math.round(options.repeat) || 1));
-  const programs: ContentProgram[] = [];
-  for (let pass = 0; pass < repeat; pass += 1) {
-    programs.push(...(options.order === 'episode' ? episodeOrder(playable) : options.order === 'shuffle' ? shuffled(playable, random) : options.order === 'mix' ? mixedInOrder(playable, random) : playable));
-  }
-  const units: LineupItem[][] = [];
-  const meta: Record<string, ContentProgram> = {};
+  const fill = options.fill && options.fill > 0 ? Math.min(MAX_BIN_FILL, options.fill) : 0;
+  const repeat = fill ? Infinity : Math.min(MAX_BIN_REPEAT, Math.max(1, Math.round(options.repeat) || 1));
+  const pass = () => (options.order === 'episode' ? episodeOrder(playable) : options.order === 'shuffle' ? shuffled(playable, random) : options.order === 'mix' ? mixedInOrder(playable, random) : options.order === 'spread' ? spreadArtists(playable, random, undefined, programs) : playable);
   const after = options.after;
+  const every = after.kind === 'none' ? 1 : Math.min(MAX_BIN_EVERY, Math.max(1, Math.round(after.every ?? 1) || 1));
   const ids = after.kind === 'break' ? (after.stationIds ?? []).filter((id) => id.duration > 0 && id.duration < after.duration) : [];
+  const units: LineupItem[][] = [];
+  const programs: ContentProgram[] = [];
+  const meta: Record<string, ContentProgram> = {};
   let nextId = 0;
-  for (const program of programs) {
-    const unit: LineupItem[] = [{ type: 'content', id: program.id, duration: program.duration }];
-    meta[program.id] = program;
-    if (after.kind === 'flex' && after.duration >= 1000) unit.push(makeFlex(after.duration));
-    if (after.kind === 'break' && after.duration >= 1000 && after.fillerListIds.length) {
-      const id = ids.length ? ids[nextId++ % ids.length] : undefined;
-      unit.push(...(id ? makeBreakWithId(after.duration, after.fillerListIds, id) : [makeCommercialBreak(after.duration, after.fillerListIds)]));
+  let total = 0;
+  for (let round = 0; round < repeat && playable.length && (!fill || total < fill); round += 1) {
+    for (const program of pass()) {
+      if (fill && (total >= fill || programs.length >= MAX_FILL_PROGRAMS)) break;
+      const unit: LineupItem[] = [{ type: 'content', id: program.id, duration: program.duration }];
+      meta[program.id] = program;
+      programs.push(program);
+      // After every `every` programs: the 4th, 8th… of the whole run, so passes don't reset the count.
+      if (programs.length % every === 0) {
+        if (after.kind === 'flex' && after.duration >= 1000) unit.push(makeFlex(after.duration));
+        if (after.kind === 'break' && after.duration >= 1000 && after.fillerListIds.length) {
+          const id = ids.length ? ids[nextId++ % ids.length] : undefined;
+          unit.push(...(id ? makeBreakWithId(after.duration, after.fillerListIds, id) : [makeCommercialBreak(after.duration, after.fillerListIds)]));
+        }
+      }
+      total += unit.reduce((sum, item) => sum + item.duration, 0);
+      units.push(unit);
     }
-    units.push(unit);
+    if (fill && programs.length >= MAX_FILL_PROGRAMS) break;
   }
   return { items: units.flat(), meta, programs, units };
 }

@@ -688,6 +688,7 @@ input[type=checkbox] { width:1.25rem; height:1.25rem; margin:0; accent-color:var
 .lists-modal:before { content:'Lists'; }
 .sources-modal:before { content:'Media Sources'; }
 .folders-modal:before { content:'Filler Folders'; }
+.local-videos-modal:before { content:'Local Videos'; }
 .folders-list { max-height:40vh; margin-bottom:0.5rem; }
 .media-setup { margin-bottom:0.75rem; }
 .media-setup-copy { display:flex; flex-wrap:wrap; align-items:center; gap:0.75rem; margin:0; }
@@ -1152,6 +1153,12 @@ input[type=checkbox] { width:1.25rem; height:1.25rem; margin:0; accent-color:var
 .bin-art img { width:100%; height:100%; display:block; object-fit:cover; }
 .bin-check { position:absolute; top:0.5rem; right:0.5rem; min-width:1.75rem; height:1.75rem; padding:0 0.25rem; display:grid; place-items:center; color:var(--text); background:var(--warn-bg); border:1px solid var(--line-strong); font-style:normal; font-weight:700; font-size:0.875rem; text-shadow:none; }
 .bin-add { min-height:1.875rem; font-size:0.8125rem; }
+/* Music videos grouped by artist: each heading spans the grid, its cards flow on below it. */
+.bin-group { display:contents; }
+.bin-group-head { grid-column:1 / -1; display:flex; align-items:center; gap:0.5rem; padding:0.25rem 0 0.125rem; border-bottom:1px solid var(--line); }
+.bin-group-head b { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:1rem; }
+.bin-group-head small { color:var(--text-2); font-size:0.8125rem; }
+.bin-group-head .bin-add { margin-left:auto; }
 .bin-tray { min-height:0; overflow-y:auto; overscroll-behavior:contain; padding:0.5rem; background:var(--chrome-3); border:1px solid var(--line-2); box-shadow:inset 1px 1px var(--bevel-hi); }
 .bin-tray-head { display:flex; align-items:center; gap:0.5rem; }
 .bin-grip { flex:1; min-width:0; padding:0.3125rem 0.5rem; background:var(--surface); border:1px dashed var(--line-strong-3); cursor:grab; font-size:0.9375rem; }

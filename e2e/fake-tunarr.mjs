@@ -334,6 +334,17 @@ http.createServer(async (req, res) => {
     return send(res, 201, { id });
   }
   if (path === '/api/custom-shows') return send(res, 200, state.customShows.map(({ id, name, programs }) => ({ id, name, contentCount: programs.length })));
+  const customShow = /^\/api\/custom-shows\/([^/]+)$/.exec(path);
+  if (customShow && (req.method === 'GET' || req.method === 'PUT')) {
+    const show = state.customShows.find((item) => item.id === customShow[1]);
+    if (!show) return send(res, 404, { message: 'Custom show not found' });
+    if (req.method === 'PUT') {
+      const body = JSON.parse(await readBody(req));
+      if (body.name) show.name = body.name;
+      if (Array.isArray(body.programs)) show.programs = body.programs.map(({ id: programId, duration }) => ({ id: programId, duration }));
+    }
+    return send(res, 200, { id: show.id, name: show.name, contentCount: show.programs.length });
+  }
   if (path === '/api/filler-lists' && req.method === 'GET') return send(res, 200, state.fillerLists.map(({ id, name, programs }) => ({ id, name, contentCount: programs.length })));
   if (path === '/api/filler-lists' && req.method === 'POST') {
     const body = JSON.parse(await readBody(req));

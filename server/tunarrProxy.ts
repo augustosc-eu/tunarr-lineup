@@ -4,6 +4,7 @@ import { handleAdminRoute, matchAdminRoute, type AdminRoute } from './admin.js';
 import { createAiConfig, type AiConfig } from './ai.js';
 import { handleLineupRoute, matchLineupRoute, type LineupRoute } from './lineupRoutes.js';
 import { createFillerRoleStore, type FillerRoleStore } from './fillerRoleStore.js';
+import { createLocalVideoStore, type LocalVideoStore } from './localVideoStore.js';
 import { createMediaFolder, type MediaFolder } from './mediaFolder.js';
 import { createTemplateStore, type TemplateStore } from './templateStore.js';
 import { createScheduler, type Scheduler } from './scheduler.js';
@@ -63,8 +64,10 @@ export type ProxyConfig = {
   templates?: TemplateStore;
   /** What each filler list is for (LINEUP_DATA_DIR/filler-roles.json). */
   fillerRoles?: FillerRoleStore;
-  /** Video files for filler lists (LINEUP_MEDIA_DIR), or why it is off. Unset: off. */
+  /** Video files for filler lists and local programs (LINEUP_MEDIA_DIR), or why it is off. Unset: off. */
   mediaFolder?: MediaFolder | { off: string };
+  /** Local-video folders: kinds, followed custom shows (LINEUP_DATA_DIR/local-videos.json, D70). */
+  localVideos?: LocalVideoStore;
   /** AI programming assistant (LINEUP_AI_*), or why it is off. */
   ai?: AiConfig | { off: string };
   /** Programming kept before every save (LINEUP_DATA_DIR/snapshots). */
@@ -176,6 +179,7 @@ export function createProxyConfig(env: Record<string, string | undefined>): Prox
     templates: createTemplateStore(dataDir),
     fillerRoles: createFillerRoleStore(dataDir),
     mediaFolder: createMediaFolder(env),
+    localVideos: createLocalVideoStore(dataDir),
     ai: createAiConfig(env),
     snapshots: createSnapshotStore(dataDir),
     drafts: createSharedDraftStore(dataDir),
@@ -364,7 +368,7 @@ async function handleContent(request: ProxyRequest, config: ProxyConfig, url: UR
   if (kind === 'setup') return await handleSetupRoute(route as SetupRoute, { config, method, body });
   const target = config.target;
   // Saved templates, filler roles, media files and the AI status are Lineup's own; everything else reads Tunarr.
-  const needsTunarr = kind !== 'lineup' || route.name === 'ai-template' || route.name === 'filler-sync' || route.name === 'filler-folder-add' || (route.name === 'snapshots' && method === 'POST');
+  const needsTunarr = kind !== 'lineup' || route.name === 'ai-template' || route.name === 'filler-sync' || route.name === 'filler-folder-add' || route.name === 'local-video-sync' || route.name === 'local-video-add' || route.name === 'local-video-library' || (route.name === 'snapshots' && method === 'POST');
   if (!target && needsTunarr) {
     const error = notConfigured(config);
     return fail(503, error.code, error.message);

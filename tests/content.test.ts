@@ -43,6 +43,9 @@ describe('library browsing', () => {
     expect(parse(response)).toEqual([{ id: SOURCE, name: 'Baga-Plex', type: 'plex', libraries: [{ id: UUID_A, name: 'Movies', mediaType: 'movies' }] }]);
     expect(text(response)).not.toMatch(/10\.0\.0\.5|owner|secret/);
     expect(sanitizeMediaSources('nope')).toEqual([]);
+    // A local folder's library is named after its path in Tunarr; only the folder's name is passed on.
+    expect(sanitizeMediaSources([{ id: SOURCE, name: 'Music videos – Hits', type: 'local', libraries: [{ id: UUID_A, name: '/srv/media/music-videos/Hits', mediaType: 'other_videos' }] }])[0].libraries)
+      .toEqual([{ id: UUID_A, name: 'Hits', mediaType: 'other_videos' }]);
   });
 
   it('builds Tunarr search requests from a small validated query', () => {
