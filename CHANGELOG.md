@@ -8,6 +8,8 @@ were renamed 2026.10.1 and 2026.10.2.
 
 ## [Unreleased]
 
+## [2026.10.23] - 2026-10-27
+
 ### Fixed
 
 - **Custom-show slots and play order:** Tunarr plays a custom show only in order, shuffled or as an ordered shuffle; asked to play one chronologically or alphabetically, its scheduler fails with HTTP 500 ("Tunarr didn’t accept this schedule"), although its API description lists those orders. A programming template whose role is chronological or alphabetical (the music templates' Countdown, News) now plays a custom show given that role in its own order, the slot editor no longer offers those orders for custom shows, and a schedule that still has one is refused with what to change before anything reaches Tunarr.
@@ -315,7 +317,8 @@ First public release.
   reaches Tunarr through a narrow allowlisted proxy. Optional HTTP Basic
   sign-in and host-name checks against DNS rebinding.
 
-[Unreleased]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.22...HEAD
+[Unreleased]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.23...HEAD
+[2026.10.23]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.22...v2026.10.23
 [2026.10.22]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.21...v2026.10.22
 [2026.10.21]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.20...v2026.10.21
 [2026.10.20]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.19...v2026.10.20
