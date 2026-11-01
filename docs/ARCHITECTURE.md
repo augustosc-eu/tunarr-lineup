@@ -1021,8 +1021,12 @@ Suggestions always include a playable type, and TV suggestions match `show_genre
 `exportLog` builds CSV with `toCsv`, which quotes values and prefixes cells
 that start with `= + - @` to neutralize spreadsheet formulas. It covers every
 row of the visible day (date, start, end, duration, type, title, detail,
-position) and downloads it via a `Blob` object URL. The filename gets an
-`-unsaved` suffix when the lineup is dirty.
+position) and downloads it via a `Blob` object URL. `exportProgrammingPdf`
+loads `lib/programLogPdf.ts` only when used; that module lays the same visible
+day out as a paginated A4 landscape station log and downloads the PDF through
+the same browser-only path. Canvas-rendered pages preserve the scripts used in
+program titles without adding a font or a server route. Both filenames get an
+`-unsaved` suffix when the lineup is dirty, and the PDF also labels the draft.
 
 ### Error propagation
 

@@ -711,3 +711,11 @@ on the `broadcast-programming` branch.
   - **No paths to the browser.** The folder view sends folder names, never library paths or Tunarr's library names (which are paths for local folders).
 - **Alternatives considered:** a `music_videos` Tunarr library per folder (Tunarr wants artist subfolders and would index loose files poorly); one local source for all program folders (adding a folder would mean editing the source, which Lineup's media-source routes don't do); smart collections per folder (they can't select by folder); a separate block generator (the planner and the bin already arrange and place, with previews).
 - **Consequence:** many small local sources in Tunarr (one per folder). Hand edits to a followed show are replaced at its next scan. Artists are only as good as the file names; files without "Artist - Title" group under "No artist in the file name" and are spaced as themselves.
+
+## D71. Programming PDF export is a browser-generated station log
+
+- **Status:** Explicit: the owner asked for a PDF export of the programming (2026-11-01). Evidenced: `lib/programLogPdf.ts`, the **File → Export Programming PDF…** action in `app/page.tsx`, `tests/page.test.tsx`, `e2e/desk.spec.ts`.
+- **Decision:** the visible day's programming downloads as a paginated A4 landscape station log. It carries the channel and date, entry count, scheduled airtime, save state, and the same time, kind, title, detail, duration and lineup-position fields as the day view. A dirty draft is marked inside the document and with `-unsaved` in the filename.
+- **Why in the browser:** live, demo and hosted-preview desks can all export the programming already on screen without a new companion route or access to Tunarr. `jspdf` is loaded only when the action is used. Pages are drawn through a browser canvas before being placed in the document so titles in scripts unsupported by PDF's built-in fonts remain intact.
+- **Not included:** week and month logs stay CSV exports, and the Android WebView continues to direct downloads to the browser as documented.
+- **Consequence:** the PDF is visually faithful and portable, but its rasterized program table is intended for reading and printing rather than selecting or searching its text.

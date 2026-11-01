@@ -226,7 +226,7 @@ Chromium with `npx playwright install chromium`. CI runs all of them
   `epg.ts` (the guide preview and its checks; Lineup never serves a guide, D69),
   `localVideos.ts` (music videos in the bin: artists, clean titles, grouping, `spreadArtists`),
   `lineupCheck.ts` (the lineup check), `weekLog.ts` (several days: week view, logs, AI
-  summary), `guideGrid.ts` (guide grid layout and focus), `skins.ts` (the skin catalog and its validator), `tvRemote.ts` (watching like a cable box: remote keys, tuning, retries), `loading.ts` (load phases, time limits, bounded waits), `rowWindow.ts` (which of a long day's rows are mounted), `lastChannel.ts` (`?channel=` and the last channel opened), and `programInfo.ts` for titles,
+  summary), `guideGrid.ts` (guide grid layout and focus), `skins.ts` (the skin catalog and its validator), `tvRemote.ts` (watching like a cable box: remote keys, tuning, retries), `loading.ts` (load phases, time limits, bounded waits), `rowWindow.ts` (which of a long day's rows are mounted), `lastChannel.ts` (`?channel=` and the last channel opened), `programLogPdf.ts` (the programming PDF, loaded only when exported), and `programInfo.ts` for titles,
   artwork and logo URLs.
 - **Put HTTP and validation logic in `server/`:** `tunarrProxy.ts` (framework-free),
   `content.ts`, `admin.ts`, `logos.ts`, `smartCollection.ts`, `templateSchema.ts`,

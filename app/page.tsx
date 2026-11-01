@@ -1610,6 +1610,38 @@ export default function Home() {
     downloadCsv(rows, `program-log-ch${activeChannel.number}-${selectedDate}${dirty ? '-unsaved' : ''}.csv`);
   };
 
+  const exportProgrammingPdf = async () => {
+    if (!activeChannel || !instances.length) return;
+    const { createProgramLogPdf } = await import('../lib/programLogPdf');
+    const blob = createProgramLogPdf({
+      channelNumber: activeChannel.number,
+      channelName: activeChannel.name,
+      date: selectedDate,
+      unsaved: dirty,
+      rows: instances.map((row) => {
+        const kind = kindOf(row);
+        return {
+          start: clockTimecode(row.start),
+          end: clockTimecode(row.stop),
+          duration: durationTimecode(row.stop - row.start),
+          type: kind === 'program' ? 'Program' : KIND_LABELS[kind].replace(/s$/, ''),
+          title: row.title ?? programTitle(row.item, viewPrograms),
+          detail: row.lineupIndex < 0 ? 'In Tunarr’s guide only' : programDetail(row.item, viewPrograms),
+          position: row.lineupIndex < 0 ? '' : String(row.lineupIndex + 1),
+        };
+      }),
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `programming-ch${activeChannel.number}-${selectedDate}${dirty ? '-unsaved' : ''}.pdf`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    notify(`Exported ${instances.length} programming entries as PDF`);
+  };
+
   /** Several days' logs (week view): projected from the lineup, typed the way the station log reads. */
   const exportDays = (days: DayRows[], label: string) => {
     if (!activeChannel) return;
@@ -2023,6 +2055,7 @@ export default function Home() {
       { label: 'Schedule Library & Calendar…', disabled: !live, onSelect: () => setLibraryOpen({ toSave: null }) },
       'separator',
       { label: 'Export Program Log…', disabled: !instances.length, onSelect: exportLog },
+      { label: 'Export Programming PDF…', disabled: !instances.length, onSelect: () => void exportProgrammingPdf() },
       { label: 'Export Week or Month Log…', disabled: !activeChannel || !lineup.length, onSelect: () => setView('week') },
       { label: 'Snapshots, Export and Import…', disabled: !activeChannel, onSelect: () => setView('snapshots') },
       { label: 'Export Programming Package…', disabled: !live || !channels.length, onSelect: () => openBatch('export') },

@@ -330,9 +330,11 @@ Each change goes in only if the channel is as it was when planned (for an event:
 ### 6. Export a program log
 
 **File → Export Program Log…** downloads the visible day as CSV: date,
-start, end, duration, type, title, detail and lineup position. If the lineup
-has unsaved changes, the filename says `-unsaved`. The week view exports a week
-or a month.
+start, end, duration, type, title, detail and lineup position. **File → Export
+Programming PDF…** downloads the same visible day as a paginated, printable
+station log with the channel, date, entry count and scheduled airtime. If the
+lineup has unsaved changes, both the filename and the PDF say so. The week view
+exports a week or a month as CSV.
 
 ### 7. Drive it with a remote or keyboard
 

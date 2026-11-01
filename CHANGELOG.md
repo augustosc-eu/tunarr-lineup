@@ -8,6 +8,10 @@ were renamed 2026.10.1 and 2026.10.2.
 
 ## [Unreleased]
 
+### Added
+
+- **Programming PDF** (File → Export Programming PDF…): the visible day as a paginated, printable A4 station log with the channel, date, number of entries and scheduled airtime, the same times, kinds, titles, details, lengths and lineup positions as the day view, and unsaved desk changes marked in the document and the file name. Titles in any script print as they appear on screen.
+
 ## [2026.10.23] - 2026-10-27
 
 ### Fixed

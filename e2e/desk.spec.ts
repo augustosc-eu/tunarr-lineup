@@ -97,6 +97,17 @@ test('exports the visible day as a program log', async ({ page }) => {
   expect(text).toContain('Alpha Hour');
 });
 
+test('exports the visible programming as a PDF', async ({ page }) => {
+  await page.getByRole('menuitem', { name: 'File' }).click();
+  const download = page.waitForEvent('download');
+  await page.getByRole('menuitem', { name: /Export Programming PDF/ }).click();
+  const file = await download;
+  expect(file.suggestedFilename()).toMatch(/^programming-ch5-\d{4}-\d{2}-\d{2}\.pdf$/);
+  const bytes = await (await file.createReadStream()).toArray().then((chunks) => Buffer.concat(chunks));
+  expect(bytes.subarray(0, 5).toString('ascii')).toBe('%PDF-');
+  expect(bytes.length).toBeGreaterThan(10_000);
+});
+
 test('keeps the connection status reachable at phone width', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByRole('button', { name: 'Tunarr connected' }).click();

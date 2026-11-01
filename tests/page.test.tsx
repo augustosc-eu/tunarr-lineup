@@ -706,6 +706,24 @@ describe('programming desk tools', () => {
     expect(csv).toContain('Channel Two');
   });
 
+  it('exports the visible programming as a PDF', async () => {
+    fakeCompanion();
+    let exported: Blob | undefined;
+    const canvas = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: (blob: Blob) => { exported = blob; return 'blob:programming'; } });
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: () => {} });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    render(<Home />);
+    await screen.findAllByText('Alpha Movie');
+    fireEvent.click(screen.getByRole('menuitem', { name: 'File' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /Export Programming PDF/ }));
+    await waitFor(() => expect(click).toHaveBeenCalledOnce());
+    expect(exported?.type).toBe('application/pdf');
+    expect((click.mock.instances[0] as HTMLAnchorElement).download).toMatch(/^programming-ch\d+-\d{4}-\d{2}-\d{2}\.pdf$/);
+    click.mockRestore();
+    canvas.mockRestore();
+  });
+
   it('asks before leaving demo edits to connect', async () => {
     fakeCompanion({ health: { status: 502, body: { status: 'unreachable', tunarrHost: 'tunarr:8000', error: { code: 'tunarr_unreachable', message: 'down' } } } });
     render(<Home />);

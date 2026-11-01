@@ -157,7 +157,7 @@ opens the wizard with Tunarr's address filled in.
 - **Setup.**
   - **Setup → Media Sources…** adds Plex (address and token), Jellyfin or Emby (address, user name and password; Tunarr signs in and keeps only a token) or local folders, turns libraries on or off, refreshes and scans them, and removes sources. Addresses and tokens are sent to Tunarr and never shown again.
   - **Setup → Transcode Profiles…** edits resolution, codecs, bitrates, hardware acceleration, loudness and error screens, and duplicates or deletes profiles.
-- **Program log.** **File → Export Program Log…** downloads the visible day as CSV.
+- **Program log.** **File → Export Program Log…** downloads the visible day as CSV; **Export Programming PDF…** makes a paginated, printable station log for that day and marks unsaved desk changes.
 - **Artwork** is loaded through the companion, so the browser never contacts Tunarr or your media server.
 - **Pull-down menus** (File, Edit, View, Channel, Lists, Setup, Help) work with the mouse, the keyboard, or a remote.
 
