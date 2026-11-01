@@ -8,6 +8,8 @@ were renamed 2026.10.1 and 2026.10.2.
 
 ## [Unreleased]
 
+## [2026.11.1] - 2026-11-01
+
 ### Added
 
 - **Programming PDF** (File → Export Programming PDF…): the visible day as a paginated, printable A4 station log with the channel, date, number of entries and scheduled airtime, the same times, kinds, titles, details, lengths and lineup positions as the day view, and unsaved desk changes marked in the document and the file name. Titles in any script print as they appear on screen.
@@ -321,7 +323,8 @@ First public release.
   reaches Tunarr through a narrow allowlisted proxy. Optional HTTP Basic
   sign-in and host-name checks against DNS rebinding.
 
-[Unreleased]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.23...HEAD
+[Unreleased]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.11.1...HEAD
+[2026.11.1]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.23...v2026.11.1
 [2026.10.23]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.22...v2026.10.23
 [2026.10.22]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.21...v2026.10.22
 [2026.10.21]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.20...v2026.10.21
