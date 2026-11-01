@@ -1,7 +1,7 @@
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { calendarConflicts, CONTINUE_UNSUPPORTED, isTimeZone, localDate, occurrences, outranked, outranks, resumedStartTime, startingLineup, validateCalendarEntry, wallClock, zonedTime, type CalendarEntryInput } from '../server/calendar';
 import { armCalendar, CALENDAR_UNRECONCILED, calendarRevision, reconcileCalendar, withCalendarLock } from '../server/calendarArm';
 import { StoreError } from '../server/jsonFile';
@@ -11,8 +11,15 @@ import { createProxyConfig, handleTunarrApi, type ProxyConfig, type ProxyRequest
 
 const HOUR = 3_600_000;
 const MIN = 60_000;
+const TEST_NOW = Date.UTC(2026, 9, 31, 12);
+const realDateNow = Date.now;
 const iso = (ms: number) => new Date(ms).toISOString();
 const P = (n: number) => `0b6f5c4e-1a2b-4c3d-8e9f-${String(n).padStart(12, '0')}`;
+
+// Calendar routes reject past one-time entries, so this dated fixture needs a
+// stable wall clock rather than depending on the day the suite happens to run.
+beforeEach(() => { Date.now = () => TEST_NOW; });
+afterEach(() => { vi.restoreAllMocks(); Date.now = realDateNow; });
 
 describe('time zones and clock changes', () => {
   it('finds the instant of a local time, moving skipped times forward and taking the first repeated one', () => {
