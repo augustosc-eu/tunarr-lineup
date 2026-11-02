@@ -119,6 +119,8 @@ let state = initialState();
 const RELEASES = {
   '1.3.13': { slotTypes: ['movie', 'show', 'flex', 'redirect', 'filler', 'custom-show', 'smart-collection'] },
   '2026.10.4': { slotTypes: ['show', 'flex', 'redirect', 'filler', 'custom-show', 'smart-collection'] },
+  // 2026.11.0 only added routes (ErsatzTV Next) and fields (useEtvNext) to what Lineup reads.
+  '2026.11.0': { slotTypes: ['show', 'flex', 'redirect', 'filler', 'custom-show', 'smart-collection'] },
 };
 const release = () => RELEASES[state.release];
 
@@ -232,7 +234,7 @@ http.createServer(async (req, res) => {
     state.release = wanted;
     return send(res, 200, { ok: true });
   }
-  if (path === '/api/version') return send(res, 200, { tunarr: state.release, ffmpeg: '7.1-fake', ...(state.release === '1.3.13' ? { nodejs: process.version } : {}) });
+  if (path === '/api/version') return send(res, 200, { tunarr: state.release, ffmpeg: '7.1-fake', ...(state.release === '1.3.13' ? { nodejs: process.version } : {}), ...(state.release === '2026.11.0' ? { etvNext: '0.1.0-fake' } : {}) });
   if (path === '/openapi.json') return send(res, 200, openApi());
   if (path === '/__test/delay' && req.method === 'POST') {
     state.programmingDelayMs = JSON.parse(await readBody(req)).ms;

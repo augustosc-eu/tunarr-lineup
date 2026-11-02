@@ -8,6 +8,14 @@ were renamed 2026.10.1 and 2026.10.2.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Tunarr 2026.11 and ErsatzTV Next:** watching a channel that Tunarr 2026.11 streams through its new ErsatzTV Next backend (switched on for that channel, or for every channel) failed with "Tunarr’s stream playlist points somewhere Lineup doesn’t pass on", because those streams are served from their own folder. Lineup now passes that folder on too, still only for the channel being watched.
+
+### Changed
+
+- **Compatibility:** Tunarr 2026.11 counts as validated (1.x and 2026.9–2026.11). It only adds to the API Lineup uses; its new per-channel ErsatzTV Next setting is kept when Lineup saves channel settings.
+
 ## [2026.11.1] - 2026-11-01
 
 ### Added

@@ -238,7 +238,7 @@ accident.
 | `GET /api/tunarr/guide?from=…&to=…` | `GET {tunarr}/api/guide/channels` (every channel, up to 24 hours; reduced to times, titles and one line of detail) |
 | `GET /api/tunarr/sessions` | `GET {tunarr}/api/sessions` (viewer and stream counts per channel; addresses and user agents are dropped) |
 | `GET /api/tunarr/redirects` | Every channel's programming, for the redirect graph (loops) |
-| `GET /api/tunarr/channels/:id/stream.m3u8`, `GET …/hls/:file` | `GET {tunarr}/stream/channels/:id.m3u8?mode=hls` and `/stream/channels/:id/hls/:file`. Playlists are rewritten to point at the companion; one naming anything but this channel's HLS files is refused. Segments only of video/audio types |
+| `GET /api/tunarr/channels/:id/stream.m3u8`, `GET …/hls/:file`, `GET …/etv_next/:file` | `GET {tunarr}/stream/channels/:id.m3u8?mode=hls` and `/stream/channels/:id/hls/:file` (or `/etv_next/:file` for a channel Tunarr 2026.11+ streams through ErsatzTV Next). Playlists are rewritten to point at the companion; one naming anything but this channel's HLS files is refused. Segments only of video/audio types |
 | `GET /api/tunarr/media-folder/:role/:file` | Plays a media-folder file back (byte ranges), for previews |
 | `GET`/`POST /api/tunarr/channels/:id/snapshots`, `GET`/`DELETE …/:snapshotId` | Lineup's own snapshots (`LINEUP_DATA_DIR/snapshots`); `POST` takes one from Tunarr's current copy |
 | `GET /api/tunarr/drafts`, `GET`/`PUT`/`DELETE …/:channelId` | Lineup's own shared drafts (`LINEUP_DATA_DIR/drafts`) |

@@ -62,6 +62,19 @@ test('Tunarr 2026.10.4 counts as validated, with only movie slots turned off', a
   await noOverflow(page);
 });
 
+test('Tunarr 2026.11.0 counts as validated, and only its version is kept', async ({ page }) => {
+  await useRelease(page, '2026.11.0');
+  const report = (await (await page.request.get('/api/tunarr/compatibility')).json()) as { version: { tunarr: string; status: string }; capabilities: Array<{ id: string; status: string }> };
+  expect(report.version).toMatchObject({ tunarr: '2026.11.0', status: 'validated' });
+  expect(JSON.stringify(report)).not.toContain('0.1.0-fake');
+  expect(report.capabilities.find((item) => item.id === 'manual-saves')?.status).toBe('available');
+  await menu(page, 'Setup', /Server Settings/);
+  const settings = page.getByRole('dialog', { name: 'Server settings' });
+  await expect(settings.getByText('Tunarr 2026.11.0', { exact: false }).first()).toBeVisible();
+  await expect(settings.getByText(/not validated/)).toHaveCount(0);
+  await noOverflow(page);
+});
+
 test('a movie slot is refused in plain words, then becomes a custom show only when asked', async ({ page }) => {
   await page.locator('.channel', { hasText: 'Desk Rotation' }).click();
   await expect(page.locator('.channel.active')).toContainText('Desk Rotation');

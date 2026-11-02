@@ -836,11 +836,11 @@ Tried after the content routes; GET only, Origin check, and no query except on `
 | `/sessions` | `GET /api/sessions` → `{ [channelId]: { viewers, streams } }` for live sessions only; addresses and user agents dropped |
 | `/redirects` | Every channel's programming, four at a time → `{ edges: [{ from, to }] }` (lineup redirects and redirect slots) |
 | `/channels/:id/stream.m3u8` | `GET /stream/channels/:id.m3u8?mode=hls` (30 s timeout), rewritten by `rewritePlaylist` |
-| `/channels/:id/hls/:file` | `:file` must match `STREAM_FILE`; `GET /stream/channels/:id/hls/:file`. Playlists are rewritten; other parts must be video/audio types, ≤ 64 MB |
+| `/channels/:id/hls/:file`, `/channels/:id/etv_next/:file` | `:file` must match `STREAM_FILE`; `GET /stream/channels/:id/<folder>/:file` (`STREAM_FOLDERS`: `hls` for Tunarr's own pipeline, `etv_next` for a channel Tunarr 2026.11+ streams through ErsatzTV Next). Playlists are rewritten; other parts must be video/audio types, ≤ 64 MB |
 
 `rewritePlaylist` resolves every URI line and `URI="…"` attribute against the upstream
 playlist and allows only `TUNARR_URL`'s origin and base path with `/stream/channels/<this
-id>/hls/<STREAM_FILE>` or `/stream/channels/<this id>.m3u8`; anything else makes the whole
+id>/<hls|etv_next>/<STREAM_FILE>` (kept in its folder) or `/stream/channels/<this id>.m3u8`; anything else makes the whole
 playlist a 502 `stream_unexpected`.
 
 ### Scheduler (`server/scheduler.ts`)

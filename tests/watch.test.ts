@@ -95,6 +95,30 @@ describe('live stream', () => {
     expect(rewritePlaylist(`#EXTM3U\n/stream/channels/${CHANNEL}/hls/..%2f..%2fetc.ts\n`, base, target, CHANNEL)).toBeNull();
   });
 
+  // Tunarr 2026.11 serves a channel switched to the ErsatzTV Next backend from its etv_next folder.
+  const etvMaster = `#EXTM3U\n#EXT-X-VERSION:6\n#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",NAME="Subtitles",DEFAULT=YES,AUTOSELECT=YES,FORCED=NO,URI="/stream/channels/${CHANNEL}/etv_next/live_sub.m3u8"\n#EXT-X-STREAM-INF:BANDWIDTH=11211200,SUBTITLES="subs"\n/stream/channels/${CHANNEL}/etv_next/live.m3u8\n`;
+
+  it('rewrites an ErsatzTV Next playlist, keeping its files in their folder', () => {
+    const base = new URL(`http://tunarr:8000/stream/channels/${CHANNEL}.m3u8?mode=hls`);
+    const master = rewritePlaylist(etvMaster, base, target, CHANNEL);
+    expect(master).toContain(`URI="/api/tunarr/channels/${CHANNEL}/etv_next/live_sub.m3u8"`);
+    expect(master).toContain(`\n/api/tunarr/channels/${CHANNEL}/etv_next/live.m3u8`);
+    const media = new URL(`http://tunarr:8000/stream/channels/${CHANNEL}/etv_next/live.m3u8`);
+    expect(rewritePlaylist('#EXTM3U\n#EXTINF:4.0,\nlive000007.ts\n', media, target, CHANNEL)).toBe(`#EXTM3U\n#EXTINF:4.0,\n/api/tunarr/channels/${CHANNEL}/etv_next/live000007.ts\n`);
+    expect(rewritePlaylist(`#EXTM3U\n/stream/channels/${OTHER}/etv_next/live.m3u8\n`, base, target, CHANNEL)).toBeNull();
+    expect(rewritePlaylist(`#EXTM3U\n/stream/channels/${CHANNEL}/mpegts/live.m3u8\n`, base, target, CHANNEL)).toBeNull();
+  });
+
+  it('fetches ErsatzTV Next files from the same folder, and no other', async () => {
+    const segment = new Uint8Array([0x47, 9]);
+    const { calls, config } = setup(() => new Response(segment, { status: 200, headers: { 'content-type': 'video/mp2t' } }));
+    const ok = await handleTunarrApi(get(`/api/tunarr/channels/${CHANNEL}/etv_next/live000007.ts`), config);
+    expect(ok.status).toBe(200);
+    expect(calls[0]).toBe(`http://tunarr:8000/stream/channels/${CHANNEL}/etv_next/live000007.ts`);
+    expect((await handleTunarrApi(get(`/api/tunarr/channels/${CHANNEL}/hls_direct/live.m3u8`), config)).status).toBe(404);
+    expect(calls).toHaveLength(1);
+  });
+
   it('asks Tunarr for HLS and rewrites the master playlist', async () => {
     const { calls, config } = setup(() => new Response(master, { status: 200, headers: { 'content-type': 'application/vnd.apple.mpegurl' } }));
     const response = await handleTunarrApi(get(`/api/tunarr/channels/${CHANNEL}/stream.m3u8`), config);

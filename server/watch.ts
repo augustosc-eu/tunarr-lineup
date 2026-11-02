@@ -16,23 +16,31 @@ const ISO_DATETIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:
 export const STREAM_FILE = /^[A-Za-z0-9_-]{1,64}\.(m3u8|ts|m4s|mp4|aac|vtt)$/;
 const PLAYLIST_TYPE = /^(application\/vnd\.apple\.mpegurl|application\/x-mpegurl|audio\/mpegurl|audio\/x-mpegurl)$/i;
 const SEGMENT_TYPE = /^(video\/mp2t|video\/mp4|video\/iso\.segment|audio\/aac|audio\/mp4|text\/vtt|application\/octet-stream)$/i;
+/**
+ * The folders Tunarr serves a channel's HLS files from: its own pipeline's, and
+ * since 2026.11 the ErsatzTV Next worker's (live.m3u8, live000123.ts), used when
+ * that backend is switched on for the channel or for every channel.
+ */
+export const STREAM_FOLDERS = ['hls', 'etv_next'] as const;
+export type StreamFolder = (typeof STREAM_FOLDERS)[number];
+const isStreamFolder = (value: string): value is StreamFolder => (STREAM_FOLDERS as readonly string[]).includes(value);
 
 export type WatchRoute =
   | { name: 'guide' }
   | { name: 'sessions' }
   | { name: 'redirects' }
   | { name: 'stream'; channelId: string }
-  | { name: 'stream-file'; channelId: string; file: string };
+  | { name: 'stream-file'; channelId: string; folder: StreamFolder; file: string };
 
 export function matchWatchRoute(path: string, channelId: RegExp): WatchRoute | { invalid: string } | null {
   if (path === '/guide') return { name: 'guide' };
   if (path === '/sessions') return { name: 'sessions' };
   if (path === '/redirects') return { name: 'redirects' };
-  const stream = /^\/channels\/([^/]+)\/(stream\.m3u8|hls\/([^/]+))$/.exec(path);
+  const stream = /^\/channels\/([^/]+)\/(stream\.m3u8|(hls|etv_next)\/([^/]+))$/.exec(path);
   if (!stream) return null;
   if (!channelId.test(stream[1])) return { invalid: 'Channel id is not valid.' };
   if (stream[2] === 'stream.m3u8') return { name: 'stream', channelId: stream[1] };
-  return STREAM_FILE.test(stream[3]) ? { name: 'stream-file', channelId: stream[1], file: stream[3] } : { invalid: 'Stream file name is not valid.' };
+  return STREAM_FILE.test(stream[4]) ? { name: 'stream-file', channelId: stream[1], folder: stream[3] as StreamFolder, file: stream[4] } : { invalid: 'Stream file name is not valid.' };
 }
 
 export function validateGuideRange(params: URLSearchParams): { from: string; to: string } | { error: string } {
@@ -125,8 +133,8 @@ export function rewritePlaylist(playlist: string, base: URL, target: TunarrTarge
     }
     if (url.origin !== target.origin || !url.pathname.startsWith(prefix)) return null;
     const rest = url.pathname.slice(prefix.length);
-    const file = /^([^/]+)\/hls\/([^/]+)$/.exec(rest);
-    if (file && file[1].toLowerCase() === channelId.toLowerCase() && STREAM_FILE.test(file[2])) return `/api/tunarr/channels/${channelId}/hls/${file[2]}`;
+    const file = /^([^/]+)\/([^/]+)\/([^/]+)$/.exec(rest);
+    if (file && file[1].toLowerCase() === channelId.toLowerCase() && isStreamFolder(file[2]) && STREAM_FILE.test(file[3])) return `/api/tunarr/channels/${channelId}/${file[2]}/${file[3]}`;
     if (rest.toLowerCase() === `${channelId.toLowerCase()}.m3u8`) return `/api/tunarr/channels/${channelId}/stream.m3u8`;
     return null;
   };
@@ -195,6 +203,6 @@ export async function handleWatchRoute(route: WatchRoute, config: ProxyConfig, t
       // Always HLS, whatever the channel's own stream mode: it's what a browser can play.
       return streamFile(config, target, route.channelId, `/stream/channels/${route.channelId}.m3u8?mode=hls`);
     case 'stream-file':
-      return streamFile(config, target, route.channelId, `/stream/channels/${route.channelId}/hls/${route.file}`);
+      return streamFile(config, target, route.channelId, `/stream/channels/${route.channelId}/${route.folder}/${route.file}`);
   }
 }

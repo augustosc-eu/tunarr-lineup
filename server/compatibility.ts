@@ -72,10 +72,12 @@ export type CompatibilityReport = {
  * Versions whose API shape Lineup was written and tested against. Tunarr's
  * releases moved from 1.x to dates (YEAR.MONTH.N, 2026.9 onwards); 2026.10.4
  * dropped movie slots, which the API description shows (`movie-slots` below).
+ * 2026.11.0 only added routes and fields; its ErsatzTV Next streams are served
+ * from their own folder, which `server/watch.ts` passes on.
  */
 export const VALIDATED_VERSIONS = {
-  ranges: [{ from: [1, 0, 0], below: [2, 0, 0] }, { from: [2026, 9, 0], below: [2026, 11, 0] }],
-  label: '1.x and 2026.9–2026.10',
+  ranges: [{ from: [1, 0, 0], below: [2, 0, 0] }, { from: [2026, 9, 0], below: [2026, 12, 0] }],
+  label: '1.x and 2026.9–2026.11',
 } as const;
 export const COMPATIBILITY_TTL_MS = 5 * 60_000;
 const PROBE_CONCURRENCY = 4;

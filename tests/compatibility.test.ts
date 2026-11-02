@@ -234,9 +234,10 @@ describe('Tunarr versions', () => {
     expect(checkVersion('1.3.13', 'api').status).toBe('validated');
     // Tunarr's releases are dated now (YEAR.MONTH.N).
     expect(checkVersion('2026.9.3', 'api').status).toBe('validated');
-    expect(checkVersion('2026.10.4', 'api')).toMatchObject({ status: 'validated', note: 'Lineup is built for Tunarr 1.x and 2026.9–2026.10.' });
+    expect(checkVersion('2026.10.4', 'api')).toMatchObject({ status: 'validated', note: 'Lineup is built for Tunarr 1.x and 2026.9–2026.11.' });
     expect(checkVersion('2026.8.1', 'api').status).toBe('unvalidated');
-    expect(checkVersion('2026.11.0', 'api').status).toBe('unvalidated');
+    expect(checkVersion('2026.11.0', 'api').status).toBe('validated');
+    expect(checkVersion('2026.12.0', 'api').status).toBe('unvalidated');
     expect(checkVersion('v1.0.0-beta.2', 'api').status).toBe('validated');
     expect(checkVersion('0.22.4', 'api').status).toBe('unvalidated');
     expect(checkVersion('2.0.0', 'api').status).toBe('unvalidated');
