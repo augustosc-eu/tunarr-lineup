@@ -8,6 +8,8 @@ were renamed 2026.10.1 and 2026.10.2.
 
 ## [Unreleased]
 
+## [2026.11.2] - 2026-11-02
+
 ### Fixed
 
 - **Tunarr 2026.11 and ErsatzTV Next:** watching a channel that Tunarr 2026.11 streams through its new ErsatzTV Next backend (switched on for that channel, or for every channel) failed with "Tunarr’s stream playlist points somewhere Lineup doesn’t pass on", because those streams are served from their own folder. Lineup now passes that folder on too, still only for the channel being watched.
@@ -331,7 +333,8 @@ First public release.
   reaches Tunarr through a narrow allowlisted proxy. Optional HTTP Basic
   sign-in and host-name checks against DNS rebinding.
 
-[Unreleased]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.11.1...HEAD
+[Unreleased]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.11.2...HEAD
+[2026.11.2]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.11.1...v2026.11.2
 [2026.11.1]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.23...v2026.11.1
 [2026.10.23]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.22...v2026.10.23
 [2026.10.22]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.21...v2026.10.22
