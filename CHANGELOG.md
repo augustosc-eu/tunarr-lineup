@@ -8,6 +8,8 @@ were renamed 2026.10.1 and 2026.10.2.
 
 ## [Unreleased]
 
+## [2026.11.3] - 2026-11-03
+
 ### Fixed
 
 - **Go to Now** (Now, N, View → Go to Now) sometimes did nothing: when the cursor was already on the on-air program and the day had been scrolled away, it didn't scroll back, and it picked the on-air row from the lineup's projection rather than the rows on screen (Tunarr's guide), so with flex, filler or a generated schedule it could land elsewhere. It now goes by the rows shown, waits for the day's guide when it changes the date, clears a search that hides what's on air, and always brings the on-air row into view.
@@ -338,7 +340,8 @@ First public release.
   reaches Tunarr through a narrow allowlisted proxy. Optional HTTP Basic
   sign-in and host-name checks against DNS rebinding.
 
-[Unreleased]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.11.2...HEAD
+[Unreleased]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.11.3...HEAD
+[2026.11.3]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.11.2...v2026.11.3
 [2026.11.2]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.11.1...v2026.11.2
 [2026.11.1]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.23...v2026.11.1
 [2026.10.23]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.22...v2026.10.23
