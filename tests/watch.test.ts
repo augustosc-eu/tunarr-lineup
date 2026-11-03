@@ -129,6 +129,14 @@ describe('live stream', () => {
     expect(response.headers['content-type']).toBe('application/vnd.apple.mpegurl');
   });
 
+  it('says Tunarr couldn’t start the stream when its session fails (ErsatzTV Next without its worker)', async () => {
+    const { config } = setup(() => new Response('Error starting or retrieving session', { status: 500, headers: { 'content-type': 'text/plain' } }));
+    const response = await handleTunarrApi(get(`/api/tunarr/channels/${CHANNEL}/stream.m3u8`), config);
+    expect(response.status).toBe(502);
+    expect(text(response)).toContain('stream_not_started');
+    expect(text(response)).toContain('ersatztv-channel');
+  });
+
   it('passes segments through as bytes, only of video types', async () => {
     const segment = new Uint8Array([0x47, 1, 2, 3]);
     const { calls, config } = setup((url) => (url.endsWith('.ts') ? new Response(segment, { status: 200, headers: { 'content-type': 'video/mp2t' } }) : new Response('<html>', { status: 200, headers: { 'content-type': 'text/html' } })));

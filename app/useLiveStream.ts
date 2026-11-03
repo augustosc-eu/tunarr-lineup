@@ -101,7 +101,7 @@ function playStream(element: HTMLVideoElement, channelId: string, attempts: Atte
       if (!data.fatal) return;
       if (data.type === Hls.ErrorTypes.MEDIA_ERROR && mediaRecoveries < 2) { mediaRecoveries += 1; hls.recoverMediaError(); return; }
       const code = (data.response as { code?: number } | undefined)?.code;
-      failed(code === 404 ? 'Tunarr has no stream for this channel right now.' : code === 502 || code === 504 ? 'Tunarr didn’t start the stream. Check that the channel has programming.' : 'The stream stopped.');
+      failed(code === 404 ? 'Tunarr has no stream for this channel right now.' : code === 502 || code === 504 ? 'Tunarr didn’t start the stream. Check that the channel has programming, and Tunarr’s log (with ErsatzTV Next on, Tunarr needs its ersatztv-channel worker).' : 'The stream stopped.');
     });
     hls.on(Hls.Events.MANIFEST_PARSED, start);
     hls.loadSource(source);

@@ -899,13 +899,13 @@ export default function Home() {
   // Opened from the guide grid on another channel: select what airs at that time once it's loaded.
   useEffect(() => {
     const pending = pendingJump.current;
-    if (!pending || loading || pending.channelId !== activeChannelId || !instances.length) return;
+    if (!pending || loading || guideLoading || pending.channelId !== activeChannelId || !instances.length) return;
     pendingJump.current = null;
     const row = instances.find((item) => item.start <= pending.time && pending.time < item.stop && item.lineupIndex >= 0);
     if (!row) return;
     focusCursor.current = true;
     select(row.lineupIndex, row.start);
-  }, [activeChannelId, instances, loading]);
+  }, [activeChannelId, guideLoading, instances, loading]);
 
   useEffect(() => {
     const pending = pendingView.current;
@@ -997,17 +997,34 @@ export default function Home() {
     changeDate(inputDate(date));
   };
 
+  // Goes by the rows on screen (Tunarr's guide, once loaded), and always brings
+  // the on-air row into view, even when the cursor is already on it.
   const goToNow = () => {
-    const today = inputDate(new Date());
-    if (selectedDate !== today) changeDate(today);
-    scrolledToNow.current = '';
-    if (!activeChannel) return;
-    const rows = scheduleForDay(null, lineup, channelStart, today).rows;
-    const row = rows[onAirPosition(rows, now)];
-    if (row) {
+    const at = new Date();
+    const today = inputDate(at);
+    if (!activeChannel) {
+      if (selectedDate !== today) changeDate(today);
+      return;
+    }
+    if (selectedDate !== today || loading || guideLoading) {
+      if (selectedDate !== today) changeDate(today);
+      pendingJump.current = { channelId: activeChannel.id, time: at.getTime() };
+      return;
+    }
+    // A search that hides what's on air is cleared, so there's a row to go to.
+    const shown = search && onAirPosition(visibleInstances, at.getTime()) < 0 ? instances : visibleInstances;
+    if (shown !== visibleInstances) setSearch('');
+    const position = onAirPosition(shown, at.getTime());
+    const row = shown[position];
+    if (!row) return;
+    if (row.lineupIndex >= 0 && (shown !== visibleInstances || position !== cursorPosition)) {
       focusCursor.current = true;
       select(row.lineupIndex, row.start);
+      return;
     }
+    const element = rowRefs.current.get(position);
+    element?.focus({ preventScroll: true });
+    element?.scrollIntoView?.({ block: 'center' });
   };
 
   /** Moves the row window by `step` rows, keeping a row that stays mounted where it is on screen. */

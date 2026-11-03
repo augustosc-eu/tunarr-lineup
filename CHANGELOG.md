@@ -8,6 +8,11 @@ were renamed 2026.10.1 and 2026.10.2.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Go to Now** (Now, N, View → Go to Now) sometimes did nothing: when the cursor was already on the on-air program and the day had been scrolled away, it didn't scroll back, and it picked the on-air row from the lineup's projection rather than the rows on screen (Tunarr's guide), so with flex, filler or a generated schedule it could land elsewhere. It now goes by the rows shown, waits for the day's guide when it changes the date, clears a search that hides what's on air, and always brings the on-air row into view.
+- **Watching with ErsatzTV Next:** when Tunarr can't start a channel's stream (Tunarr 2026.11 answers 500, typically because its ErsatzTV Next backend is switched on but Tunarr can't find its `ersatztv-channel` worker), the player and the Control Room's stream check now say so instead of suggesting the channel has no programming.
+
 ## [2026.11.2] - 2026-11-02
 
 ### Fixed

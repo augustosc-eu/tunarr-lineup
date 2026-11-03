@@ -25,6 +25,8 @@ export const STREAM_FOLDERS = ['hls', 'etv_next'] as const;
 export type StreamFolder = (typeof STREAM_FOLDERS)[number];
 const isStreamFolder = (value: string): value is StreamFolder => (STREAM_FOLDERS as readonly string[]).includes(value);
 
+export const STREAM_NOT_STARTED = 'Tunarr couldn’t start this channel’s stream. Its log says why; with the ErsatzTV Next backend on, Tunarr needs its ersatztv-channel worker installed.';
+
 export type WatchRoute =
   | { name: 'guide' }
   | { name: 'sessions' }
@@ -201,7 +203,12 @@ export async function handleWatchRoute(route: WatchRoute, config: ProxyConfig, t
     }
     case 'stream':
       // Always HLS, whatever the channel's own stream mode: it's what a browser can play.
-      return streamFile(config, target, route.channelId, `/stream/channels/${route.channelId}.m3u8?mode=hls`);
+      // Tunarr answers 500 when its session fails to start; on 2026.11 that is most
+      // often the ErsatzTV Next backend switched on without its worker binary.
+      return streamFile(config, target, route.channelId, `/stream/channels/${route.channelId}.m3u8?mode=hls`).catch((error: unknown) => {
+        if (error instanceof UpstreamError && error.code === 'tunarr_error') throw new UpstreamError(502, 'stream_not_started', STREAM_NOT_STARTED);
+        throw error;
+      });
     case 'stream-file':
       return streamFile(config, target, route.channelId, `/stream/channels/${route.channelId}/${route.folder}/${route.file}`);
   }

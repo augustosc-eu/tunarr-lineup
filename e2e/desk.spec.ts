@@ -86,6 +86,25 @@ test('menus work from the keyboard, and Go to Now selects the on-air program', a
   await expect(page.locator('.program.on-air.cursor')).toHaveCount(1);
 });
 
+test('Now brings the on-air program back on screen when the cursor is already on it', async ({ page }) => {
+  const onAir = page.locator('.program.on-air');
+  await page.locator('.now-button').click();
+  await expect(page.locator('.program.on-air.cursor')).toHaveCount(1);
+  // Scroll away without moving the cursor, as a mouse wheel or touch would.
+  await onAir.evaluate((row) => {
+    let parent = row.parentElement;
+    while (parent && parent.scrollHeight <= parent.clientHeight) parent = parent.parentElement;
+    const scroller = parent ?? document.scrollingElement!;
+    // Toward whichever end is farther from the on-air row.
+    const upper = row.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop < scroller.scrollHeight / 2;
+    scroller.scrollTo(0, upper ? scroller.scrollHeight : 0);
+  });
+  await expect(onAir).not.toBeInViewport();
+  await page.locator('.now-button').click();
+  await expect(onAir).toBeInViewport();
+  await expect(page.locator('.program.on-air.cursor')).toHaveCount(1);
+});
+
 test('exports the visible day as a program log', async ({ page }) => {
   await page.getByRole('menuitem', { name: 'File' }).click();
   const download = page.waitForEvent('download');
