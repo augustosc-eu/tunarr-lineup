@@ -121,8 +121,14 @@ const RELEASES = {
   '2026.10.4': { slotTypes: ['show', 'flex', 'redirect', 'filler', 'custom-show', 'smart-collection'] },
   // 2026.11.0 only added routes (ErsatzTV Next) and fields (useEtvNext) to what Lineup reads.
   '2026.11.0': { slotTypes: ['show', 'flex', 'redirect', 'filler', 'custom-show', 'smart-collection'] },
+  // 2026.11.2 chooses subtitles with stream selection profiles: every channel carries one
+  // (null: the default), and a channel's own subtitlesEnabled is kept but no longer read.
+  // It also drops a channel's slot schedule itself (DELETE /api/channels/:id/schedule).
+  '2026.11.2': { slotTypes: ['show', 'flex', 'redirect', 'filler', 'custom-show', 'smart-collection'], channelFields: { streamSelectionProfileId: null }, removesSchedules: true },
 };
 const release = () => RELEASES[state.release];
+/** A channel as this release returns it: the fields it adds, then whatever was saved. */
+const releaseChannel = (channel) => ({ ...release().channelFields, ...channel });
 
 // The routes Lineup's compatibility check looks for, as Tunarr's OpenAPI document lists them.
 const API_PATHS = {
@@ -148,7 +154,7 @@ const scheduleBody = (kind) => ({
 const openApi = () => ({
   // Tunarr's document keeps its package version; /api/version reports the release.
   openapi: '3.1.0', info: { title: 'Tunarr', version: state.release === '1.3.13' ? '1.3.13' : '1.2.0-dev.1' },
-  paths: Object.fromEntries(Object.entries(API_PATHS).filter(([route]) => !state.missingRoutes.includes(route.replace(/\{[^}]+\}/g, '*'))).map(([route, methods]) => [route, Object.fromEntries(methods.map((method) => [method, route.endsWith('/schedule-slots') ? scheduleBody('random') : route.endsWith('/schedule-time-slots') ? scheduleBody('time') : {}]))])),
+  paths: Object.fromEntries(Object.entries({ ...API_PATHS, ...(release().removesSchedules ? { '/api/channels/{id}/schedule': ['get', 'delete'], '/api/stream-selection-profiles': ['get'] } : {}) }).filter(([route]) => !state.missingRoutes.includes(route.replace(/\{[^}]+\}/g, '*'))).map(([route, methods]) => [route, Object.fromEntries(methods.map((method) => [method, route.endsWith('/schedule-slots') ? scheduleBody('random') : route.endsWith('/schedule-time-slots') ? scheduleBody('time') : {}]))])),
 });
 /** Tunarr's schema check on a schedule: a slot type this release doesn't have is refused. */
 const rejectedSlot = (schedule) => (schedule?.slots ?? []).find((slot) => !release().slotTypes.includes(slot?.type));
@@ -234,7 +240,7 @@ http.createServer(async (req, res) => {
     state.release = wanted;
     return send(res, 200, { ok: true });
   }
-  if (path === '/api/version') return send(res, 200, { tunarr: state.release, ffmpeg: '7.1-fake', ...(state.release === '1.3.13' ? { nodejs: process.version } : {}), ...(state.release === '2026.11.0' ? { etvNext: '0.1.0-fake' } : {}) });
+  if (path === '/api/version') return send(res, 200, { tunarr: state.release, ffmpeg: '7.1-fake', ...(state.release === '1.3.13' ? { nodejs: process.version } : {}), ...(state.release.startsWith('2026.11.') ? { etvNext: '0.1.0-fake' } : {}) });
   if (path === '/openapi.json') return send(res, 200, openApi());
   if (path === '/__test/delay' && req.method === 'POST') {
     state.programmingDelayMs = JSON.parse(await readBody(req)).ms;
@@ -382,7 +388,7 @@ http.createServer(async (req, res) => {
       // Like Tunarr, a new start time moves when the lineup plays.
       Object.assign(channel, { name, number, icon: rest.icon ?? channel.icon, ...(typeof rest.startTime === 'number' ? { startTime: rest.startTime } : {}) });
     }
-    return send(res, 200, { fillerCollections: [], fillerRepeatCooldown: 30000, disableFillerOverlay: false, guideMinimumDuration: 30000, guideFlexTitle: '', groupTitle: 'tunarr', transcodeConfigId: 'keep-me', ...channel, ...state.channelExtras[channel.id], sessions: [] });
+    return send(res, 200, releaseChannel({ fillerCollections: [], fillerRepeatCooldown: 30000, disableFillerOverlay: false, guideMinimumDuration: 30000, guideFlexTitle: '', groupTitle: 'tunarr', transcodeConfigId: 'keep-me', ...channel, ...state.channelExtras[channel.id], sessions: [] }));
   }
   // A stand-in for an OpenAI-compatible AI endpoint (LINEUP_AI_BASE_URL in the e2e setup).
   if (path === '/v1/chat/completions' && req.method === 'POST') {
@@ -408,7 +414,14 @@ http.createServer(async (req, res) => {
     return send(res, 200, { ok: true });
   }
 
-  if (path === '/api/channels' && req.method === 'GET') return send(res, 200, state.channels);
+  if (path === '/api/stream-selection-profiles' && req.method === 'GET') {
+    if (!release().channelFields) return send(res, 404, { message: `Route GET:${path} not found`, error: 'Not Found', statusCode: 404 });
+    return send(res, 200, [
+      { uuid: '00000000-0000-4000-8000-000000000000', name: 'Tunarr Default', locked: true, isDefault: true, rules: [{ condition: 'true', audioAction: { type: 'default' }, subtitleAction: { type: 'disable' } }], usage: { channels: [], fillerLists: [], customShows: [], programCount: 0 } },
+      { uuid: '6e6e6e6e-1a2b-4c3d-8e9f-000000000001', name: 'Spanish subtitles', locked: false, isDefault: false, rules: [{ condition: 'true', audioAction: { type: 'default' }, subtitleAction: { type: 'by_language', languages: ['spa'] } }], usage: { channels: [], fillerLists: [], customShows: [], programCount: 0 } },
+    ]);
+  }
+  if (path === '/api/channels' && req.method === 'GET') return send(res, 200, state.channels.map(releaseChannel));
 
   // Every channel's guide at once (the guide grid).
   if (path === '/api/guide/channels' && req.method === 'GET') {
@@ -455,6 +468,13 @@ http.createServer(async (req, res) => {
   };
   const poolFor = (id) => state.lineups[id].filter((item) => item.type === 'content').map((item) => item.id).filter((value, index, all) => all.indexOf(value) === index);
 
+  if (match[2] === 'schedule' && req.method === 'DELETE') {
+    if (!release().removesSchedules) return send(res, 404, { message: `Route DELETE:${path} not found`, error: 'Not Found', statusCode: 404 });
+    // Like Tunarr: the lineup stays, the schedule (and its seed) go.
+    delete state.schedules[channel.id];
+    res.writeHead(204).end();
+    return;
+  }
   if (match[2] === 'schedule') {
     const schedule = state.schedules[channel.id];
     if (!schedule) return send(res, 200, {});

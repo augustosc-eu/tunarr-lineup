@@ -17,7 +17,8 @@ const lineup = [
 type Row = { channel: Record<string, unknown>; lineup: unknown[]; schedule?: unknown };
 
 /** A small in-memory Tunarr: channels, their programming, create/copy/delete. */
-function fakeTunarr(options: { failProgramming?: boolean; failDelete?: boolean; failPut?: boolean } = {}) {
+/** `removesSchedules`: Tunarr 2026.11.2+, whose API description lists DELETE /api/channels/{id}/schedule. */
+function fakeTunarr(options: { failProgramming?: boolean; failDelete?: boolean; failPut?: boolean; removesSchedules?: boolean } = {}) {
   const rows = new Map<string, Row>([
     [OLD, { channel: { id: OLD, name: 'Cartoons', number: 4, startTime: 1000, icon: { path: 'logo.png' }, fillerCollections: [{ id: 'f1', weight: 1 }], subtitlePreferences: [{ language: 'en' }], programCount: 9, sessions: [], transcoding: {}, fallback: [] }, lineup, schedule }],
     [OTHER, { channel: { id: OTHER, name: 'Kids', number: 9 }, lineup: [{ type: 'redirect', channel: OLD, duration: 60_000 }] }],
@@ -29,7 +30,15 @@ function fakeTunarr(options: { failProgramming?: boolean; failDelete?: boolean; 
     const method = init?.method ?? 'GET';
     const payload = init?.body ? JSON.parse(String(init.body)) : undefined;
     log.push(`${method} ${path}`);
+    if (path === '/openapi.json') return reply({ paths: { '/api/channels/{id}/programming': { get: {}, post: {} }, ...(options.removesSchedules ? { '/api/channels/{id}/schedule': { delete: {} } } : {}) } });
     if (path === '/api/channels' && method === 'GET') return reply([...rows.values()].map((row) => row.channel));
+    const drop = /^\/api\/channels\/([^/]+)\/schedule$/.exec(path);
+    if (drop && method === 'DELETE' && options.removesSchedules) {
+      const target = rows.get(drop[1]);
+      if (!target) return new Response(null, { status: 404 });
+      target.schedule = undefined;
+      return new Response(null, { status: 204 });
+    }
     if (path === '/api/channels' && method === 'POST') {
       if ([...rows.values()].some((row) => row.channel.number === payload.channel.number)) return reply('number taken', 500);
       rows.set(NEW, { channel: { ...payload.channel, id: NEW }, lineup: [] });
@@ -145,8 +154,51 @@ describe('recreating a channel without its slot schedule', () => {
     const { log, config } = fakeTunarr();
     const response = await handleTunarrApi(request('GET'), config);
     expect(response.status).toBe(200);
-    expect(parse(response)).toEqual({ redirects: [{ id: OTHER, number: 9, name: 'Kids' }] });
+    expect(parse(response)).toEqual({ inPlace: false, redirects: [{ id: OTHER, number: 9, name: 'Kids' }] });
     expect(log.every((line) => line.startsWith('GET'))).toBe(true);
+  });
+});
+
+describe('removing a slot schedule in place (Tunarr 2026.11.2+)', () => {
+  it('says it will be done in place, changing nothing', async () => {
+    const { log, config } = fakeTunarr({ removesSchedules: true });
+    const response = await handleTunarrApi(request('GET'), config);
+    expect(parse(response)).toEqual({ inPlace: true, redirects: [] });
+    expect(log.every((line) => line.startsWith('GET'))).toBe(true);
+  });
+
+  it('keeps the channel, its id and lineup, and only drops the schedule', async () => {
+    const { rows, log, config } = fakeTunarr({ removesSchedules: true });
+    const response = await handleTunarrApi(request('POST', { lineup: 'keep' }), config);
+    expect(response.status).toBe(200);
+    expect(parse(response)).toEqual({ id: OLD, number: 4, name: 'Cartoons', previousId: OLD, inPlace: true });
+    expect(rows.get(OLD)).toMatchObject({ lineup, schedule: undefined });
+    expect(rows.has(NEW)).toBe(false);
+    // The redirect from another channel still points at a channel that exists.
+    expect(rows.get(OTHER)!.lineup).toEqual([{ type: 'redirect', channel: OLD, duration: 60_000 }]);
+    expect(log.filter((line) => !line.startsWith('GET'))).toEqual([`DELETE /api/channels/${OLD}/schedule`]);
+  });
+
+  it('then saves an empty lineup for a reset', async () => {
+    const { rows, log, config } = fakeTunarr({ removesSchedules: true });
+    expect((await handleTunarrApi(request('POST', { lineup: 'empty' }), config)).status).toBe(200);
+    expect(rows.get(OLD)).toMatchObject({ lineup: [], schedule: undefined });
+    expect(log.filter((line) => !line.startsWith('GET'))).toEqual([`DELETE /api/channels/${OLD}/schedule`, `POST /api/channels/${OLD}/programming`]);
+  });
+
+  it('says plainly when the schedule went but the lineup couldn’t be emptied', async () => {
+    const { rows, config } = fakeTunarr({ removesSchedules: true, failProgramming: true });
+    const response = await handleTunarrApi(request('POST', { lineup: 'empty' }), config);
+    expect(response.status).toBeGreaterThanOrEqual(400);
+    expect(parse(response).error.message).toContain('The slot schedule was removed, but the lineup couldn’t be emptied');
+    expect(rows.get(OLD)!.schedule).toBeUndefined();
+  });
+
+  it('still refuses a channel that changed since it was loaded, changing nothing', async () => {
+    const { rows, log, config } = fakeTunarr({ removesSchedules: true });
+    rows.get(OLD)!.lineup = [lineup[0]];
+    expect((await handleTunarrApi(request('POST', { lineup: 'keep' }), config)).status).toBe(412);
+    expect(log.filter((line) => !line.startsWith('GET'))).toEqual([]);
   });
 });
 

@@ -1338,17 +1338,19 @@ export default function Home() {
   };
 
   /**
-   * Tunarr can't drop a slot schedule from a channel, so leaving one means a
-   * fresh channel with the same settings (the companion's recreate route). Asks
-   * which channels redirect here first, because they lose those redirects.
+   * How dropping a slot schedule will go, as a sentence for the confirm dialog.
+   * Tunarr 2026.11.2+ drops it from the channel itself; older Tunarr can't, so
+   * the companion makes a fresh channel with the same settings, and asks which
+   * channels redirect here first, because they lose those redirects.
    */
   const withRedirectNote = (channelId: string, open: (note: string) => void) => {
+    const recreateNote = 'Tunarr can’t remove a slot schedule from a channel, so Lineup makes a new channel with the same number, name, logo and settings, then deletes this one. Its internal Tunarr id changes.';
     setSaving(true);
     tunarrApi.channelRedirects(channelId)
-      .then(({ redirects }) => open(redirects.length
+      .then(({ redirects, inPlace }) => open(inPlace ? 'Tunarr removes the schedule from this channel itself: it keeps its number, settings and id, and redirects to it keep working.' : `${recreateNote}${redirects.length
         ? ` ${redirects.map((channel) => `CH ${channel.number} ${channel.name}`).join(', ')} ${redirects.length === 1 ? 'redirects' : 'redirect'} to this channel. Tunarr turns those redirects into off-air time when the old channel goes, so point them at this channel again afterwards.`
-        : ''))
-      .catch((error) => { noteFailure(error); open(' Lineup couldn’t check which channels redirect here; any that do lose those redirects.'); })
+        : ''}`))
+      .catch((error) => { noteFailure(error); open(`${recreateNote} Lineup couldn’t check which channels redirect here; any that do lose those redirects.`); })
       .finally(() => setSaving(false));
   };
 
@@ -1364,13 +1366,11 @@ export default function Home() {
       })
       .catch((error) => {
         if (error instanceof TunarrApiError && error.code === 'lineup_changed') showConflict(channel.id, 'the change');
-        else notify(`Not changed: ${errorMessage(error, 'Could not recreate the channel.')}`);
+        else notify(error instanceof TunarrApiError && error.message.startsWith('The slot schedule was removed') ? error.message : `Not changed: ${errorMessage(error, 'Could not remove the slot schedule.')}`);
         noteFailure(error);
       })
       .finally(() => setSaving(false));
   };
-
-  const recreateNote = 'Tunarr can’t remove a slot schedule from a channel, so Lineup makes a new channel with the same number, name, logo and settings, then deletes this one. Its internal Tunarr id changes.';
 
   /** Keeps the channel's current lineup as a manual lineup, so Tunarr stops generating it. */
   const detachToManual = () => {
@@ -1379,7 +1379,7 @@ export default function Home() {
     const version = base.version;
     withRedirectNote(channel.id, (note) => setConfirmDialog({
       title: 'Detach from the slot schedule?',
-      body: `The lineup Tunarr has now becomes a manual lineup and the slot schedule is dropped, so Tunarr stops regenerating this channel. ${recreateNote}${note} Unsaved lineup edits are not included.`,
+      body: `The lineup Tunarr has now becomes a manual lineup and the slot schedule is dropped, so Tunarr stops regenerating this channel. ${note} Unsaved lineup edits are not included.`,
       confirmLabel: 'Detach',
       onConfirm: () => recreateWithoutSchedule(channel, version, 'keep'),
     }));
@@ -2050,7 +2050,7 @@ export default function Home() {
     const summary = scheduleSummary(programming.schedule);
     withRedirectNote(channelId, (note) => setConfirmDialog({
       title: `Reset CH ${channel.number} ${channel.name}?`,
-      body: `${lost} This channel is generated from ${summary}. “Reset and remove schedule” clears both for good. ${recreateNote}${note} “Empty lineup only” keeps the channel as it is, but Tunarr rebuilds the lineup from the schedule at its next library scan or start-time change. Programs stay in your libraries. This can’t be undone.`,
+      body: `${lost} This channel is generated from ${summary}. “Reset and remove schedule” clears both for good. ${note} “Empty lineup only” keeps the channel as it is, but Tunarr rebuilds the lineup from the schedule at its next library scan or start-time change. Programs stay in your libraries. This can’t be undone.`,
       confirmLabel: 'Reset and remove schedule',
       alternate: { label: 'Empty lineup only', onSelect: emptyLineup },
       onConfirm: () => recreateWithoutSchedule(channel, version, 'empty'),

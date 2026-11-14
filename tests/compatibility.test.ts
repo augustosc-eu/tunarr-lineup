@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import { CAPABILITY_MATRIX, checkVersion, cleanVersion, compatibility, decide, describedOperations, detectCompatibility, scheduleSlotTypes, unavailableReason, type CapabilityId, type ProbeResult } from '../server/compatibility';
+import { CAPABILITY_MATRIX, channelFields, partAvailable, checkVersion, cleanVersion, compatibility, decide, describedOperations, detectCompatibility, scheduleSlotTypes, unavailableReason, type CapabilityId, type ProbeResult } from '../server/compatibility';
 import { createProxyConfig, handleTunarrApi, type ProxyConfig, type ProxyRequest } from '../server/tunarrProxy';
+import { languageName, subtitleProfiles, subtitleSummary } from '../server/content';
 import { callTunarr, routeMissing } from '../server/upstream';
-import { blockedCapabilities, blockedReason, diagnosticsFile, partBlocked, versionLine } from '../lib/compatibility';
+import { blockedCapabilities, blockedParts, blockedReason, diagnosticsFile, partBlocked, versionLine } from '../lib/compatibility';
 import { testDataDir } from './tempData';
 
 const CHANNEL = '960f0f1e-6b20-4422-9af3-91b5705a3933';
@@ -127,7 +128,7 @@ describe('compatibility decisions', () => {
   it('turns off a readable capability whose required write route Tunarr’s API doesn’t list, saying which', () => {
     const noPut = new Set([...allOps!].filter((op) => op !== 'put /api/channels/{}'));
     const decided = decide(spec('channel-settings'), { ops: noPut, liveStreams: 0, probes: { channel: ok } });
-    expect(decided).toEqual({ status: 'unavailable', reason: 'Reading works, but this Tunarr’s API doesn’t list PUT /api/channels/:id, which channel settings needs, so it’s turned off instead of failing when used.' });
+    expect(decided).toEqual({ status: 'unavailable', reason: 'Reading works, but this Tunarr’s API doesn’t list PUT /api/channels/:id, which channel settings needs, so it’s turned off instead of failing when used.', parts: [expect.objectContaining({ id: 'subtitles' })] });
     // With every required route listed (or read), it's available.
     expect(decide(spec('channel-settings'), { ops: allOps, liveStreams: 0, probes: { channel: ok } }).status).toBe('available');
     // A GET the description omits but that answered exists all the same.
@@ -138,7 +139,8 @@ describe('compatibility decisions', () => {
   });
 
   it('declares required routes and parts: a part missing degrades only that part', () => {
-    for (const row of CAPABILITY_MATRIX) for (const { label, ops } of row.parts ?? []) expect([row.id, label.length > 0, ops.length > 0]).toEqual([row.id, true, true]);
+    // A part without routes of its own is a setting Tunarr may stop reading, decided from its channels.
+    for (const row of CAPABILITY_MATRIX) for (const { label, ops, retiredBy } of row.parts ?? []) expect([row.id, label.length > 0, ops.length > 0 || !!retiredBy]).toEqual([row.id, true, true]);
     expect(spec('library-search').parts?.map(({ id, ops }) => [id, ops])).toEqual([['lookup', [['get', '/api/programs/{}']]], ['browse', [['get', '/api/programs/{}/descendants']]]]);
     const noLookup = new Set([...allOps!].filter((op) => op !== 'get /api/programs/{}'));
     expect(decide(spec('library-search'), { ops: noLookup, liveStreams: 0, probes: { search: ok } })).toMatchObject({ status: 'degraded', reason: expect.stringContaining('media repair replacements') });
@@ -296,7 +298,8 @@ describe('detecting what Tunarr can do', () => {
     const report = await detectCompatibility(configFor(fake), target);
     expect(report.apiDescription).toBe('failed');
     expect(blockedCapabilities(report)).toEqual([]);
-    for (const capability of report.capabilities) expect([capability.id, capability.parts?.every((part) => part.status === 'unchecked') ?? true]).toEqual([capability.id, true]);
+    // A part with no routes of its own (a channel setting) has nothing to check, so it stays available.
+    for (const capability of report.capabilities) expect([capability.id, capability.parts?.filter((part) => part.id !== 'subtitles').every((part) => part.status === 'unchecked') ?? true]).toEqual([capability.id, true]);
     expect(statusOf(report, 'filler-lists')).toBe('degraded');
     expect(fake.calls.filter((call) => call.method !== 'GET').map((call) => call.url)).toEqual(['/api/programs/search']);
   });
@@ -464,11 +467,11 @@ describe('movie slots (dropped in Tunarr 2026.10.4)', () => {
   it('turns off only movie slots where Tunarr no longer lists them, saying what to use instead', () => {
     const before = decideWith(schedulePaths(UP_TO_2026_10_3));
     expect(before.status).toBe('available');
-    expect(before.parts).toEqual([expect.objectContaining({ id: 'movie-slots', status: 'available' })]);
+    expect(before.parts?.find((part) => part.id === 'movie-slots')).toMatchObject({ status: 'available' });
 
     const after = decideWith(schedulePaths(FROM_2026_10_4));
     expect(after.status).toBe('degraded');
-    expect(after.parts).toEqual([expect.objectContaining({ id: 'movie-slots', status: 'unavailable' })]);
+    expect(after.parts?.find((part) => part.id === 'movie-slots')).toMatchObject({ status: 'unavailable' });
     expect(after.reason).toContain('doesn’t list the “movie” slot type, so movie slots (schedule movies with a custom-show slot) won’t work; the rest does.');
     const report = { checkedAt: 0, configured: true, connected: true, version: checkVersion('2026.10.4', 'api'), apiDescription: 'read' as const, capabilities: [{ id: 'slot-schedules' as const, label: 'Slot schedules', uses: '', ...after }] };
     expect(blockedReason(report, 'slot-schedules')).toBeNull();
@@ -477,8 +480,8 @@ describe('movie slots (dropped in Tunarr 2026.10.4)', () => {
   });
 
   it('never rules movie slots out without a description that spells out slot types', () => {
-    expect(decideWith(ALL_PATHS).parts).toEqual([expect.objectContaining({ id: 'movie-slots', status: 'available' })]);
-    expect(decide(spec, { ops: null, description: 'missing', liveStreams: 0, probes: {} }).parts).toEqual([expect.objectContaining({ id: 'movie-slots', status: 'unchecked' })]);
+    expect(decideWith(ALL_PATHS).parts?.find((part) => part.id === 'movie-slots')).toMatchObject({ status: 'available' });
+    expect(decide(spec, { ops: null, description: 'missing', liveStreams: 0, probes: {} }).parts?.find((part) => part.id === 'movie-slots')).toMatchObject({ status: 'unchecked' });
   });
 
   it('detects a 2026.10.4 Tunarr as validated, with movie slots off', async () => {
@@ -500,5 +503,206 @@ describe('movie slots (dropped in Tunarr 2026.10.4)', () => {
     expect(refused.status).toBe(400);
     expect(text(refused)).toContain('no longer plays movie slots');
     expect(fake.calls.some((call) => call.url.includes('schedule-time-slots'))).toBe(false);
+  });
+});
+
+describe('the Subtitles switch (Tunarr 2026.11.2 chooses subtitles with stream selection profiles)', () => {
+  const spec = CAPABILITY_MATRIX.find((item) => item.id === 'channel-settings')!;
+  const ok: ProbeResult = { ok: true, data: { id: CHANNEL, number: 2, name: 'Small' } };
+  const allOps = describedOperations({ paths: ALL_PATHS });
+  const PROFILES = new Set(['id', 'number', 'name', 'subtitlesEnabled', 'streamSelectionProfileId']);
+  const OLDER = new Set(['id', 'number', 'name', 'subtitlesEnabled', 'useEtvNext']);
+  const reportWith = (decided: ReturnType<typeof decide>) => ({ checkedAt: 0, configured: true, connected: true, version: checkVersion('2026.11.2', 'api'), apiDescription: 'read' as const, capabilities: [{ id: 'channel-settings' as const, label: 'Channel settings', uses: '', ...decided }] });
+
+  it('turns only the switch off when Tunarr’s channels carry a stream selection profile, offering the profile instead', () => {
+    const decided = decide(spec, { ops: allOps, channelFields: PROFILES, liveStreams: 0, probes: { channel: ok } });
+    // Lineup offers what replaced it, so Channel settings isn't Limited; the reason explains the switch.
+    expect(decided.status).toBe('available');
+    expect(decided.parts).toEqual([expect.objectContaining({ id: 'subtitles', status: 'unavailable' })]);
+    expect(decided.reason).toContain('no longer reads a channel’s Subtitles switch');
+    expect(decided.reason).not.toContain('doesn’t list');
+    const report = reportWith(decided);
+    expect(blockedReason(report, 'channel-settings')).toBeNull();
+    expect(partBlocked(report, 'channel-settings', 'subtitles')).toContain('Channel Settings → Streaming → Subtitles');
+    // Not listed as turned off: it's replaced, not lost.
+    expect(blockedParts(report)).toEqual([]);
+    expect(unavailableReason(report, 'channel-settings', 'subtitles')).toContain('stream selection profiles');
+    expect(diagnosticsFile(report).capabilities[0].parts?.[0]).toMatchObject({ id: 'subtitles', status: 'unavailable', reason: expect.stringContaining('stream selection profiles') });
+  });
+
+  it('leaves older Tunarr exactly as it was, with or without an API description', () => {
+    for (const ops of [allOps, null]) {
+      const decided = decide(spec, { ops, description: ops ? 'read' : 'missing', channelFields: OLDER, liveStreams: 0, probes: { channel: ok } });
+      expect(decided.status).toBe('available');
+      expect(decided.parts).toEqual([expect.objectContaining({ id: 'subtitles', status: 'available' })]);
+    }
+    // No channel read at all: nothing rules the switch out.
+    expect(decide(spec, { ops: allOps, channelFields: null, liveStreams: 0, probes: {} }).parts?.[0].status).toBe('available');
+  });
+
+  it('reads the fields from the channel, else from the channel list', () => {
+    expect(channelFields(ok, undefined)).toEqual(new Set(['id', 'number', 'name']));
+    expect(channelFields({ ok: false, kind: 'skipped', reason: '' }, { ok: true, data: [{ id: CHANNEL, streamSelectionProfileId: null }] })?.has('streamSelectionProfileId')).toBe(true);
+    expect(channelFields(undefined, { ok: false, kind: 'failed', reason: '' })).toBeNull();
+  });
+
+  const SPANISH = '7a7a7a7a-1a2b-4c3d-8e9f-000000000001';
+  const BUILT_IN = '00000000-0000-4000-8000-000000000000';
+  const PROFILE_LIST = [
+    { uuid: BUILT_IN, name: 'Tunarr Default', locked: true, isDefault: true, rules: [{ condition: 'true', audioAction: { type: 'default' }, subtitleAction: { type: 'disable' } }], usage: { channels: [], fillerLists: [], customShows: [], programCount: 0 } },
+    { uuid: SPANISH, name: 'Spanish subs', locked: false, isDefault: false, rules: [{ condition: 'program.genre == "anime"', audioAction: { type: 'default' }, subtitleAction: { type: 'by_language', languages: ['spa', 'eng'] } }], usage: { channels: [{ uuid: CHANNEL, name: 'Small', number: 2 }], fillerLists: [], customShows: [], programCount: 0 } },
+    { uuid: '7a7a7a7a-1a2b-4c3d-8e9f-000000000002', name: 'Mixed', rules: [{ condition: 'a', subtitleAction: { type: 'default' } }, { condition: 'true', subtitleAction: { type: 'disable' } }] },
+    { uuid: '../etc', name: 'Bad id', rules: [] },
+  ];
+  const tunarr2026112 = () => {
+    const saved: Record<string, unknown> = { id: CHANNEL, number: 2, name: 'Small', subtitlesEnabled: false, streamSelectionProfileId: '7a7a7a7a-1a2b-4c3d-8e9f-000000000001', fillerCollections: [] };
+    return fakeTunarr({
+      version: { tunarr: '2026.11.2', ffmpeg: '7.1' }, openapi: { info: { version: '1.2.0-dev.1' }, paths: ALL_PATHS },
+      overrides: {
+        '/api/channels': () => json([{ id: CHANNEL, number: 2, name: 'Small', programCount: 3, subtitlesEnabled: false, streamSelectionProfileId: null }]),
+        [`/api/channels/${CHANNEL}`]: () => json(saved),
+        '/api/stream-selection-profiles': () => json(PROFILE_LIST),
+      },
+    });
+  };
+  const settings = (body: unknown): ProxyRequest => ({ method: 'PUT', url: `/api/tunarr/channels/${CHANNEL}/settings`, headers: { host: 'lineup.local:3000', 'content-type': 'application/json', origin: 'http://lineup.local:3000' }, body: JSON.stringify(body) });
+
+  it('detects a 2026.11.2 Tunarr as validated, with only the switch off', async () => {
+    const report = await detectCompatibility(configFor(tunarr2026112()), target);
+    expect(report.version).toMatchObject({ tunarr: '2026.11.2', status: 'validated' });
+    expect(report.capabilities.find((item) => item.id === 'channel-settings')?.parts).toEqual([expect.objectContaining({ id: 'subtitles', status: 'unavailable' })]);
+    expect(blockedCapabilities(report)).toEqual([]);
+  });
+
+  it('refuses a change to the switch before Tunarr, and saves everything else with the channel’s profile kept', async () => {
+    const fake = tunarr2026112();
+    const config = configFor(fake);
+    await compatibility(config);
+    const refused = await handleTunarrApi(settings({ subtitlesEnabled: true }), config);
+    expect(refused.status).toBe(501);
+    expect(text(refused)).toContain('stream selection profiles');
+    expect(fake.calls.some((call) => call.method === 'PUT')).toBe(false);
+
+    // The value it already has isn't a change; other settings save, and Tunarr's own fields go back as they were.
+    const saved = await handleTunarrApi(settings({ subtitlesEnabled: false, name: 'Renamed' }), config);
+    expect(saved.status).toBe(200);
+    const put = fake.calls.find((call) => call.method === 'PUT')!;
+    expect(JSON.parse(put.body!)).toMatchObject({ name: 'Renamed', subtitlesEnabled: false, streamSelectionProfileId: '7a7a7a7a-1a2b-4c3d-8e9f-000000000001' });
+  });
+
+  it('refuses a batch that turns the switch on or off', async () => {
+    const fake = tunarr2026112();
+    const config = configFor(fake);
+    await compatibility(config);
+    const batch = (changes: Record<string, unknown>) => handleTunarrApi({ method: 'POST', url: '/api/tunarr/batch/preview', headers: { host: 'lineup.local:3000', 'content-type': 'application/json', origin: 'http://lineup.local:3000' }, body: JSON.stringify({ operation: 'settings', channelIds: [CHANNEL], params: { changes } }) }, config);
+    const refused = await batch({ subtitlesEnabled: true });
+    expect(refused.status).toBe(501);
+    expect(text(refused)).toContain('stream selection profiles');
+    expect((await batch({ stealth: true })).status).toBe(200);
+  });
+
+  it('keeps the switch working on 2026.11.0', async () => {
+    const fake = fakeTunarr({ version: { tunarr: '2026.11.0', ffmpeg: '7.1' }, overrides: { [`/api/channels/${CHANNEL}`]: () => json({ id: CHANNEL, number: 2, name: 'Small', subtitlesEnabled: false, useEtvNext: false }) } });
+    const config = configFor(fake);
+    await compatibility(config);
+    expect((await handleTunarrApi(settings({ subtitlesEnabled: true }), config)).status).toBe(200);
+    expect(JSON.parse(fake.calls.find((call) => call.method === 'PUT')!.body!)).toMatchObject({ subtitlesEnabled: true });
+  });
+});
+
+describe('an optional part: removing a slot schedule in place (Tunarr 2026.11.2)', () => {
+  const spec = CAPABILITY_MATRIX.find((item) => item.id === 'slot-schedules')!;
+  const report = (decided: ReturnType<typeof decide>) => ({ checkedAt: 0, configured: true, connected: true, version: checkVersion('2026.11.0', 'api'), apiDescription: 'read' as const, capabilities: [{ id: 'slot-schedules' as const, label: 'Slot schedules', uses: '', ...decided }] });
+
+  it('is used where Tunarr lists the route, and older Tunarr is neither Limited nor refused anything', () => {
+    const newer = decide(spec, { ops: describedOperations({ paths: { ...ALL_PATHS, '/api/channels/{id}/schedule': { delete: {} } } }), description: 'read', liveStreams: 0, probes: {} });
+    expect(partAvailable(report(newer), 'slot-schedules', 'remove-schedule')).toBe(true);
+
+    const older = decide(spec, { ops: describedOperations({ paths: ALL_PATHS }), description: 'read', liveStreams: 0, probes: {} });
+    expect(older.status).toBe('available');
+    expect(older.reason).not.toContain('schedule in place');
+    expect(older.parts?.find((part) => part.id === 'remove-schedule')).toMatchObject({ status: 'unavailable', optional: true });
+    expect(partAvailable(report(older), 'slot-schedules', 'remove-schedule')).toBe(false);
+    expect(partBlocked(report(older), 'slot-schedules', 'remove-schedule')).toBeNull();
+    expect(unavailableReason(report(older), 'slot-schedules', 'remove-schedule')).toBeNull();
+    expect(blockedParts(report(older))).toEqual([]);
+
+    // No description: not used (it can't be confirmed), and still nothing is Limited for it.
+    const none = decide(spec, { ops: null, description: 'missing', liveStreams: 0, probes: {} });
+    expect(none.reason).not.toContain('schedule in place');
+    expect(partAvailable(report(none), 'slot-schedules', 'remove-schedule')).toBe(false);
+  });
+});
+
+describe('choosing a channel’s subtitle profile (Tunarr 2026.11.2)', () => {
+  const SPANISH = '7a7a7a7a-1a2b-4c3d-8e9f-000000000001';
+  const PROFILES = [
+    { uuid: '00000000-0000-4000-8000-000000000000', name: 'Tunarr Default', isDefault: true, rules: [{ condition: 'true', subtitleAction: { type: 'disable' } }] },
+    { uuid: SPANISH, name: 'Spanish subs', isDefault: false, rules: [{ condition: 'program.genre == "anime"', subtitleAction: { type: 'by_language', languages: ['spa', 'eng'] } }], usage: { channels: [{ uuid: CHANNEL, name: 'Small', number: 2 }] } },
+  ];
+  const headers = { host: 'lineup.local:3000', 'content-type': 'application/json', origin: 'http://lineup.local:3000' };
+  const tunarr = (release: '2026.11.2' | '2026.11.0') => {
+    const channel: Record<string, unknown> = { id: CHANNEL, number: 2, name: 'Small', subtitlesEnabled: false, fillerCollections: [], ...(release === '2026.11.2' ? { streamSelectionProfileId: null } : { useEtvNext: false }) };
+    return fakeTunarr({
+      version: { tunarr: release, ffmpeg: '7.1' },
+      overrides: {
+        '/api/channels': () => json([{ ...channel, programCount: 3 }]),
+        [`/api/channels/${CHANNEL}`]: () => json(channel),
+        '/api/stream-selection-profiles': () => json(PROFILES),
+      },
+    });
+  };
+
+  it('describes what each profile does with subtitles, in Lineup’s words', () => {
+    expect(languageName('spa')).toBe('Spanish');
+    expect(languageName('und')).toBe('und');
+    expect(subtitleSummary([{ subtitleAction: { type: 'disable' } }])).toBe('No subtitles');
+    expect(subtitleSummary([{ subtitleAction: { type: 'default' } }])).toBe('The file’s default subtitles');
+    expect(subtitleSummary([{ subtitleAction: { type: 'by_language', languages: ['spa', 'jpn'] } }])).toBe('Subtitles in Spanish, Japanese');
+    expect(subtitleSummary([{ subtitleAction: { type: 'default' } }, { subtitleAction: { type: 'disable' } }])).toBe('Depends on the program (2 rules)');
+    expect(subtitleProfiles([...PROFILES, { uuid: '../x', name: 'Bad' }, 'junk'])).toEqual([
+      { id: '00000000-0000-4000-8000-000000000000', name: 'Tunarr Default', isDefault: true, subtitles: 'No subtitles' },
+      { id: SPANISH, name: 'Spanish subs', isDefault: false, subtitles: 'Subtitles in Spanish, English' },
+    ]);
+  });
+
+  it('lists the profiles without Tunarr’s rules or where they’re used', async () => {
+    const response = await handleTunarrApi({ method: 'GET', url: '/api/tunarr/stream-selection-profiles', headers: { host: 'lineup.local:3000' } }, configFor(tunarr('2026.11.2')));
+    expect(response.status).toBe(200);
+    expect(text(response)).not.toContain('anime');
+    expect(text(response)).not.toContain('usage');
+    expect(JSON.parse(text(response))).toHaveLength(2);
+  });
+
+  it('saves a channel’s profile, or Tunarr’s default, keeping everything else', async () => {
+    const fake = tunarr('2026.11.2');
+    const config = configFor(fake);
+    await compatibility(config);
+    const put = (body: unknown) => handleTunarrApi({ method: 'PUT', url: `/api/tunarr/channels/${CHANNEL}/settings`, headers, body: JSON.stringify(body) }, config);
+    expect((await put({ streamSelectionProfileId: SPANISH.toUpperCase() })).status).toBe(200);
+    expect(JSON.parse(fake.calls.filter((call) => call.method === 'PUT').at(-1)!.body!)).toMatchObject({ streamSelectionProfileId: SPANISH, subtitlesEnabled: false, name: 'Small' });
+    expect((await put({ streamSelectionProfileId: null })).status).toBe(200);
+    expect(JSON.parse(fake.calls.filter((call) => call.method === 'PUT').at(-1)!.body!)).toMatchObject({ streamSelectionProfileId: null });
+    expect((await put({ streamSelectionProfileId: 'not-a-profile' })).status).toBe(400);
+  });
+
+  it('refuses a profile on a Tunarr without them, which would drop it silently', async () => {
+    const fake = tunarr('2026.11.0');
+    const config = configFor(fake);
+    await compatibility(config);
+    const response = await handleTunarrApi({ method: 'PUT', url: `/api/tunarr/channels/${CHANNEL}/settings`, headers, body: JSON.stringify({ streamSelectionProfileId: SPANISH }) }, config);
+    expect(response.status).toBe(501);
+    expect(text(response)).toContain('Use the Subtitles switch');
+    expect(fake.calls.some((call) => call.method === 'PUT')).toBe(false);
+  });
+
+  it('previews a batch by profile name, and refuses one where there are no profiles', async () => {
+    const preview = (config: ProxyConfig, profile: string | null) => handleTunarrApi({ method: 'POST', url: '/api/tunarr/batch/preview', headers, body: JSON.stringify({ operation: 'settings', channelIds: [CHANNEL], params: { changes: { streamSelectionProfileId: profile } } }) }, config);
+    const shown = JSON.parse(text(await preview(configFor(tunarr('2026.11.2')), SPANISH)));
+    expect(shown.channels[0].changes).toEqual([{ field: 'streamSelectionProfileId', label: 'Subtitle profile', before: 'Tunarr’s default (Tunarr Default)', after: 'Spanish subs' }]);
+    expect((await preview(configFor(tunarr('2026.11.2')), '7a7a7a7a-1a2b-4c3d-8e9f-0000000000ff')).status).toBe(400);
+    const older = await preview(configFor(tunarr('2026.11.0')), SPANISH);
+    expect(older.status).toBe(501);
+    expect(text(older)).toContain('Use the Subtitles switch');
   });
 });

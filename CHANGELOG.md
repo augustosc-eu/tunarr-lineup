@@ -8,6 +8,15 @@ were renamed 2026.10.1 and 2026.10.2.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Tunarr 2026.11.2 and subtitles:** Tunarr 2026.11.2 chooses subtitles with stream selection profiles and no longer reads a channel’s own Subtitles switch, so turning it on or off from Lineup saved but changed nothing. On such a Tunarr, **Subtitles** in Channel Settings → Streaming is now a choice of profile (or Tunarr’s default), each described by what it does with subtitles (“Subtitles in Spanish”, “No subtitles”…), and batch operations offer **Subtitles (profile)** for many channels at once, previewed by name. Profiles are still made in Tunarr. The Lineup server refuses a change to the old switch there, and a profile on a Tunarr without them. Earlier Tunarr releases keep the switch.
+
+### Changed
+
+- **Detach and Reset keep the channel on Tunarr 2026.11.2:** removing a slot schedule (Detach to manual lineup, or Reset and remove schedule) now uses Tunarr’s own way to drop a schedule where Tunarr offers it, so the channel keeps its internal id and other channels’ redirects to it keep working. Older Tunarr still gets the recreated channel, as before, with the same warning.
+- **Compatibility:** checked against Tunarr 2026.11.1 and 2026.11.2 (still 1.x and 2026.9–2026.11). The one breaking change in 2026.11.2 is to a route Lineup doesn’t use; a channel’s, custom show’s or filler list’s stream selection profile is kept when Lineup saves them, and watching passes on the subtitle track Tunarr 2026.11.2 now serves.
+
 ## [2026.11.3] - 2026-11-03
 
 ### Fixed

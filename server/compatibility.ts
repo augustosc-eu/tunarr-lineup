@@ -20,7 +20,7 @@ export type CapabilityId =
 /** One part of a capability the desk can refuse on its own (a manager's create, edit or delete button). */
 export type PartId =
   | 'create' | 'edit' | 'delete' | 'contents' | 'copy' | 'preview' | 'lookup' | 'browse'
-  | 'refresh' | 'enable' | 'scan' | 'sign-in-jellyfin' | 'sign-in-emby' | 'movie-slots';
+  | 'refresh' | 'enable' | 'scan' | 'sign-in-jellyfin' | 'sign-in-emby' | 'movie-slots' | 'subtitles' | 'remove-schedule';
 
 /**
  * available: checked and usable, every part of it. degraded: usable, but not
@@ -42,7 +42,12 @@ export type CapabilityStatus = 'available' | 'degraded' | 'unavailable' | 'untes
  * description to go by: it's tried when used).
  */
 export type PartStatus = 'available' | 'unavailable' | 'unchecked';
-export type CapabilityPart = { id: PartId; label: string; status: PartStatus };
+/**
+ * `reason`: why it's refused, when that isn't a missing route (a setting this Tunarr no longer reads).
+ * `optional`: a better way Lineup uses when Tunarr has it, with a fallback otherwise; never
+ * refused, never makes the capability Limited, and not listed as turned off.
+ */
+export type CapabilityPart = { id: PartId; label: string; status: PartStatus; reason?: string; optional?: true };
 
 export type Capability = { id: CapabilityId; label: string; status: CapabilityStatus; reason: string; uses: string; parts?: CapabilityPart[] };
 
@@ -73,7 +78,9 @@ export type CompatibilityReport = {
  * releases moved from 1.x to dates (YEAR.MONTH.N, 2026.9 onwards); 2026.10.4
  * dropped movie slots, which the API description shows (`movie-slots` below).
  * 2026.11.0 only added routes and fields; its ErsatzTV Next streams are served
- * from their own folder, which `server/watch.ts` passes on.
+ * from their own folder, which `server/watch.ts` passes on. 2026.11.2 chooses
+ * subtitles with stream selection profiles and stops reading a channel's own
+ * subtitle switch, which its channels show (`subtitles` below).
  */
 export const VALIDATED_VERSIONS = {
   ranges: [{ from: [1, 0, 0], below: [2, 0, 0] }, { from: [2026, 9, 0], below: [2026, 12, 0] }],
@@ -103,8 +110,11 @@ type Spec = {
    * with no required routes is unavailable only when every part is.
    * `label` finishes "… won't work" ("deleting filler lists").
    * `slotType`: the part also needs that slot type in the schedule routes' request schema.
+   * `retiredBy`: the part is a setting Tunarr stopped reading, which its channels show by
+   * carrying `field`; then it's refused with `reason`. A part with no routes of its own
+   * is otherwise always available (there's nothing to check).
    */
-  parts?: Array<{ id: PartId; label: string; ops: Op[]; slotType?: string }>;
+  parts?: Array<{ id: PartId; label: string; ops: Op[]; slotType?: string; retiredBy?: { field: string; reason: string }; optional?: true }>;
   /** The read-only request that proves it, when there is one. */
   probe?: ProbeKey;
 };
@@ -119,11 +129,19 @@ export const CAPABILITY_MATRIX: readonly Spec[] = [
     parts: [
       // Tunarr 2026.10.4 removed movie slots (movies go in a custom show); the routes stay, the slot type goes.
       { id: 'movie-slots', label: 'movie slots (schedule movies with a custom-show slot)', ops: [['post', '/api/channels/{}/schedule-slots'], ['post', '/api/channels/{}/schedule-time-slots']], slotType: 'movie' },
+      // Tunarr 2026.11.2 can drop a schedule itself; before, Detach and Reset recreate the channel (server/recreateChannel.ts).
+      { id: 'remove-schedule', label: 'removing a slot schedule in place (the channel keeps its id)', ops: [['delete', '/api/channels/{}/schedule']], optional: true },
     ],
   },
   { id: 'guide', label: 'Guide', uses: 'Guide grid, now and next, the desk’s guide times, Control Room', ops: [['get', '/api/guide/channels']], probe: 'guide' },
   { id: 'sessions', label: 'Viewer counts', uses: 'Viewer badges, Control Room viewers', ops: [['get', '/api/sessions']], probe: 'sessions' },
-  { id: 'channel-settings', label: 'Channel settings', uses: 'Channel Settings, batch group, transcode, filler and number changes', ops: [['get', '/api/channels/{}'], ['put', '/api/channels/{}']], probe: 'channel' },
+  {
+    id: 'channel-settings', label: 'Channel settings', uses: 'Channel Settings, batch group, transcode, filler and number changes', ops: [['get', '/api/channels/{}'], ['put', '/api/channels/{}']], probe: 'channel',
+    parts: [
+      // Tunarr 2026.11.2 picks subtitles with stream selection profiles; the old switch is kept but unread.
+      { id: 'subtitles', label: 'the Subtitles switch', ops: [], retiredBy: { field: 'streamSelectionProfileId', reason: 'This Tunarr chooses subtitles with stream selection profiles and no longer reads a channel’s Subtitles switch, so Lineup offers the profile instead: Channel Settings → Streaming → Subtitles, or a batch’s Subtitles (profile).' } },
+    ],
+  },
   {
     id: 'channel-admin', label: 'Creating and deleting channels', uses: 'New Channel, Duplicate Channel, Delete Channel', ops: [],
     parts: [
@@ -353,6 +371,8 @@ type Evidence = {
   ops: Set<string> | null;
   /** Slot types the schedule routes accept, from the API description (null: not spelled out). */
   slotTypes?: Set<string> | null;
+  /** The fields Tunarr's channels carry, from the channel reads (null: no channel was read). */
+  channelFields?: Set<string> | null;
   /** How reading Tunarr's API description went: read, missing (an older Tunarr without one), or failed (it may pass). */
   description?: CompatibilityReport['apiDescription'];
   probes: Partial<Record<ProbeKey, ProbeResult>>;
@@ -362,16 +382,25 @@ type Evidence = {
 
 const list = (items: string[]) => (items.length > 1 ? `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}` : items[0] ?? '');
 
+/** True when Tunarr's channels show it no longer reads this part's setting. */
+const isRetired = (part: NonNullable<Spec['parts']>[number], channelFields: Set<string> | null | undefined) => !!part.retiredBy && !!channelFields?.has(part.retiredBy.field);
+
 /**
  * Each part's state: only Tunarr's API description, read successfully, can say
- * a write route (or a slot type it accepts) is missing.
+ * a write route (or a slot type it accepts) is missing; only a channel Tunarr
+ * returned can say a setting is no longer read.
  */
-export function decideParts(spec: Spec, ops: Set<string> | null, slotTypes: Set<string> | null = null): CapabilityPart[] {
-  return (spec.parts ?? []).map(({ id, label, ops: needs, slotType }) => ({
-    id, label,
-    status: !ops ? 'unchecked'
-      : needs.every((op) => ops.has(`${op[0]} ${op[1]}`)) && (!slotType || !slotTypes || slotTypes.has(slotType)) ? 'available' : 'unavailable',
-  }));
+export function decideParts(spec: Spec, ops: Set<string> | null, slotTypes: Set<string> | null = null, channelFields: Set<string> | null = null): CapabilityPart[] {
+  return (spec.parts ?? []).map((part) => {
+    const { id, label, ops: needs, slotType } = part;
+    if (isRetired(part, channelFields)) return { id, label, status: 'unavailable', reason: part.retiredBy!.reason };
+    return {
+      id, label, ...(part.optional ? { optional: true as const } : {}),
+      status: !needs.length && !slotType ? 'available'
+        : !ops ? 'unchecked'
+        : needs.every((op) => ops.has(`${op[0]} ${op[1]}`)) && (!slotType || !slotTypes || slotTypes.has(slotType)) ? 'available' : 'unavailable',
+    };
+  });
 }
 
 /** What the description lacks for one part: its routes, or (when they're listed) its slot type. */
@@ -395,15 +424,25 @@ export function decide(spec: Spec, evidence: Evidence): Pick<Capability, 'status
   const probeResult = spec.probe ? evidence.probes[spec.probe] : undefined;
   // A route that just answered exists, whatever the description says.
   const absent = spec.ops.filter((op, index) => !listed(op) && !(index === 0 && probeResult?.ok));
-  const parts = decideParts(spec, evidence.ops, evidence.slotTypes ?? null);
+  const parts = decideParts(spec, evidence.ops, evidence.slotTypes ?? null, evidence.channelFields ?? null);
   const withParts = (decided: Pick<Capability, 'status' | 'reason'>): Pick<Capability, 'status' | 'reason' | 'parts'> => (parts.length ? { ...decided, parts } : decided);
-  const missing = (spec.parts ?? []).filter(({ id }) => parts.find((part) => part.id === id)?.status === 'unavailable');
-  const unchecked = parts.filter((part) => part.status === 'unchecked');
-  const partNote = missing.length
-    ? ` Tunarr’s API doesn’t list ${list([...new Set(missing.flatMap((part) => lacking(part, listed)))])}, so ${list(missing.map(({ label }) => label))} won’t work; the rest does.`
-    : unchecked.length ? ` ${unchecked.length === parts.length ? 'Its changes' : list(unchecked.map(({ label }) => label))} couldn’t be checked (${evidence.description === 'failed' ? 'Tunarr’s API description didn’t load just now' : 'Tunarr doesn’t describe its API'}), so ${unchecked.length === 1 ? 'it’s' : 'they’re'} tried when used.` : '';
-  // A read that worked, with parts missing or unchecked, is usable but not whole.
-  const readWorks = (status: CapabilityStatus, reason: string): Pick<Capability, 'status' | 'reason' | 'parts'> => withParts(partNote && status === 'available' ? { status: 'degraded', reason: `${reason}${partNote}` } : { status, reason: `${reason}${partNote}` });
+  // Optional parts have a fallback: they never limit the capability.
+  const refusedParts = (spec.parts ?? []).filter(({ id, optional }) => !optional && parts.find((part) => part.id === id)?.status === 'unavailable');
+  // A retired setting has its own reason; the rest are routes (or slot types) the description lacks.
+  const retired = refusedParts.filter((part) => isRetired(part, evidence.channelFields));
+  const missing = refusedParts.filter((part) => !retired.includes(part));
+  const unchecked = parts.filter((part) => part.status === 'unchecked' && !part.optional);
+  const notes = [
+    ...(missing.length ? [`Tunarr’s API doesn’t list ${list([...new Set(missing.flatMap((part) => lacking(part, listed)))])}, so ${list(missing.map(({ label }) => label))} won’t work; the rest does.`] : []),
+    ...retired.map((part) => part.retiredBy!.reason),
+  ];
+  const partNote = notes.length
+    ? ` ${notes.join(' ')}`
+    : unchecked.length ? ` ${unchecked.length === parts.filter((part) => !part.optional).length ? 'Its changes' : list(unchecked.map(({ label }) => label))} couldn’t be checked (${evidence.description === 'failed' ? 'Tunarr’s API description didn’t load just now' : 'Tunarr doesn’t describe its API'}), so ${unchecked.length === 1 ? 'it’s' : 'they’re'} tried when used.` : '';
+  // A read that worked, with parts missing or unchecked, is usable but not whole. A retired
+  // setting isn't a gap: Lineup offers what replaced it, so it's only explained.
+  const limited = missing.length > 0 || unchecked.length > 0;
+  const readWorks = (status: CapabilityStatus, reason: string): Pick<Capability, 'status' | 'reason' | 'parts'> => withParts(limited && status === 'available' ? { status: 'degraded', reason: `${reason}${partNote}` } : { status, reason: `${reason}${partNote}` });
 
   if (spec.id === 'hls-streaming') {
     return evidence.liveStreams > 0
@@ -443,6 +482,13 @@ const smallestChannel = (channels: unknown) => {
 };
 
 const SKIP = (reason: string): ProbeResult => ({ ok: false, kind: 'skipped', reason });
+
+/** The fields Tunarr's channels carry: the channel read, else the first in the list (null when neither was read). */
+export function channelFields(channel: ProbeResult | undefined, channels: ProbeResult | undefined): Set<string> | null {
+  const one = channel?.ok && isObject(channel.data) ? channel.data
+    : channels?.ok && Array.isArray(channels.data) ? (channels.data as unknown[]).find(isObject) : undefined;
+  return one ? new Set(Object.keys(one)) : null;
+}
 
 /**
  * Asks `target` what it can do. Read-only: GETs, Tunarr's API description, and
@@ -504,7 +550,7 @@ export async function detectCompatibility(config: ProxyConfig, target: TunarrTar
   const liveStreams = sessions.ok && isObject(sessions.data)
     ? Object.values(sessions.data).reduce((sum: number, list) => sum + (Array.isArray(list) ? list.filter((session) => isObject(session) && session.state !== 'stopped' && session.state !== 'error').length : 0), 0)
     : 0;
-  const evidence: Evidence = { ops, slotTypes: ops ? scheduleSlotTypes(description) : null, description: apiDescription, liveStreams, probes: { channels, channel, programming, guide, sessions, fillerLists, customShows, smartCollections, mediaSources, search, transcodeConfigs } };
+  const evidence: Evidence = { ops, slotTypes: ops ? scheduleSlotTypes(description) : null, channelFields: channelFields(channel, channels), description: apiDescription, liveStreams, probes: { channels, channel, programming, guide, sessions, fillerLists, customShows, smartCollections, mediaSources, search, transcodeConfigs } };
   return {
     checkedAt: now, configured: true, connected: true, version, apiDescription,
     capabilities: CAPABILITY_MATRIX.map((spec) => ({ id: spec.id, label: spec.label, uses: spec.uses, ...decide(spec, evidence) })),
@@ -554,12 +600,17 @@ export function cachedCompatibility(config: ProxyConfig, now = Date.now()): Comp
   return now - entry.report.checkedAt < COMPATIBILITY_TTL_MS ? entry.report : undefined;
 }
 
+/** True only when the report shows `part` of `id` is offered (for an optional part: use the better way). */
+export function partAvailable(report: CompatibilityReport | undefined, id: CapabilityId, part: PartId): boolean {
+  return report?.capabilities.find((item) => item.id === id)?.parts?.find((item) => item.id === part)?.status === 'available';
+}
+
 /** Why `id` (or its `part`) can't be used on this Tunarr, or null when it can (or hasn't been ruled out). */
 export function unavailableReason(report: CompatibilityReport | undefined, id: CapabilityId, part?: PartId): string | null {
   const capability = report?.capabilities.find((item) => item.id === id);
   if (capability?.status === 'unavailable') return `${capability.label} isn’t available on this Tunarr: ${capability.reason}`;
-  const missing = part ? capability?.parts?.find((item) => item.id === part && item.status === 'unavailable') : undefined;
-  return missing ? `This Tunarr’s API doesn’t offer ${missing.label}.` : null;
+  const missing = part ? capability?.parts?.find((item) => item.id === part && item.status === 'unavailable' && !item.optional) : undefined;
+  return missing ? missing.reason ?? `This Tunarr’s API doesn’t offer ${missing.label}.` : null;
 }
 
 /** A short line for Test Connection: the version and how many features are missing. */

@@ -7,6 +7,9 @@ import type { Template } from '../server/templateSchema';
 import type { ChannelSettings, ContentProgram, ListSummary, ManagedSource, MediaSource, NamedItem, NewMediaSource, SearchResult, SmartCollectionView, TranscodeProfile } from './library';
 import type { SchedulePreview, Slot, SlotSchedule } from './schedule';
 import type { ChannelRef, RecreateResult as RecreatedChannel } from '../server/recreateChannel';
+import type { SubtitleProfile } from '../server/content';
+
+export type { SubtitleProfile };
 import { linkedSignal, nextPaint, type LoadPhase } from './loading';
 import type { ChangeSummary } from '../server/scheduler';
 import type { Snapshot, SnapshotSummary } from '../server/snapshotStore';
@@ -297,6 +300,8 @@ export const tunarrApi = {
   searchLibrary: (query: LibraryQuery) => request<SearchResult>('/api/tunarr/library/search', jsonBody('POST', query)),
   descendants: (programId: string) => request<ContentProgram[]>(`/api/tunarr/programs/${encodeURIComponent(programId)}/descendants`),
   smartCollections: () => request<NamedItem[]>('/api/tunarr/smart-collections'),
+  /** Tunarr 2026.11.2+: the stream selection profiles a channel can use, with what each does with subtitles. */
+  subtitleProfiles: () => request<SubtitleProfile[]>('/api/tunarr/stream-selection-profiles'),
   fillerLists: () => request<ListSummary[]>('/api/tunarr/filler-lists'),
   fillerListPrograms: (id: string) => request<ContentProgram[]>(`/api/tunarr/filler-lists/${encodeURIComponent(id)}/programs`),
   createFillerList: (name: string, programs: ContentProgram[]) => request<{ id: string }>('/api/tunarr/filler-lists', jsonBody('POST', { name, programs })),
@@ -311,8 +316,9 @@ export const tunarrApi = {
     request<{ id: string; name: string; number: number }>('/api/tunarr/channels/create', jsonBody('POST', body)),
   deleteChannel: (id: string) => request<unknown>(channelPath(id), { method: 'DELETE' }),
   /** Other channels whose lineup or slot schedule redirects to this one. */
-  channelRedirects: (id: string) => request<{ redirects: ChannelRef[] }>(`${channelPath(id)}/recreate`),
-  /** Recreates the channel without its slot schedule (Tunarr can't drop one); it gets a new id. */
+  /** How dropping the schedule will be done (`inPlace` on Tunarr 2026.11.2+) and, for a recreate, which channels redirect here. */
+  channelRedirects: (id: string) => request<{ redirects: ChannelRef[]; inPlace?: boolean }>(`${channelPath(id)}/recreate`),
+  /** Drops the channel's slot schedule: in place where Tunarr can (2026.11.2+), else by recreating it with a new id. */
   recreateChannel: (id: string, lineup: 'keep' | 'empty', version: string) =>
     request<RecreatedChannel>(`${channelPath(id)}/recreate`, {
       method: 'POST',

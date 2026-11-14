@@ -45,6 +45,8 @@ export type ChannelSettings = {
   streamMode?: string;
   transcodeConfigId?: string;
   subtitlesEnabled?: boolean;
+  /** Tunarr 2026.11.2+: the stream selection profile that picks subtitles (null: Tunarr's default). Absent on older Tunarr. */
+  streamSelectionProfileId?: string | null;
   stealth?: boolean;
   onDemand?: { enabled: boolean };
 };

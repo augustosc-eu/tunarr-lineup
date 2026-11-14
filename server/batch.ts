@@ -17,8 +17,8 @@
 import { createBatchStore, isBatchId, summarizeBatch, type BatchChannel, type BatchOperation, type BatchRecord, type BatchStore } from './batchStore.js';
 import { withChannelLock } from './channelLock.js';
 import { StoreError } from './jsonFile.js';
-import { failureReason } from './compatibility.js';
-import { MAX_CHANNEL_NUMBER, NOT_SAVEABLE, validateChannelSettings } from './content.js';
+import { compatibility, failureReason } from './compatibility.js';
+import { MAX_CHANNEL_NUMBER, NOT_SAVEABLE, subtitleProfiles, subtitlesRefused, validateChannelSettings } from './content.js';
 import { lineupLength, programmingVersion } from './lineupVersion.js';
 import { buildPackage, importSummary, MAX_PACKAGE_CHANNELS, packageChannel, validatePackage, type ProgrammingPackage } from './programmingPackage.js';
 import type { ProxyConfig, ProxyResponse, TunarrTarget } from './tunarrProxy.js';
@@ -28,7 +28,7 @@ export { createBatchStore };
 export const MAX_BATCH_CHANNELS = 50;
 const READ_CONCURRENCY = 3;
 /** Options a batch may set; the rest of Channel Settings stays per channel. */
-export const BATCH_SETTING_FIELDS = ['stealth', 'onDemand', 'guideMinimumDuration', 'guideFlexTitle', 'streamMode', 'subtitlesEnabled'] as const;
+export const BATCH_SETTING_FIELDS = ['stealth', 'onDemand', 'guideMinimumDuration', 'guideFlexTitle', 'streamMode', 'subtitlesEnabled', 'streamSelectionProfileId'] as const;
 const FILLER_FIELDS = ['fillerCollections', 'fillerRepeatCooldown', 'disableFillerOverlay'] as const;
 const OPERATIONS: readonly BatchOperation[] = ['filler', 'group', 'transcode', 'renumber', 'settings', 'repair', 'import'];
 const CHANNEL_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
@@ -40,6 +40,7 @@ export const FIELD_LABELS: Record<string, string> = {
   fillerCollections: 'Filler lists', fillerRepeatCooldown: 'Filler repeat cooldown', disableFillerOverlay: 'Hide watermark during filler',
   groupTitle: 'Group', transcodeConfigId: 'Transcode profile', number: 'Number', stealth: 'Hidden channel', onDemand: 'On demand',
   guideMinimumDuration: 'Minimum guide entry', guideFlexTitle: 'Guide title for flex', streamMode: 'Stream format', subtitlesEnabled: 'Subtitles',
+  streamSelectionProfileId: 'Subtitle profile',
 };
 
 type Json = Record<string, unknown>;
@@ -156,9 +157,12 @@ const pick = (channel: Json, fields: readonly string[]) => Object.fromEntries(fi
 export const settingsVersion = (values: Json) => programmingVersion(values, null);
 const fieldsOf = (params: BatchParams): string[] => (params.operation === 'renumber' ? ['number'] : 'changes' in params ? Object.keys(params.changes) : []);
 
-type Names = { lists: Map<string, string>; profiles: Map<string, string> };
+/** `subtitleProfiles`: stream selection profiles by id, plus `''` for what Tunarr's default is called. */
+type Names = { lists: Map<string, string>; profiles: Map<string, string>; subtitleProfiles?: Map<string, string> };
 /** A value as a person reads it in the preview. */
 export function shown(field: string, value: unknown, names: Names): string {
+  // null is a choice here: Tunarr's default profile.
+  if (field === 'streamSelectionProfileId') return value === null || value === undefined ? `Tunarr’s default${names.subtitleProfiles?.get('') ? ` (${names.subtitleProfiles.get('')})` : ''}` : names.subtitleProfiles?.get(String(value)) ?? 'a profile that’s gone';
   if (value === null || value === undefined) return 'not set';
   switch (field) {
     case 'fillerCollections': return Array.isArray(value) && value.length ? value.map((item) => `${names.lists.get(String((item as Json).id)) ?? 'a deleted list'}${Number((item as Json).weight) !== 1 ? ` (weight ${(item as Json).weight})` : ''}`).join(', ') : 'none';
@@ -339,12 +343,19 @@ function batchLabel(params: BatchParams, count: number, names: Names) {
 }
 
 async function readNames(config: ProxyConfig, target: TunarrTarget, params: BatchParams): Promise<Names> {
-  const [lists, profiles] = await Promise.all([
+  const subtitles = params.operation === 'settings' && 'streamSelectionProfileId' in params.changes;
+  const [lists, profiles, subtitleList] = await Promise.all([
     params.operation === 'filler' ? callTunarr(config, target, 'GET', '/api/filler-lists').catch(() => []) : Promise.resolve([]),
     params.operation === 'transcode' ? callTunarr(config, target, 'GET', '/api/transcode_configs') : Promise.resolve([]),
+    subtitles ? callTunarr(config, target, 'GET', '/api/stream-selection-profiles') : Promise.resolve([]),
   ]);
   const map = (list: unknown) => new Map((Array.isArray(list) ? list : []).filter(isObject).map((item) => [String(item.id), String(item.name ?? '')]));
-  return { lists: map(lists), profiles: map(profiles) };
+  const names: Names = { lists: map(lists), profiles: map(profiles) };
+  if (subtitles) {
+    const list = subtitleProfiles(subtitleList);
+    names.subtitleProfiles = new Map([...list.map((item) => [item.id, item.name] as [string, string]), ['', list.find((item) => item.isDefault)?.name ?? '']]);
+  }
+  return names;
 }
 
 /** Channels that would end on the same number, and why each renumber is blocked. */
@@ -366,6 +377,10 @@ export async function previewBatch(config: ProxyConfig, target: TunarrTarget, re
   const names = await readNames(config, target, params);
   if (params.operation === 'transcode' && !names.profiles.has(String(params.changes.transcodeConfigId))) {
     throw new UpstreamError(400, 'invalid_request', 'That transcode profile no longer exists in Tunarr.');
+  }
+  const profileId = params.operation === 'settings' ? params.changes.streamSelectionProfileId : undefined;
+  if (typeof profileId === 'string' && !names.subtitleProfiles?.has(profileId)) {
+    throw new UpstreamError(400, 'invalid_request', 'That subtitle profile no longer exists in Tunarr.');
   }
   const numberProblems = params.operation === 'renumber' ? renumberProblems(all, params.numbers) : new Map<string, string>();
   // Replacements are looked up in Tunarr before anything is planned with them.
@@ -859,6 +874,16 @@ export async function handleBatchRoute(route: BatchRoute, context: { config: Pro
   }
 }
 
+/**
+ * A settings batch that changes subtitles the way this Tunarr doesn't: the old
+ * switch where profiles choose them, or a profile where there are none
+ * (rollbacks still restore either). Decided on a fresh check.
+ */
+const settingRefused = async (config: ProxyConfig, request: BatchRequest) => {
+  const changes = (request.params as { changes?: unknown }).changes;
+  return isObject(changes) && ('subtitlesEnabled' in changes || 'streamSelectionProfileId' in changes) ? subtitlesRefused(await compatibility(config), changes) : null;
+};
+
 async function batchRoute(route: BatchRoute, { config, target, body }: { config: ProxyConfig; target: TunarrTarget; body: unknown }): Promise<ProxyResponse> {
   const store = config.batches;
   if (!store) return fail(503, 'store_off', 'Batch operations aren’t available on this server.');
@@ -871,11 +896,15 @@ async function batchRoute(route: BatchRoute, { config, target, body }: { config:
     case 'batch-preview': {
       const checked = validateBatch(body);
       if ('error' in checked) return fail(400, 'invalid_request', checked.error);
+      const refused = await settingRefused(config, checked);
+      if (refused) return fail(501, 'tunarr_unsupported', refused);
       return json(200, await previewBatch(config, target, checked));
     }
     case 'batch-apply': {
       const checked = validateApply(body);
       if ('error' in checked) return fail(400, 'invalid_request', checked.error);
+      const refused = await settingRefused(config, checked);
+      if (refused) return fail(501, 'tunarr_unsupported', refused);
       const label = isObject(body) && typeof body.label === 'string' && body.label.trim() ? body.label.trim() : `${checked.params.operation} on ${plural(checked.channelIds.length, 'channel')}`;
       return json(202, await startBatch(config, target, store, checked, label));
     }

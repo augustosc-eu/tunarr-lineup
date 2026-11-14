@@ -54,10 +54,11 @@ test('Tunarr 2026.10.4 counts as validated, with only movie slots turned off', a
   await expect(settings.getByText(/not validated/)).toHaveCount(0);
   await expect(settings.getByRole('button', { name: /^Slot schedules: Limited/ })).toBeVisible();
   await expect(settings.getByRole('button', { name: /^Custom shows: Available/ })).toBeVisible();
-  const report = (await (await page.request.get('/api/tunarr/compatibility')).json()) as { version: { status: string }; capabilities: Array<{ id: string; reason: string; parts?: Array<{ id: string; status: string }> }> };
+  const report = (await (await page.request.get('/api/tunarr/compatibility')).json()) as { version: { status: string }; capabilities: Array<{ id: string; reason: string; parts?: Array<{ id: string; status: string; optional?: boolean }> }> };
   expect(report.version.status).toBe('validated');
   const slots = report.capabilities.find((item) => item.id === 'slot-schedules')!;
-  expect(slots.parts).toEqual([expect.objectContaining({ id: 'movie-slots', status: 'unavailable' })]);
+  // Optional parts (better ways used where Tunarr has them) never turn anything off.
+  expect(slots.parts?.filter((part) => !part.optional)).toEqual([expect.objectContaining({ id: 'movie-slots', status: 'unavailable' })]);
   expect(slots.reason).toContain('“movie” slot type');
   await noOverflow(page);
 });
@@ -73,6 +74,65 @@ test('Tunarr 2026.11.0 counts as validated, and only its version is kept', async
   await expect(settings.getByText('Tunarr 2026.11.0', { exact: false }).first()).toBeVisible();
   await expect(settings.getByText(/not validated/)).toHaveCount(0);
   await noOverflow(page);
+});
+
+test('Tunarr 2026.11.2: subtitles are chosen by profile in Channel Settings, and other settings keep it', async ({ page }) => {
+  await useRelease(page, '2026.11.2');
+  const report = (await (await page.request.get('/api/tunarr/compatibility')).json()) as { version: { status: string }; capabilities: Array<{ id: string; status: string; parts?: Array<{ id: string; status: string }> }> };
+  expect(report.version.status).toBe('validated');
+  // The old switch is retired, but Lineup offers what replaced it, so nothing is Limited for it.
+  expect(report.capabilities.find((item) => item.id === 'channel-settings')).toMatchObject({ status: 'available', parts: [{ id: 'subtitles', status: 'unavailable' }] });
+  await page.reload();
+  await expect(page.locator('.channel.active')).toContainText('Desk News');
+
+  await menu(page, 'Channel', /Channel Settings/);
+  const settings = page.getByRole('dialog', { name: 'Channel settings' });
+  await press(page, settings.getByRole('tab', { name: 'Streaming' }));
+  const subtitles = settings.getByLabel('Subtitles', { exact: true });
+  await expect(subtitles).toBeEnabled();
+  await expect(subtitles.locator('option:checked')).toHaveText('Tunarr’s default (Tunarr Default) · No subtitles');
+  await expect(settings.getByRole('checkbox')).toHaveCount(0);
+  await subtitles.focus();
+  await subtitles.selectOption({ label: 'Spanish subtitles · Subtitles in Spanish' });
+  for (const size of [{ width: 1920, height: 1080 }, { width: 1366, height: 768 }]) {
+    await page.setViewportSize(size);
+    await noOverflow(page);
+    await page.screenshot({ path: test.info().outputPath(`subtitle-profile-${size.width}.png`) });
+  }
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await press(page, settings.getByRole('button', { name: 'Save settings' }));
+  await expect(page.getByRole('status')).toHaveText('Channel settings saved to Tunarr');
+  const channelOf = async () => ((await (await page.request.get(`${FAKE}/__test/state`)).json()) as { channels: Array<{ name: string; streamMode?: string; streamSelectionProfileId?: unknown }> }).channels.find((item) => item.name === 'Desk News')!;
+  expect(await channelOf()).toMatchObject({ streamSelectionProfileId: '6e6e6e6e-1a2b-4c3d-8e9f-000000000001' });
+
+  // Another setting saved later keeps the profile.
+  await menu(page, 'Channel', /Channel Settings/);
+  await press(page, settings.getByRole('tab', { name: 'Streaming' }));
+  await expect(settings.getByLabel('Subtitles', { exact: true }).locator('option:checked')).toHaveText('Spanish subtitles · Subtitles in Spanish');
+  await settings.getByLabel('Stream format').selectOption('mpegts');
+  await press(page, settings.getByRole('button', { name: 'Save settings' }));
+  await expect(page.getByRole('status')).toHaveText('Channel settings saved to Tunarr');
+  expect(await channelOf()).toMatchObject({ streamMode: 'mpegts', streamSelectionProfileId: '6e6e6e6e-1a2b-4c3d-8e9f-000000000001' });
+});
+
+test('Tunarr 2026.11.2: Reset removes the slot schedule in place, keeping the channel and its id', async ({ page }) => {
+  await useRelease(page, '2026.11.2');
+  await page.reload();
+  await page.locator('.channel', { hasText: 'Desk Rotation' }).click();
+  await expect(page.getByText('Generated schedule')).toBeVisible();
+  await menu(page, 'Channel', /Reset Channel/);
+  const confirm = page.getByRole('alertdialog', { name: 'Reset CH 12 Desk Rotation?' });
+  await expect(confirm).toContainText('Tunarr removes the schedule from this channel itself');
+  await expect(confirm).not.toContainText('makes a new channel');
+  await noOverflow(page);
+  await press(page, confirm.getByRole('button', { name: 'Reset and remove schedule' }));
+  await expect(page.getByRole('status')).toHaveText('Reset CH 12 Desk Rotation. Its lineup and slot schedule are gone.');
+  await expect(page.locator('.channel.active')).toContainText('Desk Rotation');
+  const state = (await (await page.request.get(`${FAKE}/__test/state`)).json()) as { channels: Array<{ id: string; name: string; number: number }>; schedules: Record<string, unknown>; lineups: Record<string, unknown[]> };
+  expect(state.channels.find((channel) => channel.name === 'Desk Rotation')).toMatchObject({ id: ROTATION, number: 12 });
+  expect(state.channels).toHaveLength(3);
+  expect(state.schedules[ROTATION]).toBeUndefined();
+  expect(state.lineups[ROTATION]).toEqual([]);
 });
 
 test('a movie slot is refused in plain words, then becomes a custom show only when asked', async ({ page }) => {

@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { STREAM_MODE_LABELS, type ChannelSettings, type ListSummary, type TranscodeProfile, type Watermark } from '../../lib/library';
 import { listsWithRole, roleOf, ROLE_LABELS, spotLength, type FillerRoles } from '../../lib/fillerRoles';
 import { channelLogoUrl } from '../../lib/programInfo';
-import { tunarrApi } from '../../lib/tunarrClient';
+import { tunarrApi, type SubtitleProfile } from '../../lib/tunarrClient';
 
 type Props = {
   channelId: string;
@@ -24,7 +24,7 @@ type Tab = 'general' | 'look' | 'streaming' | 'filler';
 const TABS: Array<[Tab, string]> = [['general', 'General'], ['look', 'Logo & watermark'], ['streaming', 'Streaming'], ['filler', 'Commercials']];
 const CORNERS: Array<[string, string]> = [['top-left', 'Top left'], ['top-right', 'Top right'], ['bottom-left', 'Bottom left'], ['bottom-right', 'Bottom right']];
 const DEFAULT_WATERMARK: Watermark = { enabled: false, url: '', position: 'bottom-right', width: 10, verticalMargin: 1, horizontalMargin: 1, duration: 0, opacity: 100 };
-const SETTING_KEYS = ['name', 'number', 'groupTitle', 'startTime', 'guideFlexTitle', 'guideMinimumDuration', 'fillerCollections', 'fillerRepeatCooldown', 'disableFillerOverlay', 'icon', 'watermark', 'offline', 'streamMode', 'transcodeConfigId', 'subtitlesEnabled', 'stealth', 'onDemand'] as const;
+const SETTING_KEYS = ['name', 'number', 'groupTitle', 'startTime', 'guideFlexTitle', 'guideMinimumDuration', 'fillerCollections', 'fillerRepeatCooldown', 'disableFillerOverlay', 'icon', 'watermark', 'offline', 'streamMode', 'transcodeConfigId', 'subtitlesEnabled', 'stealth', 'onDemand', 'streamSelectionProfileId'] as const;
 const MINUTE = 60_000;
 const errorText = (error: unknown) => (error instanceof Error ? error.message : 'Something went wrong.');
 const toLocalInput = (ms: number) => {
@@ -59,6 +59,20 @@ export function ChannelSettingsDialog({ channelId, fillerRoles = {}, stationIdCh
       .catch((reason) => { if (!cancelled) setError(errorText(reason)); });
     return () => { cancelled = true; };
   }, [channelId]);
+
+  // Tunarr 2026.11.2+ picks subtitles with a stream selection profile, which its channels carry; the old switch is unread there.
+  const usesProfiles = !!original && 'streamSelectionProfileId' in original;
+  const [subtitleProfiles, setSubtitleProfiles] = useState<SubtitleProfile[] | null>(null);
+  const [subtitleError, setSubtitleError] = useState('');
+  useEffect(() => {
+    if (!usesProfiles) return;
+    let cancelled = false;
+    tunarrApi.subtitleProfiles()
+      .then((list) => { if (!cancelled) setSubtitleProfiles(list); })
+      .catch((reason) => { if (!cancelled) setSubtitleError(`Couldn’t load Tunarr’s subtitle profiles: ${errorText(reason)}`); });
+    return () => { cancelled = true; };
+  }, [usesProfiles]);
+  const defaultProfile = subtitleProfiles?.find((profile) => profile.isDefault);
 
   const set = <K extends keyof ChannelSettings>(key: K, value: ChannelSettings[K]) => setForm((current) => (current ? { ...current, [key]: value } : current));
   const collections: Collection[] = form?.fillerCollections ?? [];
@@ -162,7 +176,17 @@ export function ChannelSettingsDialog({ channelId, fillerRoles = {}, stationIdCh
                 {!profiles.some((profile) => profile.id === form.transcodeConfigId) && <option value={form.transcodeConfigId ?? ''}>Current profile</option>}
               </select></label>
             </div>
-            <div className="list-toolbar"><label><input type="checkbox" checked={!!form.subtitlesEnabled} onChange={(event) => set('subtitlesEnabled', event.target.checked)} /> Subtitles</label></div>
+            {usesProfiles ? <>
+              <div className="settings-grid">
+                <label className="field wide-field"><span>Subtitles</span><select aria-label="Subtitles" aria-describedby="subtitle-profiles-note" value={form.streamSelectionProfileId ?? ''} disabled={!subtitleProfiles} onChange={(event) => set('streamSelectionProfileId', event.target.value || null)}>
+                  <option value="">Tunarr’s default{defaultProfile ? ` (${defaultProfile.name}) · ${defaultProfile.subtitles}` : ''}</option>
+                  {(subtitleProfiles ?? []).map((profile) => <option key={profile.id} value={profile.id}>{profile.name} · {profile.subtitles}</option>)}
+                  {form.streamSelectionProfileId && !subtitleProfiles?.some((profile) => profile.id === form.streamSelectionProfileId) && <option value={form.streamSelectionProfileId}>Current profile</option>}
+                </select></label>
+              </div>
+              {subtitleError && <div className="warning" role="alert"><b>Subtitle profiles</b><span>{subtitleError}</span></div>}
+              <p className="subtle" id="subtitle-profiles-note">This Tunarr picks subtitles (and audio tracks) with stream selection profiles. Profiles are made and edited in Tunarr, under Profiles → Stream Selection.</p>
+            </> : <div className="list-toolbar"><label><input type="checkbox" checked={!!form.subtitlesEnabled} onChange={(event) => set('subtitlesEnabled', event.target.checked)} /> Subtitles</label></div>}
             <p className="subtle">Edit what a profile does (resolution, bitrates, hardware acceleration) in Setup → Transcode Profiles…. Direct modes skip transcoding, so the profile only applies to HLS and MPEG-TS.</p>
           </>}
           {tab === 'filler' && <>

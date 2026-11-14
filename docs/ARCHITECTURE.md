@@ -259,7 +259,7 @@ call `createProxyConfig(env)` directly, without `setup`.
 | `/api/tunarr/channels/:id/schedule` | GET | `GET /api/channels/:id/schedule` (materialized: slots carry show, custom-show, channel and list names) |
 | `/api/tunarr/channels/:id/schedule-preview` | POST | `GET …/programming`, then `POST /api/channels/:id/schedule-slots` (random) or `/schedule-time-slots` (time) with the merged schedule. Generates only; saves nothing |
 | `/api/tunarr/programs/:id/artwork/:type` | GET | `GET /api/programs/:id/artwork/:type?fallbackArtworkTypes=<other types>` |
-| `/api/tunarr/channels/:id/recreate` | GET, POST | `server/recreateChannel.ts`, because Tunarr can't drop a slot schedule. GET (`findRedirectsTo`) reads `GET /api/channels` and each other channel's `…/programming`, and returns `{ redirects: [{ id, number, name }] }` for those whose lineup items or redirect slots point here. POST (`recreateChannel`), under `withChannelLock`: version check (412), `GET /api/channels/:id`, then `POST /api/channels` `{type:'new'}` with the old channel's fields minus `NOT_SAVEABLE` on a free number, `POST …/programming` on the new channel with the old lineup (`keep`, zero-length items dropped) or nothing (`empty`), `DELETE` the old channel, and `PUT` the new one back to the old number. A failure before the delete removes the new channel. Returns `{ id, number, name, previousId, numberError? }` |
+| `/api/tunarr/channels/:id/recreate` | GET, POST | `server/recreateChannel.ts`: drops a slot schedule. Where the compatibility check (`compatibility(config)`, redone when stale) shows the optional `remove-schedule` part of `slot-schedules` (Tunarr 2026.11.2+ lists `DELETE /api/channels/{id}/schedule`), it's done in place: GET returns `{ inPlace: true, redirects: [] }`; POST (`removeSchedule`), under `withChannelLock`: version check (412), `GET /api/channels/:id`, `DELETE /api/channels/:id/schedule` (Tunarr keeps the lineup), and for `empty` a manual save of `[]` (if that fails, the reply says the schedule went but the lineup wasn't emptied). Returns `{ id, number, name, previousId: id, inPlace: true }`. Otherwise (older Tunarr can't drop one) GET (`findRedirectsTo`) reads `GET /api/channels` and each other channel's `…/programming`, and returns `{ inPlace: false, redirects: [{ id, number, name }] }` for those whose lineup items or redirect slots point here. POST (`recreateChannel`), under `withChannelLock`: version check (412), `GET /api/channels/:id`, then `POST /api/channels` `{type:'new'}` with the old channel's fields minus `NOT_SAVEABLE` on a free number, `POST …/programming` on the new channel with the old lineup (`keep`, zero-length items dropped) or nothing (`empty`), `DELETE` the old channel, and `PUT` the new one back to the old number. A failure before the delete removes the new channel. Returns `{ id, number, name, previousId, numberError? }` |
 | `/api/tunarr/channels/:id/logo` | GET | `GET /api/channels/:id`, then the logo (see *Channel logos* below). Only a `v` query parameter (cache buster, `[a-z0-9]{0,16}`) is accepted. `204` when there is no usable logo |
 
 ### Request pipeline (`handleTunarrApi`)
@@ -332,6 +332,29 @@ per channel within this process:
      `create`) and `convertMovieSlots` (custom-show slots, `next` for ordered
      plays, `direction: 'asc'` since the order is built into the show; every
      other field kept). A show that isn't made leaves its slots as movie slots.
+   - The Subtitles switch: Tunarr 2026.11.2 chooses subtitles with stream
+     selection profiles and keeps a channel's `subtitlesEnabled` unread. The
+     `subtitles` part of `channel-settings` has no routes of its own; its
+     `retiredBy` field (`streamSelectionProfileId`) is looked for in the
+     channel the check read, else the first in the channel list
+     (`channelFields`). Present → `unavailable`, with the part's own `reason`
+     (where Lineup offers the profile instead); absent or nothing read →
+     `available`, so older Tunarr is unchanged. A retired part isn't a gap
+     (Lineup offers what replaced it), so it doesn't make the capability
+     Limited and isn't listed as turned off. Channel Settings shows a
+     **Subtitles** profile choice instead of the switch when the channel carries
+     `streamSelectionProfileId` (its own evidence), and the batch options offer
+     **Subtitles (profile)** when the part is refused. The companion answers 501
+     `tunarr_unsupported` (`subtitlesRefused` in `server/content.ts`) to a
+     change of the switch where it's retired (sending the value it has is
+     fine), and to a profile where the channel (or, for a batch, the check)
+     shows Tunarr has none, which would drop it without a word. Rollbacks still
+     restore either.
+   - Optional parts (`optional: true`, so far `remove-schedule`) are a better
+     way Lineup uses when Tunarr offers it, with a fallback otherwise: never
+     refused, never Limited, never listed as turned off; `partAvailable` says
+     whether to use them, and only `available` counts (unchecked uses the
+     fallback).
    - The program list is computed server-side with `programPool(slots, current.lineup, current.programs, extraPrograms)`: content and custom items already in the lineup that some slot draws from, plus validated extra program ids (for example movies for a movie slot).
    - The proxy then posts `{type, schedule, programs, seed, discardCount}`.
 
@@ -449,12 +472,14 @@ no-query rule and JSON body parsing, then `handleContentRoute`.
 | `/filler-lists/:id/programs`, `/custom-shows/:id/programs` | GET | Contents |
 | `/filler-lists/from-library` | POST | `buildFromLibrary` after `validateFromLibrary`: `{ mediaSourceId, libraryId, name }` creates a list, `{ …, listId }` replaces that list's programs (name kept); optional `role`. Pages `POST /api/programs/search` for the library (100 at a time, up to `MAX_LIST_ITEMS`), keeps playable items as full content programs (`libraryEntries`), then `POST`s or `PUT`s the filler list. Stores the role and the list↔library link in `filler-roles.json`; a store failure comes back as `storeError`, since the list already exists. `409 library_empty` when Tunarr has indexed nothing there yet. |
 | `/smart-collections` | GET | `GET /api/smart_collections` → `{ id, name }` |
+| `/stream-selection-profiles` | GET | `GET /api/stream-selection-profiles` (Tunarr 2026.11.2+) → `subtitleProfiles`: `{ id, name, isDefault, subtitles }`, where `subtitles` is `subtitleSummary` of the rules' subtitle actions in Lineup's words (languages named with `Intl.DisplayNames`; differing rules are "Depends on the program"). Rules, their expressions and usage stay on the server. Batch previews name profiles the same way (`shown`). |
 | `/channels/:id/settings` | GET, PUT | `GET /api/channels/:id` → `channelSettings` (only `CHANNEL_SETTING_FIELDS`). PUT validates with `validateChannelSettings`, then under `withChannelLock` re-reads the channel, merges only the allowed fields, drops read-only fields (`programCount`, `sessions`, `fallback`, `transcoding`), and `PUT`s the whole channel. |
 
 Channel settings fields (`CHANNEL_SETTING_FIELDS`) cover the programming fields
 plus `icon` (logo path, corner, width), `watermark`, `offline`, `streamMode`
-(`STREAM_MODES`), `transcodeConfigId`, `subtitlesEnabled`, `stealth` and
-`onDemand`. Object fields are merged onto Tunarr's current value, and image
+(`STREAM_MODES`), `transcodeConfigId`, `subtitlesEnabled`, `stealth`,
+`onDemand` and `streamSelectionProfileId` (null or a UUID; Tunarr checks the
+profile exists). Object fields are merged onto Tunarr's current value, and image
 addresses must be `http(s)` URLs or Tunarr `/images/…` paths.
 
 `nodeAdapter` reads request bodies for POST and PUT (up to 20 MiB), and sends
@@ -603,7 +628,7 @@ version themselves.
    - HLS is never probed (a playlist request starts a stream in Tunarr): it is
      `available` while Tunarr reports live sessions, otherwise `untested`.
 4. **Version:** `/api/version`, else the API description's `info.version`.
-   Inside `VALIDATED_VERSIONS` (≥ 1.0.0 and < 2.0.0, or ≥ 2026.9.0 and < 2026.11.0:
+   Inside `VALIDATED_VERSIONS` (≥ 1.0.0 and < 2.0.0, or ≥ 2026.9.0 and < 2026.12.0:
    Tunarr's releases are dated since 2026.9) is `validated`; other
    numbers `unvalidated`; anything else (or none) `unknown`. The version only
    produces a warning: capabilities are always decided by the checks.
@@ -994,7 +1019,7 @@ still be undone after a save.
    - settings and slots, with sources from `catalogOptions` and `showOption` (library shows)
    - per-slot options behind **More**: seasons for show slots (`SlotSeasons`, which loads seasons with a season search scoped to the show's media source and library, or counts them from `descendants`), direction, linked slots (`SlotLinking`, using `linkCandidates`, `linkSlot` and `linkGroups`), and commercials (`SlotCommercials`)
    - extra movies
-   - **Detach to manual lineup** (`detachToManual`), which recreates the channel with Tunarr's current lineup and no schedule (`recreateWithoutSchedule(…, 'keep')`), after naming the channels that redirect to it
+   - **Detach to manual lineup** (`detachToManual`), which drops the schedule and keeps Tunarr's current lineup (`recreateWithoutSchedule(…, 'keep')`): in place on Tunarr 2026.11.2+, else by recreating the channel after naming the channels that redirect to it (`withRedirectNote` words the dialog from the GET's `inPlace`)
 2. **Preview.** `previewSlots` calls `tunarrApi.previewSchedule(id, draft)` and switches to preview mode.
    - The timeline renders `scheduleForDay(null, preview.lineup, preview.startTime, date)` with `viewPrograms` (the programs merged with the preview's).
    - Rows are read-only, a sticky `.preview-bar` and the inspector offer save, edit and discard, and keyboard edits are disabled (Back discards).
@@ -1186,7 +1211,7 @@ bundle (`envPrefix`); none are used.
   - `skins.spec.ts`: picking each skin by keyboard, checked through computed styles (desktop, selection, `color-scheme`); persistence across a reload; `skin-init.js` applying the skin with the app bundle blocked; Escape keeping the pick; the desk, guide grid, week view and Watch Live (OSD, cable guide focus and ↓, remote) under every skin without horizontal overflow; and the phone Menu sheet.
   - `large-channel.spec.ts`: synthetic channels from `e2e/syntheticChannel.mjs` (added to the fake with `/__test/large`; `/__test/delay` slows its programming) at 5,000 and 20,000 items, a day of short spots and a throttled 1.6 Mbit/s link; prints `[perf]` JSON and checks budgets for bytes on the wire, time to open, mounted rows, heap, channel and day switches.
   - `operations.spec.ts`: the guide preview (listing, a flex-title check, an XMLTV download without addresses); notifications (loopback refused even with the private exception, a write-only public address, a test failing cleanly on DNS, turning off); the advanced planner (a show, a day, a seed, preview, save checked in the fake); the schedule library and calendar (save, yearly entry, refused overlap, kept after a reload, remove); batch operations by keyboard (group change, rollback, Recent batches), media repair after `/__test/forget-program`, and a package exported and imported; also Compatibility in Server Settings (diagnostics without the address or password; a route the fake Tunarr drops with `/__test/missing-routes` refuses only its feature) and the Control Room by remote (check all, filters, actions, Back) at 1920×1080 and phone width. The fake also answers `/api/version` and `/openapi.json`.
-  - `tunarr-releases.spec.ts`: the fake stands in for another Tunarr release with `/__test/release` (`1.3.13`, the default, or `2026.10.4`: that version from `/api/version`, no `movie` slot type in the schedule routes' request schemas, and movie slots rejected on preview and save; custom shows can be made and are played by custom-show slots). Checks Compatibility (2026.10.4 validated, Slot schedules Limited for movie slots alone), the slot editor's warning and refusal, **Make the custom show in Tunarr** (the show in the fake, the slot saved as a custom-show slot) at 1920×1080 and 1366×768, and that 1.3.13 keeps movie slots.
+  - `tunarr-releases.spec.ts`: the fake stands in for another Tunarr release with `/__test/release` (`1.3.13`, the default, `2026.11.0`, `2026.11.2`, whose channels carry `streamSelectionProfileId` and which lists stream selection profiles and drops schedules in place (Channel Settings picks a profile, later saves keep it, Reset keeps the channel's id), or `2026.10.4`: that version from `/api/version`, no `movie` slot type in the schedule routes' request schemas, and movie slots rejected on preview and save; custom shows can be made and are played by custom-show slots). Checks Compatibility (2026.10.4 validated, Slot schedules Limited for movie slots alone), the slot editor's warning and refusal, **Make the custom show in Tunarr** (the show in the fake, the slot saved as a custom-show slot) at 1920×1080 and 1366×768, and that 1.3.13 keeps movie slots.
   - `tools.spec.ts`: viewer counts without addresses, the guide grid by remote, watching through the companion only, the lineup check and snapshot restore, the week view export, and a planned/cancelled dated save. The fake also serves `/api/guide/channels`, `/api/sessions` and `/stream/channels/…`. Each test clears the companion's shared drafts first.
 
 ## 14. Cross-cutting patterns

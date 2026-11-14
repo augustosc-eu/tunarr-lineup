@@ -7,7 +7,7 @@ import type { PartBlocker } from '../../lib/compatibility';
 import { applyBody, countOutcomes, defaultDecisions, defaultMapping, durationLabel, inProgress, OUTCOME_LABELS, outcomeLine, outcomeTone, PREVIEW_LABELS, readyChannels, REPAIR_LABELS, rollbackable, sequentialNumbers, TASKS, type BatchPreview, type BatchRecord, type BatchSummary, type BatchTask, type RepairDecision } from '../../lib/batch';
 import type { Channel } from '../../lib/lineup';
 import { lineupEntry, type ChannelSettings, type TranscodeProfile } from '../../lib/library';
-import { tunarrApi } from '../../lib/tunarrClient';
+import { tunarrApi, type SubtitleProfile } from '../../lib/tunarrClient';
 import { validatePackage, type ProgrammingPackage } from '../../server/programmingPackage';
 
 type Props = {
@@ -25,7 +25,8 @@ type Props = {
 };
 
 type Step = 'setup' | 'preview' | 'confirm' | 'report' | 'history';
-type Options = { stealth: boolean | null; onDemand: boolean | null; subtitlesEnabled: boolean | null; streamMode: string | null; guideFlexTitle: string | null; guideMinimumSeconds: number | null };
+/** `subtitleProfile`: null leaves it, '' is Tunarr's default, else a stream selection profile's id. */
+type Options = { stealth: boolean | null; onDemand: boolean | null; subtitlesEnabled: boolean | null; subtitleProfile: string | null; streamMode: string | null; guideFlexTitle: string | null; guideMinimumSeconds: number | null };
 
 const back = (key: string) => key === 'Escape' || key === 'GoBack' || key === 'BrowserBack';
 const errorText = (error: unknown) => (error instanceof Error ? error.message : 'Something went wrong.');
@@ -55,6 +56,9 @@ function download(name: string, data: unknown) {
 export function BatchDialog({ channels, activeChannelId, initialTask, initialChannels, drafts, onDone, onClose, blocked }: Props) {
   // Replacements are each looked up in Tunarr; without that route, only remove, flex and leave are offered.
   const noReplace = blocked?.('library-search', 'lookup') ?? null;
+  // Where the old switch is off, Tunarr picks subtitles with stream selection profiles (2026.11.2+): offer those instead.
+  const noSubtitles = blocked?.('channel-settings', 'subtitles') ?? null;
+  const [subtitleProfiles, setSubtitleProfiles] = useState<SubtitleProfile[] | null>(null);
   const sorted = useMemo(() => [...channels].sort((a, b) => a.number - b.number), [channels]);
   const [task, setTask] = useState<BatchTask>(initialTask);
   const [picked, setPicked] = useState<string[]>(() => initialChannels ?? (activeChannelId ? [activeChannelId] : []));
@@ -70,7 +74,7 @@ export function BatchDialog({ channels, activeChannelId, initialTask, initialCha
   const [profileId, setProfileId] = useState('');
   const [numbers, setNumbers] = useState<Record<string, number>>({});
   const [startAt, setStartAt] = useState(1);
-  const [options, setOptions] = useState<Options>({ stealth: null, onDemand: null, subtitlesEnabled: null, streamMode: null, guideFlexTitle: null, guideMinimumSeconds: null });
+  const [options, setOptions] = useState<Options>({ stealth: null, onDemand: null, subtitlesEnabled: null, subtitleProfile: null, streamMode: null, guideFlexTitle: null, guideMinimumSeconds: null });
   const [decisions, setDecisions] = useState<Record<string, RepairDecision>>({});
   const [replacementNames, setReplacementNames] = useState<Record<string, string>>({});
   const [picker, setPicker] = useState<string | null>(null);
@@ -99,9 +103,10 @@ export function BatchDialog({ channels, activeChannelId, initialTask, initialCha
   useEffect(() => {
     let cancelled = false;
     if (task === 'transcode' && !profiles.length) tunarrApi.transcodeProfiles().then((list) => { if (!cancelled) { setProfiles(list); setProfileId((current) => current || list.find((item) => item.isDefault)?.id || list[0]?.id || ''); } }).catch((reason) => { if (!cancelled) setError(errorText(reason)); });
+    if (task === 'settings' && noSubtitles && !subtitleProfiles) tunarrApi.subtitleProfiles().then((list) => { if (!cancelled) setSubtitleProfiles(list); }).catch((reason) => { if (!cancelled) setError(errorText(reason)); });
     if (task === 'filler' && fillerFrom) tunarrApi.channelSettings(fillerFrom).then((settings) => { if (!cancelled) setFillerSource(settings); }).catch((reason) => { if (!cancelled) setError(errorText(reason)); });
     return () => { cancelled = true; };
-  }, [task, fillerFrom, profiles.length]);
+  }, [task, fillerFrom, profiles.length, noSubtitles, subtitleProfiles]);
 
   // Follow a running batch (or rollback) until it finishes.
   useEffect(() => {
@@ -137,7 +142,8 @@ export function BatchDialog({ channels, activeChannelId, initialTask, initialCha
         const changes: Record<string, unknown> = {};
         if (options.stealth !== null) changes.stealth = options.stealth;
         if (options.onDemand !== null) changes.onDemand = { enabled: options.onDemand };
-        if (options.subtitlesEnabled !== null) changes.subtitlesEnabled = options.subtitlesEnabled;
+        if (options.subtitlesEnabled !== null && !noSubtitles) changes.subtitlesEnabled = options.subtitlesEnabled;
+        if (options.subtitleProfile !== null && noSubtitles) changes.streamSelectionProfileId = options.subtitleProfile || null;
         if (options.streamMode !== null) changes.streamMode = options.streamMode;
         if (options.guideFlexTitle !== null) changes.guideFlexTitle = options.guideFlexTitle;
         if (options.guideMinimumSeconds !== null) changes.guideMinimumDuration = Math.max(0, Math.round(options.guideMinimumSeconds * 1000));
@@ -312,7 +318,7 @@ export function BatchDialog({ channels, activeChannelId, initialTask, initialCha
               </div>
             </>}
             {task === 'settings' && <div className="batch-options">
-              {([['stealth', 'Hidden channel'], ['onDemand', 'On demand'], ['subtitlesEnabled', 'Subtitles']] as const).map(([key, text]) => (
+              {([['stealth', 'Hidden channel'], ['onDemand', 'On demand'], ...(noSubtitles ? [] : [['subtitlesEnabled', 'Subtitles']])] as Array<['stealth' | 'onDemand' | 'subtitlesEnabled', string]>).map(([key, text]) => (
                 <label key={key} className="field"><span>{text}</span><select aria-label={text} value={options[key] === null ? '' : options[key] ? 'on' : 'off'} onChange={(event) => setOptions((current) => ({ ...current, [key]: event.target.value === '' ? null : event.target.value === 'on' }))}>
                   <option value="">Leave as it is</option><option value="on">On</option><option value="off">Off</option>
                 </select></label>
@@ -321,6 +327,11 @@ export function BatchDialog({ channels, activeChannelId, initialTask, initialCha
                 <option value="">Leave as it is</option>{STREAM_MODES.map(([value, text]) => <option key={value} value={value}>{text}</option>)}
               </select></label>
               <label className="field"><span>Guide title for flex (empty: leave)</span><input aria-label="Guide title for flex" value={options.guideFlexTitle ?? ''} onChange={(event) => setOptions((current) => ({ ...current, guideFlexTitle: event.target.value || null }))} /></label>
+              {noSubtitles && <label className="field"><span>Subtitles (profile)</span><select aria-label="Subtitle profile" disabled={!subtitleProfiles} value={options.subtitleProfile ?? 'leave'} onChange={(event) => setOptions((current) => ({ ...current, subtitleProfile: event.target.value === 'leave' ? null : event.target.value }))}>
+                <option value="leave">Leave as it is</option>
+                <option value="">Tunarr’s default{subtitleProfiles?.find((profile) => profile.isDefault) ? ` (${subtitleProfiles.find((profile) => profile.isDefault)!.name})` : ''}</option>
+                {(subtitleProfiles ?? []).map((profile) => <option key={profile.id} value={profile.id}>{profile.name} · {profile.subtitles}</option>)}
+              </select></label>}
               <label className="field"><span>Minimum guide entry, seconds (empty: leave)</span><input type="number" min={0} aria-label="Minimum guide entry in seconds" value={options.guideMinimumSeconds ?? ''} onChange={(event) => setOptions((current) => ({ ...current, guideMinimumSeconds: event.target.value === '' ? null : Number(event.target.value) }))} /></label>
             </div>}
             {task === 'repair' && <p className="subtle">Preview finds every program Tunarr no longer has on the channels picked, where it is and when it airs next. Then choose what to do with each; nothing changes until you apply. Channels generated from a slot schedule are left alone (a manual save would detach them).</p>}

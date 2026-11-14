@@ -109,6 +109,18 @@ describe('live stream', () => {
     expect(rewritePlaylist(`#EXTM3U\n/stream/channels/${CHANNEL}/mpegts/live.m3u8\n`, base, target, CHANNEL)).toBeNull();
   });
 
+  // Tunarr 2026.11.2 serves the subtitle rendition of a channel with subtitles: subs.m3u8, one subs<N>.vtt per video segment.
+  it('passes on Tunarr’s subtitle playlist and windows', async () => {
+    const base = new URL(`http://tunarr:8000/stream/channels/${CHANNEL}.m3u8?mode=hls`);
+    const withSubs = `#EXTM3U\n#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",NAME="Subtitles",DEFAULT=YES,AUTOSELECT=YES,URI="/stream/channels/${CHANNEL}/hls/subs.m3u8"\n#EXT-X-STREAM-INF:BANDWIDTH=2411200,SUBTITLES="subs"\n/stream/channels/${CHANNEL}/hls/stream.m3u8\n`;
+    expect(rewritePlaylist(withSubs, base, target, CHANNEL)).toContain(`URI="/api/tunarr/channels/${CHANNEL}/hls/subs.m3u8"`);
+    const subs = new URL(`http://tunarr:8000/stream/channels/${CHANNEL}/hls/subs.m3u8`);
+    expect(rewritePlaylist('#EXTM3U\n#EXTINF:4.0,\nsubs12.vtt\n', subs, target, CHANNEL)).toBe(`#EXTM3U\n#EXTINF:4.0,\n/api/tunarr/channels/${CHANNEL}/hls/subs12.vtt\n`);
+    const { calls, config } = setup(() => new Response('WEBVTT\n', { status: 200, headers: { 'content-type': 'text/vtt' } }));
+    expect((await handleTunarrApi(get(`/api/tunarr/channels/${CHANNEL}/hls/subs12.vtt`), config)).status).toBe(200);
+    expect(calls[0]).toBe(`http://tunarr:8000/stream/channels/${CHANNEL}/hls/subs12.vtt`);
+  });
+
   it('fetches ErsatzTV Next files from the same folder, and no other', async () => {
     const segment = new Uint8Array([0x47, 9]);
     const { calls, config } = setup(() => new Response(segment, { status: 200, headers: { 'content-type': 'video/mp2t' } }));

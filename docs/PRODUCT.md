@@ -149,7 +149,7 @@ Edits mark the lineup unsaved:
 - **Channel → Channel Settings…** (tabs):
   - **General:** name, number, group, guide title for flex time, minimum guide entry length, lineup start time (shifts the whole schedule, with a warning), hidden channel, on demand.
   - **Logo & watermark:** logo address and corner, on-screen watermark (image, corner, size, margins, opacity, duration), and the offline screen.
-  - **Streaming:** stream format, transcode profile, subtitles.
+  - **Streaming:** stream format, transcode profile, subtitles. Tunarr 2026.11.2 and later choose subtitles with stream selection profiles and ignore the old switch, so there **Subtitles** is a choice of profile (or Tunarr's default), each described by what it does with subtitles. Profiles are made and edited in Tunarr.
   - **Commercials:** filler lists that play during flex time (weight, share and cooldown), a repeat cooldown, and whether to hide the watermark during filler.
 - **Lists → Smart Collections…:** saved searches built from rules (genre, type, rating, studio, people, tags, titles, audio language, year, length, season number, added or released in the last N days/weeks/months/years), match all or any, optional keywords, with a preview of how many programs match.
 
@@ -158,7 +158,7 @@ Edits mark the lineup unsaved:
 - **Channel → New Channel… / Duplicate Channel…:** name, number (next free one by default), group, and the transcode profile (new) or the channel to copy (duplicate). Lineup switches to the new channel.
 - **Channel → Delete Channel…:** asks first, then removes the channel from Tunarr and moves to a neighbouring channel.
 - **Channel → Reset Channel…:** asks first, then saves an empty lineup: every program, break, flex and redirect goes, and the channel's name, number, logo and settings stay. Unsaved edits and the edit list for the channel are dropped. Disabled when the lineup is already empty. On a channel with a slot schedule there are two choices:
-  - **Reset and remove schedule** clears both for good. Tunarr can't remove a schedule from a channel, so Lineup makes a new channel with the same number, name, logo and settings and deletes the old one. Its internal Tunarr id changes, and the dialog names any channels that redirect to it, because Tunarr turns those redirects into off-air time.
+  - **Reset and remove schedule** clears both for good. Tunarr 2026.11.2 and later remove the schedule from the channel itself, so it keeps its id. Older Tunarr can't, so Lineup makes a new channel with the same number, name, logo and settings and deletes the old one. Its internal Tunarr id changes, and the dialog names any channels that redirect to it, because Tunarr turns those redirects into off-air time.
   - **Empty lineup only** keeps the channel and its schedule. Tunarr rebuilds the lineup from the schedule at its next library scan or start-time change.
 - **Setup → Media Sources…:** add Plex (address and token), Jellyfin or Emby (address, user name and password; Tunarr signs in), or local folders; turn libraries on or off, refresh and scan them; remove sources. Addresses, tokens and folder paths are never shown back.
 - **Setup → Server Settings… → Compatibility:** Tunarr's version (with a warning when it isn't one Lineup was validated against, 1.x, or when Tunarr doesn't say), the connection, and each capability the desk uses: available, answering unexpectedly, not available, not checked, or unknown, each with the reason. The checks only read Tunarr; saving is checked against Tunarr's own API description, and live streams are never started to check them. **Check again** re-runs them (otherwise they're kept 5 minutes); **Export diagnostics** saves the report as JSON without Tunarr's address or credentials. **Test connection** in setup and Server Settings also shows the version and how many features would be missing.
@@ -225,9 +225,10 @@ channels use random slots), and for manual channels that should get one:
 4. **Save schedule** uses the preview's random seed and reports whether Tunarr's saved result matches the preview. The lineup's edit list starts fresh, because the lineup was regenerated.
 
 **Detach to manual lineup** keeps today's lineup as a manual lineup and drops
-the schedule. Tunarr can't remove a schedule from a channel, so this recreates
-the channel with the same number, name, logo and settings (a new internal id),
-and first names any channels that redirect to it.
+the schedule. Tunarr 2026.11.2 and later do that on the channel itself. Older
+Tunarr can't remove a schedule from a channel, so there this recreates the
+channel with the same number, name, logo and settings (a new internal id), and
+first names any channels that redirect to it.
 
 ### 5a. See every channel, the week, and what's playing
 
@@ -286,7 +287,7 @@ With AI set up, **Ask AI for a review** sends the next 7 days and the findings t
 
 **Channel → Batch Operations…** (also **Repair Missing Media…**, and **File → Export / Import Programming Package…**):
 
-1. **What to do:** copy filler settings from a channel; change the group title; change the transcode profile; renumber channels; change options (hidden, on demand, subtitles, stream format, guide title for flex, minimum guide entry); repair missing media; export or import a programming package.
+1. **What to do:** copy filler settings from a channel; change the group title; change the transcode profile; renumber channels; change options (hidden, on demand, subtitles or, on Tunarr 2026.11.2 and later, the subtitle profile, stream format, guide title for flex, minimum guide entry); repair missing media; export or import a programming package.
 2. **Channels:** tick them, or **All**, **None**, or a network (group title). Channels with unsaved desk work are marked when a batch would change their lineup.
 3. **Preview:** each channel says **Will change** (with every field's before → after, or the lineup's items and length before → after), **No change**, or **Blocked** with why (a number another channel keeps, a channel generated from a slot schedule, a channel Tunarr no longer has). Nothing is saved yet.
 4. **Apply…** asks once more, then saves channel by channel. Each channel is read again first: if it changed since the preview it's left alone and reported as a **Conflict**, and the rest still go in. There is no way to force a conflict. If Tunarr stops answering, the channels not reached are **Not tried**.

@@ -2,10 +2,13 @@ import { NOT_SAVEABLE } from './content.js';
 import { programmingVersion } from './lineupVersion.js';
 import { UpstreamError } from './upstream.js';
 
-// Tunarr's API has no way to drop a slot schedule: a manual save replaces only
-// the items, and a channel copy carries the schedule along. The only clean way
-// to make a scheduled channel manual (or empty for good) is a fresh channel with
-// the same settings, so this module recreates it:
+// Before Tunarr 2026.11.2 its API has no way to drop a slot schedule: a manual
+// save replaces only the items, and a channel copy carries the schedule along.
+// Since 2026.11.2, `DELETE /api/channels/:id/schedule` drops it and keeps the
+// lineup, so `removeSchedule` does that in place (the channel keeps its id, and
+// redirects to it keep working). On older Tunarr the only clean way to make a
+// scheduled channel manual (or empty for good) is a fresh channel with the same
+// settings, so `recreateChannel` recreates it:
 //
 //   1. create a channel from the old one's own fields, on a free number
 //   2. save the lineup to it (the current one, or none)
@@ -21,7 +24,8 @@ type Json = Record<string, unknown>;
 export type Call = (method: 'GET' | 'POST' | 'PUT' | 'DELETE', path: string, body?: unknown) => Promise<unknown>;
 export type RecreateMode = 'keep' | 'empty';
 export type ChannelRef = { id: string; number: number; name: string };
-export type RecreateResult = ChannelRef & { previousId: string; numberError?: string };
+/** `inPlace`: the schedule was removed from the channel itself (its id didn't change). */
+export type RecreateResult = ChannelRef & { previousId: string; numberError?: string; inPlace?: boolean };
 
 const isObject = (value: unknown): value is Json => !!value && typeof value === 'object' && !Array.isArray(value);
 
@@ -85,6 +89,39 @@ export async function redirectEdges(call: Call): Promise<Array<{ from: string; t
   return edges;
 }
 
+/** The channel at `expectedVersion`, or 412 when it changed since it was loaded. */
+async function checkedChannel(call: Call, channelId: string, expectedVersion: string) {
+  const current = (await call('GET', `/api/channels/${channelId}/programming`)) as { lineup?: unknown; schedule?: unknown } | null;
+  if (programmingVersion(current?.lineup, current?.schedule) !== expectedVersion) {
+    throw new UpstreamError(412, 'lineup_changed', 'This channel changed in Tunarr since it was loaded. Nothing was changed.');
+  }
+  const channel = await call('GET', `/api/channels/${channelId}`);
+  if (!isObject(channel) || typeof channel.number !== 'number' || typeof channel.name !== 'string') {
+    throw new UpstreamError(502, 'tunarr_invalid_response', 'Tunarr returned an unexpected channel.');
+  }
+  return { current, channel: channel as Json & { number: number; name: string } };
+}
+
+/**
+ * Drops `channelId`'s slot schedule with Tunarr's own route (2026.11.2+): the
+ * lineup it has stays as a manual lineup, or, for `empty`, is then saved empty.
+ * `expectedVersion` is the programming version the user saw; call this under
+ * the channel's lock. Nothing is created or deleted, so the id stays.
+ */
+export async function removeSchedule(call: Call, channelId: string, mode: RecreateMode, expectedVersion: string): Promise<RecreateResult> {
+  const { channel } = await checkedChannel(call, channelId, expectedVersion);
+  await call('DELETE', `/api/channels/${channelId}/schedule`);
+  if (mode === 'empty') {
+    try {
+      await call('POST', `/api/channels/${channelId}/programming`, { type: 'manual', lineup: [], append: false });
+    } catch (error) {
+      const why = error instanceof UpstreamError ? error.message : 'Tunarr refused.';
+      throw new UpstreamError(error instanceof UpstreamError ? error.status : 502, error instanceof UpstreamError ? error.code : 'tunarr_error', `The slot schedule was removed, but the lineup couldn’t be emptied: ${why} Reset the channel again to empty it.`);
+    }
+  }
+  return { id: channelId, number: channel.number, name: channel.name, previousId: channelId, inPlace: true };
+}
+
 /** The old channel's fields as a create request (Tunarr assigns the id). */
 function saveable(channel: Json, number: number): Json {
   const next: Json = { ...channel, number };
@@ -97,14 +134,7 @@ function saveable(channel: Json, number: number): Json {
  * programming version the user saw; call this under the channel's lock.
  */
 export async function recreateChannel(call: Call, channelId: string, mode: RecreateMode, expectedVersion: string): Promise<RecreateResult> {
-  const current = (await call('GET', `/api/channels/${channelId}/programming`)) as { lineup?: unknown; schedule?: unknown } | null;
-  if (programmingVersion(current?.lineup, current?.schedule) !== expectedVersion) {
-    throw new UpstreamError(412, 'lineup_changed', 'This channel changed in Tunarr since it was loaded. Nothing was changed.');
-  }
-  const channel = await call('GET', `/api/channels/${channelId}`);
-  if (!isObject(channel) || typeof channel.number !== 'number' || typeof channel.name !== 'string') {
-    throw new UpstreamError(502, 'tunarr_invalid_response', 'Tunarr returned an unexpected channel.');
-  }
+  const { current, channel } = await checkedChannel(call, channelId, expectedVersion);
   const number = channel.number;
   const spare = channelRefs(await call('GET', '/api/channels')).reduce((max, item) => Math.max(max, item.number), 0) + 1;
   // Items are passed through untouched (invariant 3); Tunarr refuses zero-length ones.

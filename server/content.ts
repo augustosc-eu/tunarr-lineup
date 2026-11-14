@@ -3,7 +3,7 @@
 // and a channel's programming-related settings. Like the rest of the proxy,
 // each route is explicit, inputs are validated before any upstream call, and
 // responses are trimmed to what the interface needs.
-import { cachedCompatibility, unavailableReason } from './compatibility.js';
+import { cachedCompatibility, unavailableReason, type CompatibilityReport } from './compatibility.js';
 import { isFillerRole, type FillerRole } from './fillerRoles.js';
 import type { FillerRoleStore } from './fillerRoleStore.js';
 import { StoreError } from './jsonFile.js';
@@ -27,7 +27,8 @@ export type ContentRoute =
   | { name: 'custom-show'; methods: string[]; id: string }
   | { name: 'custom-show-programs'; methods: string[]; id: string }
   | { name: 'smart-collections'; methods: string[] }
-  | { name: 'channel-settings'; methods: string[]; channelId: string };
+  | { name: 'channel-settings'; methods: string[]; channelId: string }
+  | { name: 'stream-selection-profiles'; methods: string[] };
 
 /** Matches a path below /api/tunarr. Ids must be UUIDs (raw, still encoded). */
 export function matchContentRoute(path: string, channelIdPattern: RegExp): ContentRoute | { invalid: string } | null {
@@ -37,6 +38,7 @@ export function matchContentRoute(path: string, channelIdPattern: RegExp): Conte
   if (path === '/filler-lists/from-library') return { name: 'filler-list-from-library', methods: ['POST'] };
   if (path === '/custom-shows') return { name: 'custom-shows', methods: ['GET', 'POST'] };
   if (path === '/smart-collections') return { name: 'smart-collections', methods: ['GET'] };
+  if (path === '/stream-selection-profiles') return { name: 'stream-selection-profiles', methods: ['GET'] };
   let match = /^\/programs\/([^/]+)\/descendants$/.exec(path);
   if (match) return UUID.test(match[1]) ? { name: 'descendants', methods: ['GET'], id: match[1] } : { invalid: 'Program id is not valid.' };
   match = /^\/(filler-lists|custom-shows)\/([^/]+)(\/programs)?$/.exec(path);
@@ -202,6 +204,8 @@ const listSummary = (list: Json) => ({
 export const CHANNEL_SETTING_FIELDS = [
   'name', 'number', 'groupTitle', 'startTime', 'guideFlexTitle', 'guideMinimumDuration', 'fillerCollections', 'fillerRepeatCooldown', 'disableFillerOverlay',
   'icon', 'watermark', 'offline', 'streamMode', 'transcodeConfigId', 'subtitlesEnabled', 'stealth', 'onDemand',
+  // Tunarr 2026.11.2+: the channel's stream selection profile (null: Tunarr's default), which picks its subtitles.
+  'streamSelectionProfileId',
 ] as const;
 export const STREAM_MODES = ['hls', 'hls_slower', 'mpegts', 'hls_direct', 'hls_direct_v2'] as const;
 const CORNERS = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
@@ -361,6 +365,10 @@ export function validateChannelSettings(body: unknown, current: Json = {}): { ch
         changes.fillerCollections = collections;
         break;
       }
+      case 'streamSelectionProfileId':
+        if (value !== null && (typeof value !== 'string' || !UUID.test(value))) return { error: 'Choose a subtitle profile, or Tunarr’s default.' };
+        changes.streamSelectionProfileId = value === null ? null : value.toLowerCase();
+        break;
       case 'subtitlesEnabled':
       case 'stealth':
         if (typeof value !== 'boolean') return { error: `"${key}" must be true or false.` };
@@ -389,6 +397,72 @@ export function validateChannelSettings(body: unknown, current: Json = {}): { ch
     }
   }
   return { changes };
+}
+
+export const NO_PROFILES = 'This Tunarr doesn’t choose subtitles with stream selection profiles (Tunarr 2026.11.2 and later do), so a channel can’t be given one. Use the Subtitles switch.';
+
+/**
+ * Why a subtitle change is refused, or null. Tunarr 2026.11.2 keeps the old
+ * switch but no longer reads it (stream selection profiles choose subtitles),
+ * so a change to it would save and do nothing; an older Tunarr has no profiles,
+ * and would drop a profile without a word. Sending the switch's current value
+ * is never refused; without `current`, any value is a change. A channel's own
+ * fields say whether it has profiles; without one, the check's report does.
+ */
+export function subtitlesRefused(report: CompatibilityReport | undefined, changes: Json, current?: Json): string | null {
+  const profiles = current ? 'streamSelectionProfileId' in current : !!unavailableReason(report, 'channel-settings', 'subtitles');
+  if ('streamSelectionProfileId' in changes && !profiles) return NO_PROFILES;
+  if (!('subtitlesEnabled' in changes) || (current && changes.subtitlesEnabled === (current.subtitlesEnabled ?? false))) return null;
+  return unavailableReason(report, 'channel-settings', 'subtitles');
+}
+
+// ------------------------------------------------------- subtitle profiles
+
+/** A profile as the desk shows it: Tunarr's rules (expressions included) stay on the server. */
+export type SubtitleProfile = { id: string; name: string; isDefault: boolean; subtitles: string };
+
+const languageNames = (() => {
+  try { return new Intl.DisplayNames(['en'], { type: 'language' }); } catch { return null; }
+})();
+/** "Spanish" for "spa" (ISO 639-2, as Tunarr keeps them); the code itself when it isn't one. */
+export function languageName(code: string) {
+  const clean = code.trim().toLowerCase();
+  if (!/^[a-z]{2,3}$/.test(clean) || clean === 'und') return code.trim().slice(0, 20) || '?';
+  try {
+    const name = languageNames?.of(clean);
+    return name && name.toLowerCase() !== clean ? name : clean.toUpperCase();
+  } catch {
+    return clean.toUpperCase();
+  }
+}
+
+/** One subtitle action in Lineup's words. */
+function subtitleAction(action: unknown) {
+  if (!isObject(action)) return 'subtitles as the rule says';
+  if (action.type === 'disable') return 'no subtitles';
+  if (action.type === 'default') return 'the file’s default subtitles';
+  if (action.type === 'by_language' && Array.isArray(action.languages)) {
+    const languages = action.languages.filter((item): item is string => typeof item === 'string').slice(0, 6).map(languageName);
+    return languages.length ? `subtitles in ${languages.join(', ')}` : 'subtitles as the rule says';
+  }
+  return 'subtitles as the rule says';
+}
+
+/** What a profile does with subtitles: one action, or "depends" when its rules differ. */
+export function subtitleSummary(rules: unknown): string {
+  const actions = (Array.isArray(rules) ? rules : []).filter(isObject).map((rule) => subtitleAction(rule.subtitleAction));
+  const distinct = [...new Set(actions)];
+  const text = !distinct.length ? 'subtitles as Tunarr decides' : distinct.length === 1 ? distinct[0] : `depends on the program (${actions.length} rules)`;
+  return text[0].toUpperCase() + text.slice(1);
+}
+
+/** Tunarr's profile list, for the channel's subtitle choice (defaults first, then by name). */
+export function subtitleProfiles(list: unknown): SubtitleProfile[] {
+  return (Array.isArray(list) ? list : []).filter(isObject).flatMap((item) => {
+    const id = str(item.uuid) ?? str(item.id);
+    if (!id || !UUID.test(id)) return [];
+    return [{ id: id.toLowerCase(), name: (str(item.name) ?? 'Profile').slice(0, MAX_NAME), isDefault: item.isDefault === true, subtitles: subtitleSummary(item.rules) }];
+  }).slice(0, 500);
 }
 
 // ------------------------------------------------------------------ routing
@@ -463,6 +537,8 @@ export async function handleContentRoute(route: ContentRoute, { config, target, 
       const items = await call('GET', `/api/programs/${route.id}/descendants`, undefined, 'Tunarr could not find that show or season.');
       return json(200, Array.isArray(items) ? items.slice(0, MAX_LIST_ITEMS) : []);
     }
+    case 'stream-selection-profiles':
+      return json(200, subtitleProfiles(await call('GET', '/api/stream-selection-profiles')));
     case 'smart-collections': {
       const items = await call('GET', '/api/smart_collections');
       return json(200, (Array.isArray(items) ? items : []).filter(isObject).map((item) => ({ id: str(item.uuid) ?? str(item.id), name: str(item.name) ?? 'Smart collection' })));
@@ -526,6 +602,8 @@ export async function handleContentRoute(route: ContentRoute, { config, target, 
         if (!isObject(current)) throw new UpstreamError(502, 'tunarr_invalid_response', 'Tunarr returned an unexpected channel.');
         const checked = validateChannelSettings(body, current);
         if ('error' in checked) return invalid(checked.error);
+        const refused = subtitlesRefused(cachedCompatibility(config), checked.changes, current);
+        if (refused) return fail(501, 'tunarr_unsupported', refused);
         const next: Json = { ...current, ...checked.changes };
         for (const field of NOT_SAVEABLE) delete next[field];
         await call('PUT', path, next);

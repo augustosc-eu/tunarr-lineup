@@ -35,8 +35,8 @@ export function partBlocked(report: CompatibilityReport | null | undefined, id: 
   const whole = blockedReason(report, id);
   if (whole) return whole;
   const capability = Array.isArray(report?.capabilities) ? report.capabilities.find((item) => item.id === id) : undefined;
-  const missing = Array.isArray(capability?.parts) ? capability.parts.find((item) => item.id === part && item.status === 'unavailable') : undefined;
-  return missing ? `This Tunarr’s API doesn’t offer ${missing.label}, so it’s turned off here.` : null;
+  const missing = Array.isArray(capability?.parts) ? capability.parts.find((item) => item.id === part && item.status === 'unavailable' && !item.optional) : undefined;
+  return missing ? missing.reason ?? `This Tunarr’s API doesn’t offer ${missing.label}, so it’s turned off here.` : null;
 }
 
 /** What a dialog asks to know whether one of its actions is refused: `partBlocked` on the desk's report (nothing is refused outside live mode). */
@@ -47,8 +47,8 @@ export const refusedParts = (blocked: PartBlocker | undefined, parts: Array<[Cap
 
 /** The parts of each capability the desk refuses, for the "turned off" list. */
 export const blockedParts = (report: CompatibilityReport | null | undefined) => (Array.isArray(report?.capabilities) ? report.capabilities : [])
-  .filter((item) => item.status !== 'unavailable' && Array.isArray(item.parts) && item.parts.some((part) => part.status === 'unavailable'))
-  .map((item) => ({ id: item.id, label: item.label, parts: item.parts!.filter((part) => part.status === 'unavailable') }));
+  .filter((item) => item.status !== 'unavailable' && Array.isArray(item.parts) && item.parts.some((part) => part.status === 'unavailable' && !part.optional && !part.reason))
+  .map((item) => ({ id: item.id, label: item.label, parts: item.parts!.filter((part) => part.status === 'unavailable' && !part.optional && !part.reason) }));
 
 /** Capabilities the desk refuses, for the "turned off" list. */
 export const blockedCapabilities = (report: CompatibilityReport | null | undefined) => (Array.isArray(report?.capabilities) ? report.capabilities : []).filter((item) => item.status === 'unavailable');
@@ -76,6 +76,6 @@ export function diagnosticsFile(report: CompatibilityReport, exportedAt = Date.n
     ...(report.connectionError ? { connectionError: report.connectionError } : {}),
     tunarrVersion: report.version,
     apiDescription: report.apiDescription,
-    capabilities: report.capabilities.map(({ id, label, status, reason, parts }) => ({ id, label, status, reason, ...(parts?.length ? { parts: parts.map(({ id: part, label: partLabel, status: partStatus }) => ({ id: part, label: partLabel, status: partStatus })) } : {}) })),
+    capabilities: report.capabilities.map(({ id, label, status, reason, parts }) => ({ id, label, status, reason, ...(parts?.length ? { parts: parts.map(({ id: part, label: partLabel, status: partStatus, reason: partReason, optional }) => ({ id: part, label: partLabel, status: partStatus, ...(partReason ? { reason: partReason } : {}), ...(optional ? { optional } : {}) })) } : {}) })),
   };
 }

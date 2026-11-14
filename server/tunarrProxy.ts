@@ -28,8 +28,8 @@ import { createProgrammingCache, DEFAULT_PROGRAMMING_CACHE_MS, etagMatches, toVi
 import { lineupItemsError } from './lineupItems.js';
 import { callTunarr, fail, fetchUpstream, json, jsonHeaders, UpstreamError } from './upstream.js';
 import { buildSchedule, programPool, validateExtraPrograms, validateSeed } from './slotSchedule.js';
-import { cachedCompatibility, unavailableReason } from './compatibility.js';
-import { findRedirectsTo, recreateChannel, validateRecreate, type RecreateMode } from './recreateChannel.js';
+import { cachedCompatibility, compatibility, partAvailable, unavailableReason } from './compatibility.js';
+import { findRedirectsTo, recreateChannel, removeSchedule, validateRecreate, type RecreateMode } from './recreateChannel.js';
 
 // Narrow backend-for-frontend for Tunarr.
 //
@@ -575,12 +575,15 @@ export async function handleTunarrApi(request: ProxyRequest, config: ProxyConfig
         case 'recreate': {
           const call = (verb: 'GET' | 'POST' | 'PUT' | 'DELETE', path: string, payload?: unknown) =>
             callTunarr(config, target, verb, path, payload === undefined ? undefined : JSON.stringify(payload));
-          // GET: which channels redirect here, so the dialog can say what a recreate costs them.
-          if (!recreateMode) return json(200, { redirects: await findRedirectsTo(call, route.channelId) });
+          // Tunarr 2026.11.2+ drops a schedule itself; only the check's evidence says so (a stale one is redone).
+          const inPlace = partAvailable(await compatibility(config), 'slot-schedules', 'remove-schedule');
+          // GET: how it will be done and, for a recreate, which channels redirect here (they lose those redirects).
+          if (!recreateMode) return json(200, { inPlace, redirects: inPlace ? [] : await findRedirectsTo(call, route.channelId) });
           const mode = recreateMode;
           return json(200, await withChannelLock(route.channelId, async () => {
             const before = await call('GET', `/api/channels/${route.channelId}/programming`).catch(() => null);
             if (before) await config.snapshots?.take(route.channelId, before, mode === 'keep' ? 'Before detaching from the slot schedule' : 'Before a reset').catch(() => null);
+            if (inPlace) return removeSchedule(call, route.channelId, mode, expectedVersion!);
             const result = await recreateChannel(call, route.channelId, mode, expectedVersion!);
             // The channel has a new id now; its snapshots go with it.
             await config.snapshots?.moveChannel(route.channelId, result.id).catch(() => undefined);
