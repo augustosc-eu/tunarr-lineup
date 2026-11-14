@@ -8,6 +8,8 @@ were renamed 2026.10.1 and 2026.10.2.
 
 ## [Unreleased]
 
+## [2026.11.4] - 2026-11-14
+
 ### Fixed
 
 - **Tunarr 2026.11.2 and subtitles:** Tunarr 2026.11.2 chooses subtitles with stream selection profiles and no longer reads a channel’s own Subtitles switch, so turning it on or off from Lineup saved but changed nothing. On such a Tunarr, **Subtitles** in Channel Settings → Streaming is now a choice of profile (or Tunarr’s default), each described by what it does with subtitles (“Subtitles in Spanish”, “No subtitles”…), and batch operations offer **Subtitles (profile)** for many channels at once, previewed by name. Profiles are still made in Tunarr. The Lineup server refuses a change to the old switch there, and a profile on a Tunarr without them. Earlier Tunarr releases keep the switch.
@@ -349,7 +351,8 @@ First public release.
   reaches Tunarr through a narrow allowlisted proxy. Optional HTTP Basic
   sign-in and host-name checks against DNS rebinding.
 
-[Unreleased]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.11.3...HEAD
+[Unreleased]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.11.4...HEAD
+[2026.11.4]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.11.3...v2026.11.4
 [2026.11.3]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.11.2...v2026.11.3
 [2026.11.2]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.11.1...v2026.11.2
 [2026.11.1]: https://github.com/augustosc-eu/tunarr-lineup/compare/v2026.10.23...v2026.11.1
