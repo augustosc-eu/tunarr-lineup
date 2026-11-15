@@ -33,8 +33,8 @@
     "hls.js": "1.7.3",
     "jspdf": "4.2.1",
     "next": "16.4.3",
-    "react": "19.3.0",
-    "react-dom": "19.3.0"
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "1.62.5",
@@ -52,7 +52,7 @@
     "eslint-config-next": "16.4.3",
     "fake-indexeddb": "^6.2.5",
     "jsdom": "^26.1.0",
-    "react-server-dom-webpack": "19.3.0",
+    "react-server-dom-webpack": "19.3.1",
     "tailwindcss": "4.2.1",
     "typescript": "5.9.3",
     "vinext": "1.0.1",
