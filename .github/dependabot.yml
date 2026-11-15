@@ -1,0 +1,17 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    # Security updates only: 0 keeps Dependabot from opening routine version bumps.
+    open-pull-requests-limit: 0
+    groups:
+      # react-server-dom-webpack pins react and react-dom to its own patch level, so
+      # bumping it alone fails `npm ci` with ERESOLVE (PR #12). Update them together.
+      react:
+        applies-to: security-updates
+        patterns:
+          - react
+          - react-dom
+          - react-server-dom-webpack
